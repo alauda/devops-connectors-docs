@@ -1,0 +1,95 @@
+---
+created: '2024-12-01'
+title: Connector API
+weight: 10
+sourceSHA: 787a9663c2b07bba63b2648088abf865fb2f475cfe27d1f24fd23a68b9cca2fd
+---
+
+# Connector API
+
+## Overview
+
+After integrating access tools within the cluster, a RESTful API can be provided for the current ConnectorClass to conveniently acquire resources within the tool. These APIs will be uniformly exposed through the Connector API, allowing users to obtain resources from the tool pointed to by the current Connector.
+
+The Connectors system provides a complete set of extension mechanisms, making it easier for developers to extend the API capabilities of ConnectorClass.
+
+The Connectors API offers a unified request entry point. When a client initiates a resource request for the tool pointed to by a specific Connector, the system will forward the request to the corresponding API address of the ConnectorClass, which in turn will forward the request to the tool's API address to retrieve resources within the tool.
+
+For example:
+
+- Retrieve the Reference list of a specific repository under the Git Connector.
+- Retrieve the Tag list of a specific artifact repository under the OIC Connector.
+
+## API Definition
+
+**API Address**
+
+`/connectors/v1alpha1/namespaces/{namespace}/connectors/{name}/resources/{resource-name}`
+
+- `namespace`: The namespace where the current Connector resides.
+- `name`: The name of the current Connector.
+- `resource-name`: The name of the resource being requested, which can be understood by consulting the documentation of the corresponding ConnectorClass.
+
+**Authentication and Authorization**
+
+Authentication complies with Kubernetes authentication standards, completed through Kubernetes' authentication and authorization mechanisms. The requesting user must have read permissions for the corresponding `connector`.
+
+When making the final request to the tool, the Secret information specified by the Connector will be used for authentication.
+
+**Query Parameters**
+
+Determined by the specific ConnectorClass API.
+
+**Pagination Information**
+
+Indicated by query parameters.
+
+| Parameter Name     | Type  | Required | Description  |
+| ------------------ | ----- | -------- | ------------ |
+| page               | int   | false    | Page number   |
+| itemsPerPage      | int   | false    | Number of items per page |
+
+**Response Information**
+
+When returning a list, the structure will be as follows:
+
+| Field Name         | Type       | Required | Description                                |
+| -------------------| ---------- | -------- | ------------------------------------------ |
+| listMeta           | ListMeta  | true     | Metadata of the list                       |
+| listMeta.totalItems| int       | true     | Total number of requested resources, usable by the client to analyze pagination information |
+| items              | \[]       | true     | Data items in the list; the data structure is determined by the ConnectorClass API |
+
+```json
+{
+    "listMeta":{
+        "totalItems":0
+    },
+    "items": [
+        {
+
+        }
+    ]
+}
+```
+
+When the response is not 200, the returned data structure should conform to the [k8s status](https://pkg.go.dev/k8s.io/apimachinery@v0.31.3/pkg/apis/meta/v1#Status).
+
+For example:
+
+```json
+{
+    "status": "Failure",
+    "message": "api address of connectorclass 'git-noapi' is not resolved",
+    "reason": "BadRequest",
+    "code": 400,
+    "details": null
+}
+```
+
+Field definitions and enumeration values are consistent with [k8s status](https://pkg.go.dev/k8s.io/apimachinery@v0.31.3/pkg/apis/meta/v1#Status).
+
+## ConnectorClass API Extension Specification
+
+Developers can extend the API capabilities for ConnectorClass to provide users with richer resource retrieval capabilities.
+
+Refer to the [ConnectorClass API Extension Specification](./connectorclass_api_spec.mdx).

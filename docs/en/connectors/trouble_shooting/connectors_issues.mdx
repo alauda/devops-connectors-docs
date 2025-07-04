@@ -1,0 +1,254 @@
+---
+weight: 71
+i18n:
+  title:
+    en: Connector Status Troubleshooting
+title: Connector Status Troubleshooting
+---
+
+# Connector Status Troubleshooting
+
+This guide provides comprehensive information to help you diagnose and resolve common issues with Connectors based on their status conditions.
+
+## Checking Connector Status
+
+To view the complete status information of a connector, including all conditions, execute:
+
+```bash
+kubectl describe connector <connector-name> -n <namespace>
+```
+
+For more detailed information, including the full status object and conditions:
+
+```bash
+kubectl get connector <connector-name> -n <namespace> -o yaml
+```
+
+These commands will display all condition states, making it easy to identify which specific conditions are failing.
+
+
+## Troubleshooting Specific Conditions
+
+### Ready = False
+
+This is a summary condition that is only True when all other conditions are True.
+
+**Troubleshooting steps**:
+1. Check all other conditions to identify which specific condition is False
+2. Focus on resolving the specific failing conditions according to the guidelines below
+3. Verify the connector spec is correctly configured
+
+
+### ConnectorClassReady = False
+
+Indicates the connector class doesn't exist or is invalid.
+
+**Troubleshooting steps**:
+1. Confirm the ConnectorClass exists:
+   ```bash
+   kubectl get connectorclass <class-name>
+   ```
+2. Verify connector configuration is correct:
+   ```bash
+   kubectl get connector <connector-name> -n <namespace> -o jsonpath='{.spec.connectorClassName}'
+   ```
+3. Check connectorclass definitions:
+   ```bash
+   kubectl get connectorclass <class-name> -o yaml
+   ```
+
+**Common causes**:
+- Misspelled ConnectorClass name
+- ConnectorClass not installed
+- Using a ConnectorClass from a different namespace (ConnectorClasses are cluster-scoped)
+
+**Example error**:
+```yaml
+conditions:
+  - lastTransitionTime: "2023-05-15T10:25:30Z"
+    message: "connectorclass.connectors.alauda.io \"git\" not found"
+    reason: ConnectorClassNotFound
+    status: "False"
+    type: ConnectorClassReady
+```
+
+**Resolution**:
+Install the missing ConnectorClass or correct the class name in the connector configuration.
+
+### SecretReady = False
+
+Indicates issues with the authentication secret.
+
+**Troubleshooting steps**:
+1. Confirm the Secret exists:
+   ```bash
+   kubectl get secret <secret-name> -n <namespace>
+   ```
+2. Verify the Secret has correct type for the authentication method:
+   ```bash
+   kubectl get secret <secret-name> -n <namespace> -o jsonpath='{.type}'
+   ```
+3. Check Secret data contains required fields:
+   ```bash
+   kubectl get secret <secret-name> -n <namespace> -o yaml
+   ```
+
+**Common causes**:
+- Secret doesn't exist
+- Secret is in the wrong namespace
+- Secret has wrong type
+- Secret is missing required fields
+- RBAC prevents access to the Secret
+
+**Example error**:
+```yaml
+conditions:
+  - lastTransitionTime: "2023-05-15T10:27:15Z"
+    message: "secrets \"my-git-creds\" not found"
+    reason: SecretNotFound
+    status: "False"
+    type: SecretReady
+```
+
+**Resolution**:
+Create the missing secret or correct the secret reference in the connector configuration.
+
+### LivenessReady = False
+
+Indicates the target service is unreachable.
+
+**Troubleshooting steps**:
+1. Verify the connector's address is correct:
+   ```bash
+   kubectl get connector <connector-name> -n <namespace> -o jsonpath='{.spec.address}'
+   ```
+2. Test connectivity to target service:
+   ```bash
+   kubectl run -it --rm --restart=Never curl --image=curlimages/curl -n <namespace> -- curl -v <address>
+   ```
+3. Check network policies:
+   ```bash
+   kubectl get networkpolicies -n connectors-system
+   ```
+
+**Common causes**:
+- Target address is incorrect
+- Target service is down
+- Network policies blocking access
+- DNS resolution issues
+- Firewall blocking connections
+
+**Example error**:
+```yaml
+conditions:
+  - lastTransitionTime: "2023-05-15T10:29:00Z"
+    message: "Get \"https://github.invalid.com\": dial tcp: lookup github.invalid.com: no such host"
+    reason: ConnectionFailed
+    status: "False"
+    type: LivenessReady
+```
+
+**Resolution**:
+Update the address to a valid, reachable URL or fix network connectivity issues.
+
+### AuthReady = False
+
+Indicates authentication failure with the provided credentials.
+
+**Troubleshooting steps**:
+1. Verify credentials in the Secret:
+   ```bash
+   kubectl get secret <secret-name> -n <namespace> -o jsonpath='{.data.username}' | base64 -d
+   kubectl get secret <secret-name> -n <namespace> -o jsonpath='{.data.password}' | base64 -d
+   ```
+2. Check if authentication parameters are correctly configured:
+   ```bash
+   kubectl get connector <connector-name> -n <namespace> -o jsonpath='{.spec.auth}'
+   ```
+3. Manually test authentication:
+   ```bash
+   kubectl run -it --rm --restart=Never curl --image=curlimages/curl -n <namespace> -- \
+     curl -v -u <username>:<password> <address>
+   ```
+
+**Common causes**:
+- Incorrect username/password
+- Expired token
+- Insufficient permissions
+- Authentication type mismatch
+- Repository/resource doesn't exist
+
+**Example error**:
+```yaml
+conditions:
+  - lastTransitionTime: "2023-05-15T10:32:20Z"
+    message: "Authentication failed: status code 401"
+    reason: AuthenticationFailed
+    status: "False"
+    type: AuthReady
+```
+
+**Resolution**:
+Update credentials in the secret or verify the user has proper permissions for the resource.
+
+### ProxyServiceReady = False
+
+Indicates issues with the proxy service configuration.
+
+**Troubleshooting steps**:
+1. Check if proxy service exists:
+   ```bash
+   kubectl get service -n connectors-system -l app.kubernetes.io/name=connectors-proxy
+   ```
+2. Verify proxy service has endpoints:
+   ```bash
+   kubectl get endpoints -n connectors-system connectors-proxy-service
+   ```
+3. Check proxy pods status:
+   ```bash
+   kubectl get pods -n connectors-system -l app.kubernetes.io/name=connectors-proxy
+   ```
+
+**Common causes**:
+- Proxy service not deployed
+- Proxy pods not running
+- Service misconfiguration
+- Network policies blocking proxy access
+- Resource constraints (CPU/memory)
+
+**Example error**:
+```yaml
+conditions:
+  - lastTransitionTime: "2023-05-15T10:35:10Z"
+    message: "Service connectors-proxy-service not found in namespace connectors-system"
+    reason: ProxyServiceNotFound
+    status: "False"
+    type: ProxyServiceReady
+```
+
+**Resolution**:
+Deploy the connectors-proxy component or fix the service configuration.
+
+## Advanced Troubleshooting
+
+### Checking Component Logs
+
+For deeper troubleshooting, check the logs of the controller components:
+
+```bash
+# Controller manager logs
+kubectl logs -n connectors-system -l app.kubernetes.io/name=connectors-controller-manager
+
+# Proxy service logs
+kubectl logs -n connectors-system -l app.kubernetes.io/name=connectors-proxy
+
+# CSI driver logs
+kubectl logs -n connectors-system -l app.kubernetes.io/name=connectors-csi
+```
+
+## Additional Resources
+
+- [Connector Concepts](../concepts/connector.mdx)
+- [ConnectorClass Configuration](../concepts/connectorclass.mdx)
+- [Connectors Proxy](../concepts/connectors_proxy.mdx)
+- [Connectors CSI Driver](../concepts/connectors_csi.mdx)

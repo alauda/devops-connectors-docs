@@ -1,0 +1,313 @@
+---
+created: '2024-11-03'
+title: Connector
+weight: 20
+sourceSHA: 5f85529316aae0e6930af905ef774618f6f53077e89d0bb1cb7d8f6b1481d739
+---
+
+# Connector
+
+## Overview
+
+`Connector` is a namespace-level resource used to define the connection configuration between tools and platforms. It includes:
+
+- Access address of the tool
+- Authentication information of the tool
+- Status information of the tool
+
+For example, the following definition illustrates a Git type connector:
+
+```yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: git-github
+  namespace: default
+spec:
+  connectorClassName: git  ##  Specify the connector type as git, this ConnectorClass must exist
+  address: "https://github.com"  ##  Access address of the tool
+  auth:
+    name: basicAuth
+    secretRef:  ##  Reference to authentication information
+      name: github-secret
+```
+
+## Authentication Information
+
+The authentication information defines the credentials for accessing the tool. Depending on the type of tool, different authentication methods can be configured. This authentication method is defined in the `ConnectorClass`. For more details, refer to the [description of authentication information in ConnectorClass](./connectorclass.md).
+
+### Configuring Authentication Information
+
+Authentication information is configured in the following way:
+
+1. Specify the name of the authentication type used according to the ConnectorClass definition.
+2. Create a Secret that contains the credentials.
+3. Reference the Secret in the Connector via `spec.auth.secretRef`.
+4. Specify the parameter information required during authentication check.
+
+For example, to configure basic authentication:
+
+```yaml
+##  Create a Secret containing username and password
+apiVersion: v1
+kind: Secret
+metadata:
+  name: github-secret
+  namespace: default
+type: kubernetes.io/basic-auth
+data:
+  username: dXNlcm5hbWU=  ##  Base64 encoded username
+  password: cGFzc3dvcmQ=  ##  Base64 encoded password
+---
+##  Reference the Secret in the Connector
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: git-github
+spec:
+  connectorClassName: git
+  address: "https://github.com"
+  auth:
+    name: basic-auth
+    secretRef:
+      name: github-secret
+      namespace: default
+```
+
+### Optional Authentication
+
+Some tools support access without authentication. In this case, `spec.auth.secretRef` can be omitted.
+
+For example, accessing a public Git repository:
+
+```yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: git-public
+spec:
+  connectorClassName: git
+  address: "https://github.com"
+  auth:
+    name: basic-auth ##  Authentication for git connectorclass basic-auth is optional
+```
+
+## Authentication Check
+
+The Connector supports verifying the validity of authentication information. The configuration for the check is set via `spec.auth.params` which includes the parameters required for the authentication check.
+
+For example, to check access permissions to a Git repository:
+
+```yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: git-github
+spec:
+  connectorClassName: git
+  address: "https://github.com"
+  auth:
+    name: basic-auth
+    secretRef:
+      name: github-secret
+      namespace: default
+    params:
+    - name: repository  ##  Specify the repository to be checked
+      value: "org/repo.git"
+```
+
+Note that once the ConnectorClass specifies authentication detection params, parameters in connector must be provided, even if the Connector is created without specifying secret information, `spec.auth.params` must be passed.
+
+## Proxy Address {#connector_proxy}
+
+If the `Connector` points to a `ConnectorClass` that has configured [proxy capability](./connectorclass.mdx#proxy), the system will allocate a proxy address for each `Connector`. 
+
+Clients can use this proxy address to access the tool in a secretless manner.
+
+The default format of the proxy address is `http://c-{connector-name}.{namespace}.svc.cluster.local`, which can be obtained from `status.proxy`.
+
+For example, the following example describes a connector with a proxy address:
+
+```yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: harbor
+  namespace: default
+spec:
+  address: https://example.com
+status:
+ proxy:
+    httpAddress:
+      url: http://c-harbor.default.svc.cluster.local
+```
+
+## Status Information
+
+The status information of the Connector is recorded in the `status` field, containing the following content:
+
+- `ConnectorClassReady`: Indicates whether the connector type is correct.
+- `SecretReady`: Indicates whether the authentication information is correctly configured.
+- `LivenessReady`: Indicates whether the tool is accessible.
+- `AuthReady`: Indicates whether the authentication information is valid.
+- `ProxyServiceReady`: Indicates whether the [proxy address](#connector_proxy) for the current Connector is successfully allocated.
+- `Ready`: Indicates the overall status.
+
+**SecretReady Condition**
+
+Indicates the status information of the secret for the Connector.
+
+| Status  | Reason         | Description                                     |
+| ------- | -------------- | ----------------------------------------------- |
+| True    | SecretOptional | ConnectorClass marks authentication information as optional, and the current Connector has no authentication information configured |
+| True    |                | Secret is configured and exists                           |
+| False   |                | Secret is configured, but an error occurred while checking if the Secret exists              |
+| Unknown |                | Checking if the configured Secret is normal                               |
+
+**AuthReady Condition**
+
+Indicates the status information of the authentication for the Connector.
+
+| Status  | Reason       | Description                      |
+| ------- | ------------ | -------------------------------- |
+| True    | NonAuthProbe | ConnectorClass does not specify Auth Probe information |
+| True    |              | Credential check is valid                           |
+| False   |              | Credential check failed                          |
+| Unknown |              | Credential check in progress                            |
+
+**LivenessReady Condition**
+
+Indicates the status information of the liveness for the Connector.
+
+| Status  | Reason           | Description                          |
+| ------- | ---------------- | ------------------------------------ |
+| True    | NonLivenessProbe | ConnectorClass does not specify Liveness Probe information |
+| True    |                  | Tool access is normal                               |
+| False   |                  | Tool access is abnormal                              |
+| Unknown |                  | Tool access check in progress                              |
+
+**ProxyServiceReady Condition**
+
+Indicates the status information of the proxy service for the Connector.
+
+| Status  | Reason   | Description                                                    |
+| ------- | -------- | -------------------------------------------------------------- |
+| True    | NonProxy | ConnectorClass does not specify Proxy Service information, the current Connector does not have Proxy capability |
+| True    |          | Connector proxy service created successfully                                             |
+| False   |          | Proxy service is in an abnormal state                                                    |
+| Unknown |          | Proxy service check in progress                                                        |
+
+For example:
+
+```yaml
+status:
+  conditions:
+  - type: ConnectorClassReady
+    status: "True"
+    message: ""
+  - type: SecretReady
+    status: "True"
+    message: ""
+  - type: LivenessReady
+    status: "True"
+    lastProbeTime: "2024-10-16T02:27:44Z"
+    message: ""
+  - type: AuthReady
+    status: "True"
+    lastProbeTime: "2024-10-16T02:27:44Z"
+    message: ""
+  - type: ProxyServiceReady
+    status: "True"
+    lastProbeTime: "2024-10-16T02:27:44Z"
+    message: ""
+  - type: Ready
+    status: "True"
+    message: ""
+```
+
+For more information on conditions, please refer to `Connector Conditions`.
+
+## Examples
+
+### Git Connector with Basic Authentication
+
+```yaml
+##  Create authentication information
+apiVersion: v1
+kind: Secret
+metadata:
+  name: git-auth
+  namespace: default
+type: kubernetes.io/basic-auth
+data:
+  username: dXNlcm5hbWU=
+  password: cGFzc3dvcmQ=
+---
+##  Create Connector
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: git-github
+  namespace: default
+spec:
+  connectorClassName: git
+  address: "https://github.com"
+  auth:
+    name: basic-auth
+    secretRef:
+      name: git-auth
+      namespace: default
+    params:
+    - name: repository
+      value: "org/repo.git"
+```
+
+### Git Connector with SSH Authentication
+
+```yaml
+##  Create SSH Key
+apiVersion: v1
+kind: Secret
+metadata:
+  name: git-ssh
+  namespace: default
+type: kubernetes.io/ssh-auth
+data:
+  ssh-privatekey: LS0tLS1CRUdJTi...  ##  Base64 encoded private key
+---
+##  Create Connector
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: git-github-ssh
+  namespace: default
+spec:
+  connectorClassName: git
+  address: "git@github.com"
+  auth:
+    name: ssh-auth
+    secretRef:
+      name: git-ssh
+      namespace: default
+    params:
+    - name: repository
+      value: "org/repo.git"
+```
+
+### Git Connector without Authentication
+
+```yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: git-public
+  namespace: default
+spec:
+  connectorClassName: git
+  address: "https://github.com"
+  auth:
+    name: basic-auth
+  params:
+    - name: repository
+      value: "org/repo.git"
+```

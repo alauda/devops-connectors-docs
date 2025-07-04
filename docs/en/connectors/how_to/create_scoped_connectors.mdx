@@ -1,0 +1,65 @@
+---
+created: '2025-01-01'
+title: How to Create Connector Resources at Different Levels
+weight: 10
+sourceSHA: 0caaceb111dd98354976879f78c31145dfe98e9f4912549b3499669abb438b40
+---
+
+## How to Create Cluster-Level Connector Resources
+
+Save the Connector resource under `kube-public`. For example,
+
+```yaml
+kind: Connector
+metadata:
+  name: github-connector
+  namespace: kube-public
+spec:
+  address: https://github.com
+  connectorClassName: git
+  auth:
+    name: baseAuth
+    secretRef:
+      name: github-secret
+```
+
+## How to Create Namespace-Level Connector Resources
+
+Save the Connector resource under a regular namespace. For example,
+
+```yaml
+kind: Connector
+metadata:
+  name: github-connector
+  namespace: default
+spec:
+  address: https://github.com
+  connectorClassName: git
+  auth:
+    name: baseAuth
+    secretRef:
+      name: github-secret
+```
+
+## How to Create Project-Level Resources
+
+Save the Connector resource under the namespace representing the current project.
+
+```yaml
+kind: Connector
+metadata:
+  name: github-connector
+  namespace: project-1
+spec:
+  address: https://github.com
+  connectorClassName: git
+  auth:
+    name: baseAuth
+    secretRef:
+      name: github-secret
+```
+
+## More
+
+- [Understanding Different Level Connector Resources](../concepts/connector_scope_permissions.mdx)
+- Refer to [How to Create a Namespace Representing the Current Project](../concepts/connector_scope_permissions.mdx) for a description of project-level resources.

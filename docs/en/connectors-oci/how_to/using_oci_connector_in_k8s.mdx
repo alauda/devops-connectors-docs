@@ -1,0 +1,91 @@
+---
+weight: 20
+sourceSHA: 9127ed46c690502a00565477f7c29eee7941b32f59f83faf3498b5bb9097e080
+---
+
+# Using the OCI Connector Proxy in K8S Workload
+
+In a Kubernetes cluster, when using the OCI client to access the OCI Registry, it is often necessary to configure the Registry authentication information for the client. This requires distributing the authentication information to the workload orchestrators, thereby increasing the risk of credential leakage.
+
+The OCI Connector provides a `secretless` way to access the Registry through its proxy capability, allowing ordinary users to access the Registry without having contact with authentication information, thus maximizing credential security.
+
+Currently, there are various OCI clients available in the community for accessing the `OCI Registry`. This document will introduce how to utilize the proxy capabilities of the `OCI Connector` in Kubernetes workloads and explain its general configuration logic.
+
+If you already have a preliminary understanding, you can directly refer to more specific cases:
+
+- [Using OCI Connector to Build Images in K8S Job](./using_oci_connector_in_k8s_job.md)
+- [Using OCI Connector to Build Images in Tekton Pipeline](./using_oci_connector_in_tekton_pipeline.md)
+
+## Utilizing OCI Connector Proxy Capability
+
+Using the OCI Connector proxy capability mainly involves the following three aspects:
+
+- Modifying the target image address to the proxied image repository address
+- Configuring the authentication information required to access the proxy
+- Configuring the client CLI to support pushing to insecure registries
+
+Next, we will elaborate on the specific meaning of each item.
+
+1. Modifying the target image address to the proxied image repository address
+
+Example:
+harbar.example.com/test/abc:v1 → c-harbor-connector.default.svc.local/test/abc:v1
+
+2. Configuring the authentication information required to access the proxy
+
+The authentication information required to access the proxy can be configured through the `docker/config.json` file.
+
+The `OCI ConnectorClass` provides an out-of-the-box configuration that can be mounted through connector-csi.
+
+```yaml
+volumes:
+- name: docker-config
+  csi:
+    readOnly: true
+    driver: connectors-csi
+    volumeAttributes:
+      connector.name: "harbor"
+      configuration.names: "docker-config"
+```
+
+> For the configuration information of the OCI ConnectorClass, please refer to [OCI ConnectorClass Configuration](../concepts/oci_connectorclass.mdx#configuration).
+
+3. Configuring the client CLI to support pushing to insecure registries
+
+Since the proxy service provided by the connector uses HTTP protocol, it is necessary to configure `insecure-registries` on the client. Different clients have different configuration methods:
+
+`dockerd` can specify this through `daemon.json`. The OCI ConnectorClass provides an out-of-the-box configuration for `dockerd`, which can be mounted through connector-csi.
+
+```yaml
+- name: dockerd-config
+  csi:
+    readOnly: true
+    driver: connectors-csi
+    volumeAttributes:
+      connector.name: "harbor"
+      configuration.names: "dockerd"
+```
+
+`buildkitd.yaml` can specify this through `buildkitd.toml`. The OCI ConnectorClass provides an out-of-the-box configuration for `buildkitd`, which can be mounted through connector-csi.
+
+```yaml
+- name: buildkitd-config
+  csi:
+    readOnly: true
+    driver: connectors-csi
+    volumeAttributes:
+      connector.name: "harbor"
+      configuration.names: "buildkitd"
+```
+
+Certain tools may support specifying directly in the command line, in which case the corresponding parameters can be fixed in the script.
+
+For example:
+
+- `buildah` specifies `--tls-verify=false` in the command line to support insecure registry.
+- `ko` specifies `--insecure-registry` in the command line to support insecure registry.
+
+## More
+
+- [Using OCI Connector to Build Images in K8S Job](./using_oci_connector_in_k8s_job.md)
+- [Using OCI Connector to Build Images in Tekton Pipeline](./using_oci_connector_in_tekton_pipeline.md)

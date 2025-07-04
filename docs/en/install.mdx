@@ -1,0 +1,424 @@
+---
+weight: 15
+i18n:
+  title:
+    en: Installation
+sourceSHA: a1eb8934e9479e19453155276f9ffe733039638d332f38f4d0b4ed662827991d
+title: Installation
+---
+
+# Installation
+
+## Introduction
+
+The Connectors system has a modular architecture with the following components:
+- **Connectors Operator**: The central management component that handles the deployment and lifecycle of other connector components
+- **ConnectorsCore**: Required core component that provides the foundation for all connector types
+- **ConnectorsGit**: Optional component that adds support for Git services (GitHub, GitLab, etc.)
+- **ConnectorsOCI**: Optional component that adds support for container registries
+
+This document provides instructions for installing and configuring the Connectors system.
+
+
+### Prerequisites
+
+Before installing, ensure you have:
+
+- A kubernetes cluster
+- A kubectl cli configured to communicate with your cluster
+- Admin permissions on the cluster
+- Connectors Operator is `Ready` on ACP Operator Hub
+
+### Install Connectors Operator
+
+First, install the Connectors Operator which manages the lifecycle of all other components.
+
+1. Create a namespace for the operator:
+
+   ```bash
+   kubectl create namespace connectors-operator
+   ```
+
+2. Apply the operator subscription YAML:
+
+  ```bash
+  cat <<EOF | kubectl apply -f -
+  apiVersion: operators.coreos.com/v1alpha1
+  kind: Subscription
+  metadata:
+    annotations:
+      cpaas.io/target-namespaces: ""
+    labels:
+      catalog: platform
+    name: connectors-operator
+    namespace: connectors-operator
+  spec:
+    channel: alpha
+    installPlanApproval: Manual
+    name: connectors-operator
+    source: platform
+    sourceNamespace: cpaas-system
+  EOF
+
+  kubectl wait --for=condition=InstallPlanPending subscription.operators.coreos.com/connectors-operator -n connectors-operator
+
+  installplanname=$(kubectl get subscription.operators.coreos.com -n connectors-operator connectors-operator -ojsonpath='{.status.installPlanRef.name}')
+  kubectl patch installplan -n connectors-operator ${installplanname} --type='merge' -p='{"spec":{"approved":true}}'
+  ```
+
+3. Verify the operator is running:
+
+   ```bash
+   kubectl get pods -n connectors-operator
+   ```
+
+   You should see the connectors-operator pod running:
+   ```
+   NAME                                                  READY   STATUS    RESTARTS   AGE
+   connectors-operator-controller-manager-xxxxxx-xxxxx   2/2     Running   0          1m
+   ```
+
+4. Verify that the Custom Resource Definitions (CRDs) have been created:
+
+   ```bash
+   kubectl get crds | grep connectors
+   ```
+
+   You should see CRDs including:
+   ```
+   connectorscore.operator.connectors.alauda.io
+   connectorsgit.operator.connectors.alauda.io
+   connectorsoci.operator.connectors.alauda.io
+   ```
+
+### Install ConnectorsCore
+
+After the operator is running, install the required ConnectorsCore component:
+
+1. Create a namespace for connector components (if not already created):
+
+   ```bash
+   kubectl create namespace connectors-system
+   ```
+
+2. Create the ConnectorsCore custom resource:
+
+   ```bash
+   cat <<EOF | kubectl apply -f -
+   apiVersion: operator.connectors.alauda.io/v1alpha1
+   kind: ConnectorsCore
+   metadata:
+     name: connectors-core
+     namespace: connectors-system
+   spec: {}
+   EOF
+   ```
+
+3. Monitor the deployment progress:
+
+   ```bash
+   kubectl get connectorscore -n connectors-system
+   ```
+
+4. Wait until the status shows that ConnectorsCore is ready:
+
+   ```bash
+   kubectl wait --for=condition=Ready connectorscore/connectors-core -n connectors-system --timeout=300s
+   ```
+
+5. Verify that the core pods are running:
+
+   ```bash
+   kubectl get pods -n connectors-system
+   ```
+
+   You should see core components including:
+   ```
+   NAME                                              READY   STATUS    RESTARTS   AGE
+   connectors-api-xxxxxx                             1/1     Running   0          2m
+   connectors-controller-manager-xxxxxx              1/1     Running   0          2m
+   connectors-proxy-xxxxxx                           1/1     Running   0          2m
+   ```
+
+6. Verify that the CRDs required for connector functionality are installed:
+
+   ```bash
+   kubectl get crds | grep connectors.alauda.io
+   ```
+
+   You should see:
+   ```
+   connectorclasses.connectors.alauda.io
+   connectors.connectors.alauda.io
+   ```
+
+### Install ConnectorsGit (Optional)
+
+To add support for Git services like GitHub, GitLab, etc., install the ConnectorsGit component:
+
+1. Create the ConnectorsGit custom resource:
+
+   ```bash
+   cat <<EOF | kubectl apply -f -
+   apiVersion: operator.connectors.alauda.io/v1alpha1
+   kind: ConnectorsGit
+   metadata:
+     name: connectors-git
+     namespace: connectors-system
+   spec: {}
+   EOF
+   ```
+
+2. Monitor the deployment progress:
+
+   ```bash
+   kubectl get connectorsgit -n connectors-system
+   ```
+
+3. Wait until the status shows that ConnectorsGit is ready:
+
+   ```bash
+   kubectl wait --for=condition=Ready connectorsgit/connectors-git -n connectors-system --timeout=300s
+   ```
+
+4. Verify that the Git plugin is running:
+
+   ```bash
+   kubectl get pods -n connectors-system | grep git
+   ```
+
+   You should see:
+   ```
+   NAME                                   READY   STATUS    RESTARTS   AGE
+   connectors-git-plugin-xxxxxx           1/1     Running   0          1m
+   ```
+
+5. Verify that the Git ConnectorClass has been created:
+
+   ```bash
+   kubectl get connectorclass git
+   ```
+
+   You should see:
+   ```
+   NAME  READY  AGE
+   git   True       1m
+   ```
+
+### Install ConnectorsOCI (Optional)
+
+To add support for container registries, like Harbor, Docker Registry, etc., install the ConnectorsOCI component:
+
+1. Create the ConnectorsOCI custom resource:
+
+   ```bash
+   cat <<EOF | kubectl apply -f -
+   apiVersion: operator.connectors.alauda.io/v1alpha1
+   kind: ConnectorsOCI
+   metadata:
+     name: connectors-oci
+     namespace: connectors-system
+   spec: {}
+   EOF
+   ```
+
+2. Monitor the deployment progress:
+
+   ```bash
+   kubectl get connectorsoci -n connectors-system
+   ```
+
+3. Wait until the status shows that ConnectorsOCI is ready:
+
+   ```bash
+   kubectl wait --for=condition=Ready connectorsoci/connectors-oci -n connectors-system --timeout=300s
+   ```
+
+4. Verify that the OCI plugin is running:
+
+   ```bash
+   kubectl get pods -n connectors-system | grep oci
+   ```
+
+5. Verify that the OCI ConnectorClass has been created:
+
+   ```bash
+   kubectl get connectorclass oci
+   ```
+
+## Uninstall Connectors
+
+To uninstall the Connectors system, remove components in the reverse order of installation.
+
+1. Delete the optional components first (if installed):
+
+   ```bash
+   # Delete ConnectorsOCI
+   kubectl delete connectorsoci --all -n connectors-system
+
+   # Delete ConnectorsGit
+   kubectl delete connectorsgit --all -n connectors-system
+   ```
+
+2. Delete the core component:
+
+   ```bash
+   kubectl delete connectorscore --all -n connectors-system
+   ```
+
+3. Delete the operator:
+
+   ```bash
+   kubectl delete -n connectors-operator subscription.operators.coreos.com/connectors-operator
+   ```
+
+4. Delete the CRDs:
+
+  **Warning: This will delete all user data about connectors**
+
+   ```bash
+   kubectl delete crd connectors.connectors.alauda.io
+   kubectl delete crd connectorclasses.connectors.alauda.io
+   kubectl delete crd connectorscore.operator.connectors.alauda.io
+   kubectl delete crd connectorsgit.operator.connectors.alauda.io
+   kubectl delete crd connectorsoci.operator.connectors.alauda.io
+   ```
+
+6. Delete the namespaces:
+
+   ```bash
+   kubectl delete namespace connectors-system
+   kubectl delete namespace connectors-operator
+   ```
+
+## Custom Configuration
+
+You can customize the deployment of connector components to better suit your environment. All connector components share a similar configuration structure.
+
+### ConnectorsCore Configuration
+
+When creating the ConnectorsCore resource, you can specify custom configuration:
+
+```yaml
+apiVersion: operator.connectors.alauda.io/v1alpha1
+kind: ConnectorsCore
+metadata:
+  name: connectors-core
+  namespace: connectors-system
+spec:
+  # Configure specific workloads
+  workloads:
+  - name: connectors-api
+    replicas: 2
+    template:
+      spec:
+        containers:
+        - name: api
+          imagePullPolicy: Always
+          resources:
+            limits:
+              cpu: 500m
+              memory: 512Mi
+            requests:
+              cpu: 200m
+              memory: 256Mi
+          securityContext:
+            readOnlyRootFilesystem: true
+        nodeSelector:
+          kubernetes.io/os: linux
+
+  - name: connectors-controller-manager
+    replicas: 1
+    template:
+      spec:
+        containers:
+        - name: manager
+          resources:
+            limits:
+              cpu: 300m
+              memory: 512Mi
+
+  - name: connectors-proxy
+    replicas: 2
+    template:
+      spec:
+        containers:
+        - name: proxy
+          resources:
+            limits:
+              cpu: 200m
+              memory: 256Mi
+```
+
+### ConnectorsGit Configuration
+
+Custom configuration for the Git plugin:
+
+```yaml
+apiVersion: operator.connectors.alauda.io/v1alpha1
+kind: ConnectorsGit
+metadata:
+  name: connectors-git
+  namespace: connectors-system
+spec:
+  # Configure workloads
+  workloads:
+  - name: connectors-git-plugin
+    replicas: 2
+    template:
+      spec:
+        containers:
+        - name: plugin
+          resources:
+            limits:
+              cpu: 300m
+              memory: 256Mi
+            requests:
+              cpu: 100m
+              memory: 128Mi
+```
+
+### ConnectorsOCI Configuration
+
+Custom configuration for the OCI plugin:
+
+```yaml
+apiVersion: operator.connectors.alauda.io/v1alpha1
+kind: ConnectorsOCI
+metadata:
+  name: connectors-oci
+  namespace: connectors-system
+spec:
+  # Configure workloads
+  workloads:
+  - name: connectors-oci-plugin
+    replicas: 2
+    template:
+      spec:
+        containers:
+        - name: plugin
+          resources:
+            limits:
+              cpu: 300m
+              memory: 256Mi
+            requests:
+              cpu: 100m
+              memory: 128Mi
+```
+
+### Additional Configurations
+
+For advanced deployments, you can also specify:
+
+```yaml
+apiVersion: operator.connectors.alauda.io/v1alpha1
+kind: ConnectorsCore
+metadata:
+  name: connectors-core
+  namespace: connectors-system
+spec:
+  # Specify additional manifests to install
+  additionalManifests: "<additional manifests>"
+
+  # Other configurations as needed
+```

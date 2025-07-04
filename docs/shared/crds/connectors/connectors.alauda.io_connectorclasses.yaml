@@ -1,0 +1,738 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.1
+  name: connectorclasses.connectors.alauda.io
+spec:
+  group: connectors.alauda.io
+  names:
+    categories:
+    - alauda
+    kind: ConnectorClass
+    listKind: ConnectorClassList
+    plural: connectorclasses
+    singular: connectorclass
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
+      type: string
+    - jsonPath: .status.conditions[?(@.type=="Ready")].reason
+      name: Reason
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: ConnectorClass is the Schema for the connectorclasses API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: Spec defines the desired state of ConnectorClass
+            properties:
+              address:
+                description: |-
+                  Address indicates address param constraints for this ConnectorClass of connectors
+                  we only support string param type
+                properties:
+                  default:
+                    description: Default is the value a parameter takes if no input
+                      value is supplied.
+                    properties:
+                      arrayVal:
+                        items:
+                          type: string
+                        type: array
+                        x-kubernetes-list-type: atomic
+                      objectVal:
+                        additionalProperties:
+                          type: string
+                        type: object
+                      stringVal:
+                        type: string
+                      type:
+                        description: |-
+                          ParamType indicates the type of an input parameter;
+                          Used to distinguish between a single string and an array of strings.
+                        type: string
+                    required:
+                    - arrayVal
+                    - objectVal
+                    - stringVal
+                    - type
+                    type: object
+                  description:
+                    description: |-
+                      Description is a user-facing description of the parameter that may be
+                      used to populate a UI.
+                    type: string
+                  enum:
+                    description: |-
+                      Enum declares a set of allowed param input values.
+                      If Enum is not set, no input validation is performed for the param.
+                    items:
+                      type: string
+                    type: array
+                  name:
+                    description: Name declares the name by which a parameter is referenced.
+                    type: string
+                  properties:
+                    additionalProperties:
+                      description: PropertySpec defines the struct for object keys
+                      properties:
+                        type:
+                          description: |-
+                            ParamType indicates the type of an input parameter;
+                            Used to distinguish between a single string and an array of strings.
+                          type: string
+                      type: object
+                    description: Properties is the JSON Schema properties to support
+                      key-value pairs parameter.
+                    type: object
+                  type:
+                    description: |-
+                      Type is the user-specified type of the parameter. The possible types
+                      are currently "string", "array" and "object", and "string" is the default.
+                    type: string
+                required:
+                - name
+                type: object
+              api:
+                description: |-
+                  API defines connectorclass plugin api address
+                  `api.ref` can be address of plugin api, it should be a kubernetes svc
+                  `api.uri` can be an absolute URL(non-empty scheme and non-empty host) pointing to the target or a relative URI. Relative URIs will be resolved using the base URI retrieved from Ref.
+                  `api.CACerts` and `api.audience` is not implemented now
+                properties:
+                  CACerts:
+                    description: |-
+                      CACerts are Certification Authority (CA) certificates in PEM format
+                      according to https://www.rfc-editor.org/rfc/rfc7468.
+                      If set, these CAs are appended to the set of CAs provided
+                      by the Addressable target, if any.
+                    type: string
+                  audience:
+                    description: |-
+                      Audience is the OIDC audience.
+                      This need only be set, if the target is not an Addressable
+                      and thus the Audience can't be received from the Addressable itself.
+                      In case the Addressable specifies an Audience too, the Destinations
+                      Audience takes preference.
+                    type: string
+                  ref:
+                    description: Ref points to an Addressable.
+                    properties:
+                      address:
+                        description: Address points to a specific Address Name.
+                        type: string
+                      apiVersion:
+                        description: API version of the referent.
+                        type: string
+                      group:
+                        description: |-
+                          Group of the API, without the version of the group. This can be used as an alternative to the APIVersion, and then resolved using ResolveGroup.
+                          Note: This API is EXPERIMENTAL and might break anytime. For more details: https://github.com/knative/eventing/issues/5086
+                        type: string
+                      kind:
+                        description: |-
+                          Kind of the referent.
+                          More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+                        type: string
+                      name:
+                        description: |-
+                          Name of the referent.
+                          More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                        type: string
+                      namespace:
+                        description: |-
+                          Namespace of the referent.
+                          More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/
+                          This is optional field, it gets defaulted to the object holding it if left out.
+                        type: string
+                    required:
+                    - kind
+                    - name
+                    type: object
+                  uri:
+                    description: URI can be an absolute URL(non-empty scheme and non-empty
+                      host) pointing to the target or a relative URI. Relative URIs
+                      will be resolved using the base URI retrieved from Ref.
+                    type: string
+                type: object
+              auth:
+                description: Auth indicates authentication constraints for this ConnectorClass
+                  of connectors
+                properties:
+                  types:
+                    description: |-
+                      Types represent the authentication types supported by connectors of the current connectorclass type
+                      When the array length is greater than 1, it means supporting multiple types, and the Connector can choose any one when using.
+                    items:
+                      description: ConnectorClassAuthType represent the authentication
+                        types supported by connectors of the current connectorclass
+                        type
+                      properties:
+                        description:
+                          description: Description is the description of the AuthType
+                          type: string
+                        displayName:
+                          description: DisplayName is the human readable name of the
+                            AuthType
+                          type: string
+                        generator:
+                          description: |-
+                            Generator specifies how to generate authentication data dynamically.
+                            Can be used to implement custom authentication logic.
+                          properties:
+                            rego:
+                              description: |-
+                                Rego contains the Rego policy script that will be evaluated to generate
+                                authentication data.
+                                The script must define an 'auth' object that matches the following rules:
+                                 1. Define its rules under the 'proxy' package
+                                 2. Produce an 'auth' object containing AuthInjection structure.
+                              type: string
+                          type: object
+                        name:
+                          description: Name of the AuthType Must be unique within
+                            the ConnectorClass.
+                          type: string
+                        optional:
+                          description: |-
+                            Optional indicates whether the authentication information is optional for this ConnectorClass of connectors
+                            the default value is false
+                          type: boolean
+                        params:
+                          description: |-
+                            Params declares the data fields included in this authentication type.
+                            For known types, the definition of included params is optional.
+                            If not defined, the conventional params will be used.
+                          items:
+                            description: |-
+                              ParamSpec defines arbitrary parameters needed beyond typed inputs (such as
+                              resources).
+                            properties:
+                              default:
+                                description: Default is the value a parameter takes
+                                  if no input value is supplied.
+                                properties:
+                                  arrayVal:
+                                    items:
+                                      type: string
+                                    type: array
+                                    x-kubernetes-list-type: atomic
+                                  objectVal:
+                                    additionalProperties:
+                                      type: string
+                                    type: object
+                                  stringVal:
+                                    type: string
+                                  type:
+                                    description: |-
+                                      ParamType indicates the type of an input parameter;
+                                      Used to distinguish between a single string and an array of strings.
+                                    type: string
+                                required:
+                                - arrayVal
+                                - objectVal
+                                - stringVal
+                                - type
+                                type: object
+                              description:
+                                description: |-
+                                  Description is a user-facing description of the parameter that may be
+                                  used to populate a UI.
+                                type: string
+                              enum:
+                                description: |-
+                                  Enum declares a set of allowed param input values.
+                                  If Enum is not set, no input validation is performed for the param.
+                                items:
+                                  type: string
+                                type: array
+                              name:
+                                description: Name declares the name by which a parameter
+                                  is referenced.
+                                type: string
+                              properties:
+                                additionalProperties:
+                                  description: PropertySpec defines the struct for
+                                    object keys
+                                  properties:
+                                    type:
+                                      description: |-
+                                        ParamType indicates the type of an input parameter;
+                                        Used to distinguish between a single string and an array of strings.
+                                      type: string
+                                  type: object
+                                description: Properties is the JSON Schema properties
+                                  to support key-value pairs parameter.
+                                type: object
+                              type:
+                                description: |-
+                                  Type is the user-specified type of the parameter. The possible types
+                                  are currently "string", "array" and "object", and "string" is the default.
+                                type: string
+                            required:
+                            - name
+                            type: object
+                          type: array
+                          x-kubernetes-list-type: atomic
+                        secretType:
+                          description: |-
+                            SecretType represents the secret type of the current authentication information
+                            follow k8s secret type definition.
+                            eg.kubernetes.io/basic-auth, kubernetes.io/ssh-auth, kubernetes.io/opaque
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
+                type: object
+              authProbes:
+                description: AuthProbes defines authentication probe for this ConnectorClass
+                  of connectors
+                items:
+                  description: ConnectorClassAuthProbe represents network the detection
+                    configuration
+                  properties:
+                    authName:
+                      description: |-
+                        AuthName corresponds to `spec.auth.types[].name`,
+                        indicating the way to check for the corresponding authentication type
+                      type: string
+                    params:
+                      description: |-
+                        Params declares the data fields included in this probe
+                        it will use param value when probe
+                      items:
+                        description: |-
+                          ParamSpec defines arbitrary parameters needed beyond typed inputs (such as
+                          resources).
+                        properties:
+                          default:
+                            description: Default is the value a parameter takes if
+                              no input value is supplied.
+                            properties:
+                              arrayVal:
+                                items:
+                                  type: string
+                                type: array
+                                x-kubernetes-list-type: atomic
+                              objectVal:
+                                additionalProperties:
+                                  type: string
+                                type: object
+                              stringVal:
+                                type: string
+                              type:
+                                description: |-
+                                  ParamType indicates the type of an input parameter;
+                                  Used to distinguish between a single string and an array of strings.
+                                type: string
+                            required:
+                            - arrayVal
+                            - objectVal
+                            - stringVal
+                            - type
+                            type: object
+                          description:
+                            description: |-
+                              Description is a user-facing description of the parameter that may be
+                              used to populate a UI.
+                            type: string
+                          enum:
+                            description: |-
+                              Enum declares a set of allowed param input values.
+                              If Enum is not set, no input validation is performed for the param.
+                            items:
+                              type: string
+                            type: array
+                          name:
+                            description: Name declares the name by which a parameter
+                              is referenced.
+                            type: string
+                          properties:
+                            additionalProperties:
+                              description: PropertySpec defines the struct for object
+                                keys
+                              properties:
+                                type:
+                                  description: |-
+                                    ParamType indicates the type of an input parameter;
+                                    Used to distinguish between a single string and an array of strings.
+                                  type: string
+                              type: object
+                            description: Properties is the JSON Schema properties
+                              to support key-value pairs parameter.
+                            type: object
+                          type:
+                            description: |-
+                              Type is the user-specified type of the parameter. The possible types
+                              are currently "string", "array" and "object", and "string" is the default.
+                            type: string
+                        required:
+                        - name
+                        type: object
+                      type: array
+                      x-kubernetes-list-type: atomic
+                    probe:
+                      description: Probe represents current detection configuration
+                      properties:
+                        http:
+                          description: |-
+                            Http represents the network detection using the http get method
+                            More Info: TODO:
+                          properties:
+                            disableRedirect:
+                              description: DisableRedirect indicates whether the probe
+                                should follow redirects, default is false
+                              type: boolean
+                            host:
+                              description: |-
+                                Host represents the tool address for the current detection.
+                                usually, it would be empty, it will use the `spec.address` of connector
+                              type: string
+                            httpHeaders:
+                              description: Custom headers to set in the request. HTTP
+                                allows repeated headers.
+                              items:
+                                description: HTTPHeader describes a custom header
+                                  to be used in HTTP probes
+                                properties:
+                                  name:
+                                    description: |-
+                                      The header field name.
+                                      This will be canonicalized upon output, so case-variant names will be understood as the same header.
+                                    type: string
+                                  value:
+                                    description: The header field value
+                                    type: string
+                                required:
+                                - name
+                                - value
+                                type: object
+                              type: array
+                              x-kubernetes-list-type: atomic
+                            method:
+                              description: 'Method represents the HTTP method to use
+                                for the probe, support method: GET, POST. default
+                                is GET'
+                              enum:
+                              - GET
+                              - POST
+                              type: string
+                            path:
+                              description: Path represents the API address accessed
+                                during the current detection
+                              type: string
+                            scheme:
+                              description: |-
+                                Scheme to use for connecting to the host.
+                                If empty:
+                                  - When Host is empty or matches the connector's address, the scheme from the connector's address is used.
+                                  - Otherwise, defaults to http.
+                                If specified, this value will be used regardless of Host or connector's address.
+                              enum:
+                              - http
+                              - https
+                              type: string
+                          required:
+                          - path
+                          type: object
+                      type: object
+                  required:
+                  - authName
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - authName
+                x-kubernetes-list-type: map
+              configurations:
+                description: Configurations defines connectorclass configuration
+                items:
+                  description: ConnectorClassConfiguration defines connectorclass
+                    configuration
+                  properties:
+                    annotations:
+                      additionalProperties:
+                        type: string
+                      description: |-
+                        Annotations is an unstructured key value map stored with a resource that may be
+                        set by external tools to store and retrieve arbitrary metadata. They are not
+                        queryable and should be preserved when modifying objects.
+                        More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations
+                      type: object
+                    data:
+                      additionalProperties:
+                        type: string
+                      description: |-
+                        Data contains the configuration data.
+                        Each key must consist of alphanumeric characters, '-', '_' or '.'.
+                      type: object
+                    name:
+                      description: Name of the configuration
+                      type: string
+                  type: object
+                type: array
+              livenessProbe:
+                description: LivenessProbe defines liveness probe for this ConnectorClass
+                  of connectors
+                properties:
+                  http:
+                    description: |-
+                      Http represents the network detection using the http get method
+                      More Info: TODO:
+                    properties:
+                      disableRedirect:
+                        description: DisableRedirect indicates whether the probe should
+                          follow redirects, default is false
+                        type: boolean
+                      host:
+                        description: |-
+                          Host represents the tool address for the current detection.
+                          usually, it would be empty, it will use the `spec.address` of connector
+                        type: string
+                      httpHeaders:
+                        description: Custom headers to set in the request. HTTP allows
+                          repeated headers.
+                        items:
+                          description: HTTPHeader describes a custom header to be
+                            used in HTTP probes
+                          properties:
+                            name:
+                              description: |-
+                                The header field name.
+                                This will be canonicalized upon output, so case-variant names will be understood as the same header.
+                              type: string
+                            value:
+                              description: The header field value
+                              type: string
+                          required:
+                          - name
+                          - value
+                          type: object
+                        type: array
+                        x-kubernetes-list-type: atomic
+                      method:
+                        description: 'Method represents the HTTP method to use for
+                          the probe, support method: GET, POST. default is GET'
+                        enum:
+                        - GET
+                        - POST
+                        type: string
+                      path:
+                        description: Path represents the API address accessed during
+                          the current detection
+                        type: string
+                      scheme:
+                        description: |-
+                          Scheme to use for connecting to the host.
+                          If empty:
+                            - When Host is empty or matches the connector's address, the scheme from the connector's address is used.
+                            - Otherwise, defaults to http.
+                          If specified, this value will be used regardless of Host or connector's address.
+                        enum:
+                        - http
+                        - https
+                        type: string
+                    required:
+                    - path
+                    type: object
+                type: object
+              proxy:
+                description: |-
+                  Proxy defines the proxy configuration for this ConnectorClass.
+                  Specifies how network traffic should be routed through a proxy server.
+                properties:
+                  CACerts:
+                    description: |-
+                      CACerts are Certification Authority (CA) certificates in PEM format
+                      according to https://www.rfc-editor.org/rfc/rfc7468.
+                      If set, these CAs are appended to the set of CAs provided
+                      by the Addressable target, if any.
+                    type: string
+                  audience:
+                    description: |-
+                      Audience is the OIDC audience.
+                      This need only be set, if the target is not an Addressable
+                      and thus the Audience can't be received from the Addressable itself.
+                      In case the Addressable specifies an Audience too, the Destinations
+                      Audience takes preference.
+                    type: string
+                  ref:
+                    description: Ref points to an Addressable.
+                    properties:
+                      address:
+                        description: Address points to a specific Address Name.
+                        type: string
+                      apiVersion:
+                        description: API version of the referent.
+                        type: string
+                      group:
+                        description: |-
+                          Group of the API, without the version of the group. This can be used as an alternative to the APIVersion, and then resolved using ResolveGroup.
+                          Note: This API is EXPERIMENTAL and might break anytime. For more details: https://github.com/knative/eventing/issues/5086
+                        type: string
+                      kind:
+                        description: |-
+                          Kind of the referent.
+                          More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+                        type: string
+                      name:
+                        description: |-
+                          Name of the referent.
+                          More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                        type: string
+                      namespace:
+                        description: |-
+                          Namespace of the referent.
+                          More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/
+                          This is optional field, it gets defaulted to the object holding it if left out.
+                        type: string
+                    required:
+                    - kind
+                    - name
+                    type: object
+                  uri:
+                    description: URI can be an absolute URL(non-empty scheme and non-empty
+                      host) pointing to the target or a relative URI. Relative URIs
+                      will be resolved using the base URI retrieved from Ref.
+                    type: string
+                type: object
+            type: object
+          status:
+            description: Status defines the actual state of ConnectorClass
+            properties:
+              annotations:
+                additionalProperties:
+                  type: string
+                description: |-
+                  Annotations is additional Status fields for the Resource to save some
+                  additional State as well as convey more information to the user. This is
+                  roughly akin to Annotations on any k8s resource, just the reconciler conveying
+                  richer information outwards.
+                type: object
+              api:
+                description: |-
+                  API represents status of connectorclass api
+                  it will resolved based on `spec.api`
+                  if `spec.api` is empty or invalid, it will not be set
+                  if current field is empty, the connectorclass cannot provides any api service.
+                properties:
+                  address:
+                    description: Address is a single Addressable address.
+                    properties:
+                      CACerts:
+                        description: |-
+                          CACerts is the Certification Authority (CA) certificates in PEM format
+                          according to https://www.rfc-editor.org/rfc/rfc7468.
+                        type: string
+                      audience:
+                        description: Audience is the OIDC audience for this address.
+                        type: string
+                      name:
+                        description: Name is the name of the address.
+                        type: string
+                      url:
+                        type: string
+                    type: object
+                type: object
+              conditions:
+                description: Conditions the latest available observations of a resource's
+                  current state.
+                items:
+                  description: |-
+                    Condition defines a readiness condition for a Knative resource.
+                    See: https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#typical-status-properties
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        LastTransitionTime is the last time the condition transitioned from one status to another.
+                        We use VolatileTime in place of metav1.Time to exclude this from creating equality.Semantic
+                        differences (all other things held constant).
+                      type: string
+                    message:
+                      description: A human readable message indicating details about
+                        the transition.
+                      type: string
+                    reason:
+                      description: The reason for the condition's last transition.
+                      type: string
+                    severity:
+                      description: |-
+                        Severity with which to treat failures of this type of condition.
+                        When this is not specified, it defaults to Error.
+                      type: string
+                    status:
+                      description: Status of the condition, one of True, False, Unknown.
+                      type: string
+                    type:
+                      description: Type of condition.
+                      type: string
+                  required:
+                  - status
+                  - type
+                  type: object
+                type: array
+              observedGeneration:
+                description: |-
+                  ObservedGeneration is the 'Generation' of the Service that
+                  was last processed by the controller.
+                format: int64
+                type: integer
+              proxy:
+                description: |-
+                  Proxy represents status of connectorclass proxy
+                  it will resolved based on `spec.proxy`
+                  if `spec.proxy` is empty or invalid, it will not be set
+                  if current field is empty, the connectorclass cannot provides any proxy service.
+                properties:
+                  httpAddress:
+                    description: HttpAddress is a single Addressable address.
+                    properties:
+                      CACerts:
+                        description: |-
+                          CACerts is the Certification Authority (CA) certificates in PEM format
+                          according to https://www.rfc-editor.org/rfc/rfc7468.
+                        type: string
+                      audience:
+                        description: Audience is the OIDC audience for this address.
+                        type: string
+                      name:
+                        description: Name is the name of the address.
+                        type: string
+                      url:
+                        type: string
+                    type: object
+                type: object
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

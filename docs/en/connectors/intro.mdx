@@ -1,0 +1,91 @@
+---
+weight: 10
+sourceSHA: 6dee81f5f4a5688c69b0ff81b35cd7a901b75b993e17aaded3303d04eccdccc8
+---
+
+# Introduction
+
+## What are Connectors
+
+Typically, enterprises need to integrate a variety of tools in development, testing, and production environments, maintaining credentials for these tools to access and manipulate the resources within them. Examples include Git repositories, OCI Registries, K8S clusters, etc.
+
+`Connectors` aim to provide a unified, open, convenient, and secure capability for tool integration and resource access within `Kubernetes` clusters.
+
+## Feature Overview
+
+**Unified maintenance and management of tool access information**
+
+Within a cluster, different types of tools that can be accessed as well as the tools that have already been integrated can be maintained uniformly; the addresses of the integrated tools, tool credentials, and configurations required by the client can also be uniformly managed.
+
+By defining the types of tools that can be integrated, the method of tool access can be constrained, such as the access address of the tool and the authentication method of the tool.
+
+When integrating tools, the necessary credentials can be configured simultaneously for unified management.
+
+More readings:
+
+- [How to integrate tools within the cluster](./)
+- [Understanding ConnectorClass](./concepts/connectorclass.mdx)
+- [Understanding Connector](./concepts/connector.mdx)
+
+**Providing a unified style of Rest API to access resources within the tools**
+
+`Connectors` provide a set of uniformly styled API interfaces for the integrated tools, which can be used to access resources within the tools. For example, obtaining references from a Git repository, or repository tags from an OCI Registry.
+
+Clients can rely on these APIs to complete access to tool resources, thereby enhancing the client UI/UX experience. With these consistently styled API interfaces, clients do not need to worry about the specific type of tool, but can simply rely on the unified API interfaces.
+
+More readings:
+
+- [Understanding Connectors API](./concepts/connector_api.mdx)
+
+**Providing the capability to access tool resources in a Secretless manner within the cluster**
+
+Once tools are integrated within the cluster, resources can be accessed in a Secretless manner without the need to distribute credentials to clients, ensuring the security of the credentials.
+
+For example:
+
+- In K8S Job/Tekton Pipeline, when performing a Git clone, there is no need to store the Git Server's authentication information within the job.
+- In K8S Job/Tekton Pipeline, when pushing images, there is no need to store the OCI Registry's authentication information within the job.
+
+More readings:
+
+- [How to use the Git Connector to complete Git clone without storing credentials on the client](https://github.com/AlaudaDevops/connectors-git/blob/main/docs/use-git-connector-in-clone-job.md)
+- [Connectors Proxy](./concepts/connectors_proxy.mdx)
+- [Connectors CSI Driver](./concepts/connectors_csi.mdx)
+
+## Advantages
+
+**Protocol-oriented universal access capability**
+
+`Connectors` achieve the ability to integrate various tools by aligning with industry-standard tool protocols, without being limited to specific types of tools. For instance:
+
+- `Git Server` complying with the [Git Transport Protocol](https://git-scm.com/book/en/v2/Git-on-the-Server-The-Protocols)
+- `OCI Registry` complying with the [OCI Distribution Spec](https://git-scm.com/book/en/v2/Git-on-the-Server-The-Protocols)
+- `K8S Server` complying with [K8S Conformance](https://github.com/cncf/k8s-conformance)
+
+**Out-of-the-box tool access capability**
+
+`Connectors` provide readily available tool access capabilities for tools such as `Git`, `OCI Registry`, and `Kubernetes clusters`. Once `Connectors` are deployed, related tool types can be integrated.
+
+**Flexible tool type expansion capability**
+
+In addition to the out-of-the-box tool types, `Connectors` offer a comprehensive set of extension mechanisms, allowing users to provide new tool types to the cluster as needed.
+
+New tool types can be specific tools within a certain domain, such as `GitHub` or `Harbor`, or entirely new types from different domains, such as `Jira` or `MySQL`.
+
+**Safer credential usage**
+
+`Connectors` provide safe access to tool resources without clients needing to come into contact with specific tool credentials by utilizing [Connectors Proxy](./concepts/connectors_proxy.mdx) and [Connectors CSI Driver](./concepts/connectors_csi.mdx).
+
+This ensures that platform providers no longer have to worry about vulnerabilities arising from the distribution of tool credentials, thereby enhancing the security of those credentials.
+
+## Application Scenarios
+
+- Displaying branch information from code repositories or tag information from image repositories in a dropdown format in UI/UX.
+- Completing Git clone in K8S Workload in a Secretless manner.
+- In a Tekton Pipeline, users completing image build and push in a Secretless manner during pipeline execution.
+
+## Ecosystem and Expansion
+
+`Connectors` offer a complete set of extension mechanisms, allowing users to provide new tool type access capabilities to the cluster according to their needs or to replace out-of-the-box tool types such as `Git`, `OCI Registry`, or `Kubernetes clusters`.
+
+Users can discover and install more tool types through the `application marketplace`.

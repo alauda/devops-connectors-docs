@@ -1,0 +1,128 @@
+---
+created: '2024-12-01'
+title: ConnectorClass API Extension
+weight: 30
+sourceSHA: 624cfe4d36f57164e19cd5afb133afec575ed0b1bf3263725ad6a9a399771dd7
+---
+
+# ConnectorClass API Extension
+
+## Overview
+
+Extending a ConnectorClass API essentially involves creating a Restful API Server. When extending the API capabilities for ConnectorClass, two pieces of information need to be included:
+
+1. Specify the API address information in the `spec.api` field of the ConnectorClass. This allows the system to know the current API address for the ConnectorClass. Please refer to the "API Address Specification."
+2. Implement the Restful API Server for the ConnectorClass. Refer to the "API Definition Specification."
+
+## API Address Specification
+
+The API address information must be specified in the `spec.api` field of the ConnectorClass.
+
+There are no restrictions on whether the ConnectorClass API service resides within the current cluster. As long as the Connectors system can reach the service address, it is acceptable.
+
+Field configuration can refer to the description of `connectorclass api` in [connectorclass](./connectorclass.mdx).
+
+## API Definition Specification
+
+### API Address
+
+When the Connectors system receives a request from a client, it will forward the request to the API address of the ConnectorClass to which the Connector belongs.
+The API address is `{connectorclass.status.api.address.url}/{resource-name}`
+
+### Authentication Information
+
+When forwarding API requests, the Connectors system will transmit authentication information to the ConnectorClass API service via Http Header.
+The authentication information includes:
+
+- `Tool Address Information`: Passed via Http Header `X-Plugin-Meta`.
+- `Authentication Type`: Passed via Http Header `X-Plugin-Auth`.
+- `Authentication Data`: Passed via Http Header `X-Plugin-Secret`.
+
+**X-Plugin-Meta**
+
+The value is a Base64-encoded string containing `{"baseURL":"Connector Tool Address"}`. For example:
+
+`{"baseURL":"http://github.com"}` encodes to `eyJiYXNlVVJMIjoiaHR0cDovL2dpdGh1Yi5jb20ifQ==`
+
+When decoding, the Base64 value from the header yields the JSON string `{"baseURL":""}`, where the value of `baseURL` is the access address of the tool.
+
+**X-Plugin-Auth**
+
+The value is a Base64-encoded string of the [K8S Secret Type](https://kubernetes.io/docs/concepts/configuration/secret/#secret-types).
+
+For example, `kubernetes.io/basic-auth` encodes to `a3ViZXJuZXRlcy5pby9iYXNpYy1hdXRo`
+
+When decoding, the Base64 value from the header can be decoded to obtain the Secret Type.
+
+**X-Plugin-Secret**
+
+The value is a Base64-encoded string of the JSON string representing [K8S Secret Data](https://kubernetes.io/docs/concepts/configuration/secret/).
+
+For example, `{"username":"YWRtaW4=","password":"c2VjcmV0"}` encodes to `eyJ1c2VybmFtZSI6IllXUnRhVzQ9IiwicGFzc3dvcmQiOiJjMlZqY21WMCJ9`
+
+When decoding, the Base64 value from the header results in the JSON string `{"username":"YWRtaW4=","password":"c2VjcmV0"}`. To access the value of a key, the value must be base64 decoded again to retrieve the original value.
+
+**Request Example**
+
+```plaintext
+GET /api/gitrefs?repositoryUrl=https%3A%2F%2Fgithub.com%2FAlaudaDevops%2Fconnectors.git HTTP/1.1
+Host: 192.168.162.100:8080
+X-Plugin-Meta: eyJiYXNlVVJMIjoiaHR0cHM6Ly9naXRodWIuY29tIn0=
+X-Plugin-Auth: a3ViZXJuZXRlcy5pby9iYXNpYy1hdXRo
+X-Plugin-Secret: eyJwYXNzd29yZCI6ImNHRnpjekV5TXc9PSIsInVzZXJuYW1lIjoiWVdSdGFXND0ifQ==
+```
+
+### Pagination Information
+
+Indicated through Query parameters:
+
+| Parameter Name     | Type  | Required | Description                 |
+| ------------------ | ----- | -------- | --------------------------- |
+| page               | int   | false    | Page number                 |
+| itemsPerPage       | int   | false    | Number of items per page    |
+
+### Response
+
+When returning a list, the structure should be as follows:
+
+| Field Name                | Type       | Required | Description                                     |
+| ------------------------- | --------- | -------- | ----------------------------------------------- |
+| listMeta                  | ListMeta  | true     | Metadata of the list                            |
+| listMeta.totalItems       | int       | true     | Total number of requested resources, used by the client for pagination analysis |
+| items                     | \[]       | true     | Data items in the list, the structure of which is determined by the ConnectorClass API |
+
+```json
+{
+    "listMeta":{
+        "totalItems":0
+    },
+    "items": [
+        {
+
+        }
+    ]
+}
+```
+
+When the response is not 200, the returned data structure should conform to the [k8s status](https://pkg.go.dev/k8s.io/apimachinery@v0.31.3/pkg/apis/meta/v1#Status)
+
+For example:
+
+```json
+{
+    "status": "Failure",
+    "message": "api address of connectorclass 'git-noapi' is not resolved",
+    "reason": "BadRequest",
+    "code": 400,
+    "details": null
+}
+```
+
+Field definitions and enumeration values are consistent with [k8s status](https://pkg.go.dev/k8s.io/apimachinery@v0.31.3/pkg/apis/meta/v1#Status)
+
+### Resource Naming
+
+Developers can define this themselves. Recommendations include:
+
+- Name in lowercase plural form
+- The name should be unique within the current ConnectorClass's namespace and consistent with existing industry naming conventions.

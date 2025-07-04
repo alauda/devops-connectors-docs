@@ -1,0 +1,42 @@
+---
+weight: 10
+sourceSHA: f004f8b0f9bbecaa15de28d21a8a367a113c07b6af44a6de5e86fc96d5f13741
+---
+
+# Introduction
+
+## Connectors Git
+
+**What is ConnectorsGit**
+
+ConnectorsGit is a specialized connector component that enables secure and convenient integration with Git repositories. It extends the Connectors system with Git-specific capabilities, allowing users to interact with Git servers without directly handling credentials.
+
+**Feature Overview**
+
+ConnectorsGit provides several key capabilities:
+
+- Secure access to Git repositories (GitHub, GitLab, Bitbucket, etc.) through credential abstraction
+- Automatic credential injection for Git operations via CSI volumes
+- Support for both HTTP/HTTPS authentication methods
+- URL rewriting and proxy authentication for seamless integration
+
+Once ConnectorsGit is deployed, users can:
+
+- Create Git connectors to integrate with various Git repositories
+- Clone, pull, and push to private repositories without directly handling credentials
+- Configure repository-specific access permissions
+- Use Git operations in CI/CD pipelines with enhanced security
+
+**Advantages**
+
+- **Enhanced Security**: Git credentials are centrally managed and never directly accessible to workloads
+- **Simplified Operations**: Developers can perform Git operations without worrying about credential management
+- **Unified Experience**: Consistent interface for working with different Git providers
+- **Flexible Authentication**: Support for various authentication methods, including username/password and SSH keys
+
+**Application Scenarios**
+
+- Securely cloning private repositories in CI/CD pipelines
+- Displaying git references information from Git repositories in UI applications
+- Seamless Git operations in container workloads without credential configuration
+- Centralized management of Git access across multiple teams and projects

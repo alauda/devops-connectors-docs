@@ -1,0 +1,213 @@
+---
+weight: 20
+sourceSHA: 9f8e0d089c0e96b63087949aeef79db7765289b641e466ede4b9588c1a0873ce
+---
+
+# OCI Connector
+
+The OCI Connector is a platform-agnostic connector that allows you to connect to any OCI Registry, such as Docker Hub, Harbor, etc. You can use the OCI Connector to securely access private OCI repositories in CI/CD pipelines or perform OCI operations in containerized workloads without providing credentials. Additionally, you can centrally manage OCI access configurations, avoiding the need to duplicate OCI credential configurations in each namespace.
+
+This document will describe:
+
+- Access requirements for OCI Registry
+- How to create an OCI Connector based on the OCI Connector type
+- The proxy and configuration capabilities of the OCI Connector
+
+## OCI Registry Requirements
+
+The OCI Registry to be accessed must meet the following conditions:
+
+1. Interface implementation requirements:
+   - Must implement at least the interfaces defined in the [opencontainers/distribution-spec](https://github.com/opencontainers/distribution-spec/tree/v1.0.0) v1.0 specification
+   - Must be able to pass the [conformance tests](https://github.com/opencontainers/distribution-spec/tree/v1.0.0/conformance) of the distribution-spec
+
+2. Authentication method requirements:
+   - Must implement Token-based authentication and comply with the [CNCF Distribution Token Authentication Specification](https://distribution.github.io/distribution/spec/auth/token/)
+
+## Creating an OCI Connector Based on OCI Connector Type
+
+### Quick Start
+
+```yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: dockerhub-demo
+spec:
+  connectorClassName: oci
+  address: https://index.docker.io
+  auth:
+    name: tokenAuth
+```
+
+### spec.connectorClassName
+
+Use the constant value `oci`.
+
+### description
+
+You can add descriptive information to the OCI Connector through the `annotations` field.
+
+- `cpaas.io/description`: Description of the OCI Connector.
+
+For example:
+
+```yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: dockerhub-demo
+  annotations:
+    cpaas.io/description: "Connect to Docker Hub for team public repository access"
+```
+
+### Address
+
+The `spec.address` specifies the access address of the OCI Registry, for example: `https://index.docker.io`.
+
+### Authentication
+
+Supported authentication types for the OCI Connector:
+
+- `tokenAuth`: Token-based authentication (optional)
+  - Corresponding credential type: `cpaas.io/distribution-registry-token`, this type of credential is used for the authentication process defined in the [CNCF Distribution Token Authentication Specification](https://distribution.github.io/distribution/spec/auth/token/), and the credential must provide `username` and `password` information.
+
+For example:
+
+```yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: dockerhub-demo
+spec:
+  connectorClassName: oci
+  address: https://index.docker.io
+  # . . .
+  auth:
+    name: tokenAuth
+    secretRef:
+      name: oci-secret
+---
+apiVersion: v1
+stringData:
+  password: your-password
+  username: your-username
+kind: Secret
+metadata:
+  name: oci-secret
+type: cpaas.io/distribution-registry-token
+```
+
+If the target OCI Registry does not require authentication, you can omit the authentication information. The configuration example is as follows:
+
+```yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: dockerhub-demo
+spec:
+  connectorClassName: oci
+  address: https://index.docker.io
+  auth:
+    name: tokenAuth
+```
+
+## Proxy and Configuration
+
+To provide clients with the ability to access OCI repositories without credentials, the OCI Connector type offers a proxy server to automatically inject authentication information.
+
+Clients with access to the connector can use this proxy server to access OCI repositories without configuring credentials on the client side.
+
+To simplify usage, the OCI Connector type provides configuration information that can be mounted into Pods via CSI. In the Pod, when performing OCI operations, the proxy service can be automatically used to complete OCI operations.
+
+### Proxy \{#proxy}
+
+When a Connector is created, the system will:
+
+1. Automatically create a Service for the proxy.
+2. Record the proxy address in the `status.proxy.httpAddress` field.
+
+You can use this proxy address for image push and pull operations.
+
+For example:
+
+```yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: dockerhub-demo
+  namespace: default
+spec:
+  address: https://index.docker.io
+  auth:
+    name: tokenAuth
+    secretRef:
+      name: dockerhub-demo
+  connectorClassName: oci
+status:
+  conditions:
+  # . . .
+  proxy:
+    httpAddress:
+      url: http://c-dockerhub-demo.default.svc.cluster.local
+```
+
+### Configuration
+
+The OCI Connector created based on the OCI Connector type provides the following configurations:
+
+**docker-config**: Configuration information required by Docker CLI.
+
+- Provides the `config.json` configuration file.
+- Contains the authentication information required to access the proxy.
+
+For example:
+
+```json
+// config.json
+
+{
+  "auths": {
+      "<proxy address of the connector>": {
+          "auth": "<authentication information required to access the connector proxy>"
+      }
+  }
+}
+```
+
+**dockerd**: Configuration information for the Docker Daemon.
+
+- Provides the `daemon.json` configuration file.
+- In the configuration file, the current connector will be set as `insecure-registries` by default.
+
+For example:
+
+```json
+{
+  "insecure-registries": [
+    "<proxy address of the connector>"
+  ]
+}
+```
+
+**buildkitd**: Configuration information required by the BuildKit Daemon.
+
+- Provides the `buildkitd.toml` configuration file.
+- In the configuration file, the current connector will be set as `insecure-registries` by default.
+
+For example:
+
+```yaml
+insecure-entitlements = [ "network.host", "security.insecure" ]
+[registry."<proxy address of the connector>"]
+  http = true
+```
+
+You can mount this configuration information into Pods using connectors-csi, and combined with the proxy capability, achieve image push or pull operations in a secretless manner.
+
+## More
+
+- [What is OCI Registry](https://github.com/opencontainers/distribution-spec/blob/v1.0.0/spec.md#definitions)
+- [General Introduction to Using the OCI Connector Proxy in K8S Workload](../how_to/using_oci_connector_in_k8s.mdx)
+- [Building Images Using OCI Connector in K8S Job](../how_to/using_oci_connector_in_k8s_job.mdx)
+- [Building Images Using OCI Connector in Tekton Pipeline](../how_to/using_oci_connector_in_tekton_pipeline.mdx)

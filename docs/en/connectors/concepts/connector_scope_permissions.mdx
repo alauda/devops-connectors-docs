@@ -1,0 +1,120 @@
+---
+created: '2025-01-01'
+weight: 70
+sourceSHA: 54c7681563bc66e4352836d32b0c517125278efe36a7c9dfeca9e538c6356a50
+---
+
+# Connector Resource Levels and Permissions
+
+## Overview
+
+In order to manage and utilize Connector resources from different levels to meet the demands of various organizational structures, the Connector system provides different levels of Connector resources and permission restrictions.
+
+All Connector resources are utilized within the cluster and cannot be used across clusters. Within the current cluster, Connector resources are divided into three levels:
+
+- Cluster Level
+- Project Level (namespace group)
+- Namespace Level
+
+Resources created at different levels have different access permissions and are established under different namespaces.
+
+- Cluster Level: Under the `kube-public` namespace, shared by the current cluster.
+- Project Level: Under the namespace named after the project, shared within the current cluster for that project’s namespace.
+- Namespace Level: Connectors in regular namespaces can only be accessed by the current namespace.
+
+## Cluster Level
+
+All Connector resources located under the `kube-public` namespace belong to the cluster level resources. Cluster level Connector resources can be accessed by all namespaces within the current cluster, making them shared across the cluster.
+
+For instance, a Connector resource called `github-connector` created under the `kube-public` can be mounted by Pods in any namespace.
+
+```yaml
+kind: Pod
+metadata:
+  # . . .
+  namespace: default
+spec:
+  # . . .
+  volumes:
+  - name: git-config
+    csi:
+      readOnly: true
+      driver: connectors-csi
+      volumeAttributes:
+        connector.name: "github-connector"
+        connector.namespace: "kube-public"
+        configuration.names: "config"
+```
+
+## Namespace Level
+
+Connectors created within a namespace are classified as namespace level resources. Namespace level Connector resources can only be accessed by the current namespace.
+
+For example, a Connector resource called `github-connector` created in the `default` namespace can be mounted by Pods in the `default` namespace. However, if `ns-1` tries to access it, a permission denied error will occur.
+
+```yaml
+kind: Pod
+metadata:
+  # . . .
+  namespace: default
+spec:
+  # . . .
+  volumes:
+  - name: git-config
+    csi:
+      readOnly: true
+      driver: connectors-csi
+      volumeAttributes:
+        connector.name: "github-connector"
+        connector.namespace: "default"
+        configuration.names: "config"
+```
+
+## Project Level (Namespace Group)
+
+The Connector system also offers a resource level that falls between the cluster level and the namespace level. This project level can also be understood as the Namespace Group level.
+
+This level signifies that Pods within the associated namespaces can access Connectors under the same group. The group itself is represented by a special namespace, and the namespaces under the group are associated through labels.
+
+- The namespace of the group itself is identified using the label `cpaas.io/inner-namespace: {group name}`.
+- The namespaces under the group are identified with the label `cpaas.io/project: {group name}` indicating that the current namespace belongs to that group.
+
+Project level resources can be accessed by namespaces within the group as well as by the namespace of the group itself. Other namespaces cannot access them.
+
+For example, if there is a group named `group-1` with three namespaces: `ns1`, `ns2`, and `ns3`.
+
+An example YAML is as follows:
+
+```yaml
+kind: namespace
+apiVersion: v1
+metadata:
+  name: group-1
+  labels:
+    cpaas.io/inner-namespace: group-1
+--
+kind: namespace
+apiVersion: v1
+metadata:
+  name: ns1
+  labels:
+    cpaas.io/project: group-1
+---
+kind: namespace
+apiVersion: v1
+metadata:
+  name: ns2
+  labels:
+    cpaas.io/project: group-1
+```
+
+The `github-connector` resource under `group-1` can be accessed by:
+
+- `ns1`, `ns2`, and `ns3` namespaces
+- The `group-1` namespace itself
+- Access from other namespaces to the Connector within `group-1` will result in a permission denied error.
+
+## More
+
+- [Accessing Connector Configuration via Connector CSI](./connectors_csi.mdx)
+- [Creating Connectors at Different Levels](../how_to/create_scoped_connectors.mdx)

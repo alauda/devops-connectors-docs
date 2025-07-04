@@ -1,0 +1,96 @@
+---
+created: '2024-11-03'
+title: ConnectorsProxy
+weight: 50
+sourceSHA: a3690e0a66ff0d323093db716163521315b340274eb2dbec21ada430d120870d
+---
+
+# ConnectorsProxy
+
+ConnectorsProxy is a core component of the Connectors system that provides a secure, secretless way to access integrated tools within a Kubernetes cluster. It acts as a proxy server that handles authentication and routing of requests to the actual tool endpoints.
+
+## Features
+
+### Secretless Access
+
+ConnectorsProxy enables clients to access tool resources without needing to handle authentication credentials directly. This significantly improves security by:
+
+- Eliminating the need to distribute credentials to workloads
+- Preventing credential exposure in logs or environment variables
+- Centralizing credential management
+
+### Automatic Service Creation
+
+When a Connector is created, ConnectorsProxy automatically:
+
+1. Creates a Kubernetes Service for proxy purposes
+2. Assigns a proxy address in the format: `http://c-{connector-name}.{namespace}.svc.cluster.local`
+3. Records the proxy address in the Connector's `status.proxy.httpAddress` field
+
+### Protocol Support
+
+ConnectorsProxy supports various protocols and can handle different types of tool integrations:
+
+- HTTP/HTTPS protocols for REST APIs
+- Git protocol witch HTTP Authorization for code repositories
+- OCI protocol witch Bearar Token Authorization for container registries
+
+## Usage
+
+### Accessing Tool Resources
+
+To use ConnectorsProxy, clients should:
+
+1. Use the proxy address instead of the original tool address
+2. Configure their clients to work with the proxy (if required)
+3. Access resources through the proxy endpoint
+
+Example for an OCI Registry:
+
+```yaml
+# Original image address
+harbor.example.com/test/abc:v1
+
+# Proxied address
+c-harbor-connector.default.svc.cluster.local/test/abc:v1
+```
+
+### Configuration
+
+ConnectorsProxy can be configured through the ConnectorClass definition:
+
+```yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: ConnectorClass
+metadata:
+  name: example
+spec:
+  proxy:
+    ref:
+      kind: Service
+      name: connectors-proxy-service
+      namespace: connectors-system
+```
+
+## Integration with CSI Driver
+
+ConnectorsProxy works seamlessly with the Connectors CSI Driver to provide a complete secretless access solution:
+
+1. The CSI Driver mounts necessary configuration files
+2. ConnectorsProxy handles the actual proxying of requests
+3. Clients can access resources without credential management
+
+This integration is particularly useful in scenarios like:
+
+- Git clone operations in Kubernetes Jobs
+- Image push/pull operations in Tekton Pipelines
+- API access in custom workloads
+
+## Security Considerations
+
+ConnectorsProxy enhances security by:
+
+1. Centralizing credential management
+2. Preventing credential exposure in workloads
+3. Supporting TLS encryption for proxy connections
+4. Implementing proper authentication and authorization

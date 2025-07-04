@@ -1,0 +1,40 @@
+---
+weight: 10
+sourceSHA: f004f8b0f9bbecaa15de28d21a8a367a113c07b6af44a6de5e86fc96d5f13741
+---
+
+# Introduction
+
+## Connectors OCI
+
+**What is ConnectorsOCI**
+
+ConnectorsOCI is a specialized connector component that facilitates secure and convenient integration with OCI (Open Container Initiative) registries. It extends the Connectors system with container registry-specific capabilities, enabling users to interact with image repositories without directly handling credentials.
+
+**Feature Overview**
+
+ConnectorsOCI provides several key capabilities:
+
+- Secure access to container registries (Docker Hub, Harbor, GitHub Container Registry, etc.)
+- Configuration generation for various container tools (Docker, BuildKit, etc.)
+- Automatic credential injection for registry operations via CSI volumes
+- Proxy mechanism for registry authentication and access
+
+Once ConnectorsOCI is deployed, users can:
+
+- Create OCI connectors to integrate with various container registries
+- Push and pull container images without directly handling registry credentials
+- Configure registry-specific access permissions
+- Use container operations in CI/CD pipelines with enhanced security
+
+**Advantages**
+
+- **Enhanced Security**: Registry credentials are centrally managed and never directly accessible to workloads
+- **Simplified Operations**: Users can perform container operations without worrying about credential management
+- **Multiple Tool Support**: Compatible with various container tools through specific configuration options
+- **Seamless CI/CD Integration**: Facilitates secure image building and publishing in automated pipelines
+
+**Application Scenarios**
+
+- Building and pushing container images in CI/CD pipelines
+- Managing container image access across multiple teams and projects

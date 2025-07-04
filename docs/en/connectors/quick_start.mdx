@@ -1,0 +1,208 @@
+---
+weight: 40
+sourceSHA: 01ab94c9b10d116d533d7a17d0b31a1e30e19ba399fc844cbc8f96f1aa8a5457
+---
+
+# Quick Start
+
+This document will help you quickly understand and use the Connectors system.
+
+## Introduction
+
+### Applicable Scenarios
+
+The Connectors system provides a unified way to securely manage connections to external systems across your Kubernetes cluster. By using connectors, you can:
+
+- Centralize credential management for external services
+- Eliminate hardcoded credentials in application code
+- Ensure consistent access patterns across your organization
+- Monitor and audit service connections in one place
+
+This guide uses GitHub as an example, but the same principles apply to connecting to other services.
+
+### Estimated Reading Time
+
+10-15 minutes
+
+## Notes
+
+- This quick start assumes you already have the Connectors Operator, ConnectorsCore, and ConnectorsGit components installed in your cluster. See the [Installation Guide](../install) for detailed installation instructions.
+- You need a GitHub account and a Personal Access Token (PAT) with appropriate permissions.
+- Connector status reflects the health and accessibility of the connection.
+
+## Prerequisites
+
+- Kubernetes cluster with the following components installed:
+  - Connectors Operator
+  - ConnectorsCore
+  - ConnectorsGit
+- kubectl configured to communicate with your cluster
+- GitHub account and valid Personal Access Token (PAT)
+- Basic knowledge of Kubernetes resources
+
+## Process Overview
+
+| No. | Operation Step | Description |
+|-----|----------------|-------------|
+| 1 | Verify Required Components | Ensure connector infrastructure is properly installed |
+| 2 | Create Authentication Secret | Create a Kubernetes Secret with GitHub credentials |
+| 3 | Create GitHub Connector | Configure a connector to GitHub |
+| 4 | Verify Connector Status | Check if the connector is ready for use |
+
+## Steps to Operate
+
+### Step 1: Verify Required Components
+
+Before creating a GitHub connector, verify that the connector infrastructure is properly installed in your cluster.
+
+1. Check that the Connectors Operator, ConnectorsCore, and ConnectorsGit are installed:
+
+   ```bash
+   kubectl get connectorscore -A
+   kubectl get connectorsgit -A
+   ```
+
+   You should see both resources with a status of "Ready".
+
+2. Verify that the Git ConnectorClass exists:
+
+   ```bash
+   kubectl get connectorclass git
+   ```
+
+   If the Git ConnectorClass is not found, you need to install ConnectorsGit first. See the [Installation Guide](../install) for instructions.
+
+### Step 2: Create Authentication Secret
+
+Create a Kubernetes Secret containing the credentials for GitHub.
+
+1. Execute the following command to create a Secret with your GitHub credentials:
+
+   ```bash
+   kubectl create secret generic github-auth \
+     --namespace default \
+     --type=kubernetes.io/basic-auth \
+     --from-literal=username=your-github-username \
+     --from-literal=password=your-github-token
+   ```
+
+   Replace `your-github-username` with your GitHub username and `your-github-token` with your GitHub Personal Access Token.
+
+2. Verify that the Secret was successfully created:
+
+   ```bash
+   kubectl get secret github-auth -n default
+   ```
+
+### Step 3: Create GitHub Connector
+
+Create a connector to GitHub using the Git ConnectorClass.
+
+1. Save the following YAML as `github-connector.yaml`:
+
+   ```yaml
+   apiVersion: connectors.alauda.io/v1alpha1
+   kind: Connector
+   metadata:
+     name: github-connector
+     namespace: default
+   spec:
+     connectorClassName: git
+     address: "https://github.com"
+     auth:
+       name: basicAuth
+       secretRef:
+         name: github-auth
+         namespace: default
+   ```
+
+2. Apply the connector:
+
+   ```bash
+   kubectl apply -f github-connector.yaml
+   ```
+
+### Step 4: Verify Connector Status
+
+After creating the connector, check its status to ensure it's functioning correctly.
+
+1. Use the following command to check the connector status:
+
+   ```bash
+   kubectl get connector github-connector -n default
+   ```
+
+2. To view detailed status information, use:
+
+   ```bash
+   kubectl get connector github-connector -n default -o yaml
+   ```
+
+### Expected Results
+
+After successfully completing all steps, you will see the following results:
+
+1. The GitHub connector resource status shows as "Ready":
+
+   ```
+   NAME               CLASS   ADDRESS              READY   AGE
+   github-connector   git     https://github.com   True    2m
+   ```
+
+2. All conditions in the detailed status information are "True":
+
+   ```yaml
+   status:
+     conditions:
+     - type: ConnectorClassReady
+       status: "True"
+     - type: SecretReady
+       status: "True"
+     - type: LivenessReady
+       status: "True"
+     - type: AuthReady
+       status: "True"
+     - type: ProxyServiceReady
+       status: "True"
+     - type: Ready
+       status: "True"
+   ```
+
+3. If the connector has proxy functionality configured, you will also see a proxy address in the status:
+
+   ```yaml
+   status:
+     proxy:
+       httpAddress:
+         url: http://c-github-connector.default.svc.cluster.local
+   ```
+
+Now, you have successfully created a GitHub connector and verified that it works.
+
+Your applications can use this connector to securely access GitHub repositories without embedding credentials directly in application code.
+
+## Troubleshooting
+
+If your connector doesn't reach the "Ready" status, check the following:
+
+1. **ConnectorClass Availability**: Ensure the Git ConnectorClass exists:
+   ```bash
+   kubectl get connectorclass git
+   ```
+   If it doesn't exist, you need to install ConnectorsGit. See the [Installation Guide](../../install).
+
+2. **Authentication Configuration**: Ensure the credentials in the Secret are correct and have appropriate permissions.
+
+3. **Repository Accessibility**: Verify that the repository specified in the auth params exists and is accessible with the provided credentials.
+
+4. **Check Controller Logs**: Review the connector controller logs for detailed error information:
+   ```bash
+   kubectl logs -n connectors-system -l app.kubernetes.io/name=connectors-controller-manager
+   ```
+
+## Next Steps
+
+Now that you've created your first connector, you can:
+
+- Create connectors for other Git services (GitLab, Harbor, etc.)
+- Configure applications to use the connector for secure access to Git repositories

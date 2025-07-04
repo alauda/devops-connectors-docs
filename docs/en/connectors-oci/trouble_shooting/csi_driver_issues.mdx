@@ -1,0 +1,262 @@
+---
+weight: 72
+i18n:
+  title:
+    en: CSI Workload Configuration Troubleshooting
+title: CSI Workload Configuration Troubleshooting
+---
+
+# CSI Workload Configuration Troubleshooting
+
+This guide provides detailed steps for diagnosing and resolving common issues with the Connectors CSI Driver when mounting OCI registry configurations in workloads.
+
+## Common Issues Overview
+
+| Issue | Potential Causes | Impact |
+|-------|-----------------|--------|
+| Volume mount failures | Incorrect CSI configuration, driver unavailable | Workload can't start |
+| Docker config not found | Wrong mount path, missing volumes | Image pull/push operations fail |
+| Authentication failures | Token issues, configuration errors | Registry access denied |
+| Insecure registry issues | Misconfigured Docker daemon | TLS/certificate errors |
+
+## Checking CSI Volume Configuration
+
+Verify the CSI volume configuration in your workload YAML:
+
+```yaml
+volumes:
+- name: docker-config
+  csi:
+    readOnly: true
+    driver: connectors-csi
+    volumeAttributes:
+      connector.name: "<connector-name>"
+      configuration.names: "docker-config"
+```
+
+**Common configuration options**:
+
+| Configuration Name | Description | Use Case |
+|-------------------|-------------|----------|
+| `docker-config` | Standard Docker configuration | General container operations |
+| `dockerd` | Docker daemon configuration | For Docker daemon in Docker pattern |
+| `buildkitd` | BuildKit daemon configuration | For BuildKit based operations |
+
+**Common configuration issues**:
+
+| Issue | Symptom | Resolution |
+|-------|---------|------------|
+| Incorrect driver name | `MountVolume.SetUp failed` error | Set `driver` exactly to `connectors-csi` |
+| Connector not found | `could not get connector` error | Ensure connector exists in the same namespace |
+| Wrong configuration name | No Docker config generated | Set correct `configuration.names` value |
+| Namespace mismatch | Volume attachment fails | Make sure connector is in the same namespace as pod |
+
+**How to verify**:
+```bash
+# Check if the connector exists
+kubectl get connector <connector-name> -n <namespace>
+
+# Verify the connector is Ready
+kubectl get connector <connector-name> -n <namespace> -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'
+
+# Check CSI driver availability
+kubectl get pods -n connectors-system -l app.kubernetes.io/name=connectors-csi
+```
+
+## Verifying Volume Mount
+
+Check if the volume mount configuration is correct:
+
+```yaml
+volumeMounts:
+- name: docker-config
+  mountPath: "/root/.docker"  # For docker-config
+```
+
+**Common mount paths for different configurations**:
+
+| Configuration | Recommended Mount Path | Description |
+|---------------|------------------------|-------------|
+| `docker-config` | `/root/.docker` or `$HOME/.docker` | Docker client configuration directory |
+| `dockerd` | `/etc/docker` | Docker daemon configuration directory |
+| `buildkitd` | `/etc/buildkit` | BuildKit daemon configuration directory |
+
+
+## Examining Pod Events
+
+Check Pod events for mount-related issues:
+
+```bash
+kubectl describe pod <pod-name> -n <namespace>
+```
+
+**Common error messages and solutions**:
+
+| Error Message | Cause | Solution |
+|---------------|-------|----------|
+| `MountVolume.SetUp failed` | CSI driver issues or configuration errors | Check driver health and volume configuration |
+| `waiting for ephemeral inline CSI driver` | CSI driver not ready or not found | Verify CSI driver pods are running |
+| `connector not found` | Connector doesn't exist or wrong namespace | Create connector or fix namespace |
+| `failed to generate configuration` | Template rendering errors | Check connector and ConnectorClass status |
+
+**Example error and resolution**:
+```
+  Warning  FailedMount  3m (x5 over 5m)  kubelet  MountVolume.SetUp failed for volume "docker-config" : 
+  rpc error: code = NotFound desc = connector "oci-registry" not found
+```
+*Resolution*: Create the connector or correct the connector name in the volume attributes.
+
+## Finding Generated OCI Configuration Files
+
+Locate the configuration files:
+
+```bash
+# For docker-config
+kubectl exec <pod-name> -n <namespace> -- cat /root/.docker/config.json
+
+# For dockerd
+kubectl exec <pod-name> -n <namespace> -- cat /etc/docker/daemon.json
+
+# For buildkitd
+kubectl exec <pod-name> -n <namespace> -- cat /etc/buildkit/buildkitd.toml
+```
+
+If configuration files are not found, check:
+1. Volume mount is successful
+2. CSI driver is healthy
+3. ServiceAccount has permissions
+4. Connector is Ready
+5. Mount path matches container user's expected path
+
+## Examining Docker Configuration Content
+
+### docker-config
+
+Check the generated `config.json` file:
+
+```bash
+kubectl exec <pod-name> -n <namespace> -- cat /root/.docker/config.json
+```
+
+**Expected configuration elements**:
+
+```json
+{
+  "auths": {
+    "c-<connector-name>.<namespace>.svc.cluster.local": {
+      "auth": "<base64-encoded-token>"
+    }
+  }
+}
+```
+
+### dockerd configuration
+
+Check the generated `daemon.json` file:
+
+```bash
+kubectl exec <pod-name> -n <namespace> -- cat /etc/docker/daemon.json
+```
+
+**Expected configuration elements**:
+
+```json
+{
+  "insecure-registries": [
+    "c-<connector-name>.<namespace>.svc.cluster.local"
+  ]
+}
+```
+
+### buildkitd configuration
+
+Check the generated `buildkitd.toml` file:
+
+```bash
+kubectl exec <pod-name> -n <namespace> -- cat /etc/buildkit/buildkitd.toml
+```
+
+**Expected configuration elements**:
+
+```toml
+insecure-entitlements = [ "network.host", "security.insecure" ]
+[registry."c-<connector-name>.<namespace>.svc.cluster.local"]
+  http = true
+```
+
+
+### Insecure Registry Issues
+
+**Symptoms**:
+- `server certificate verification failed` errors
+- TLS handshake failures
+
+**Troubleshooting**:
+1. Verify insecure registry settings are correctly configured:
+   ```bash
+   kubectl exec <pod-name> -n <namespace> -- cat /etc/docker/daemon.json
+   ```
+
+2. Check if the container runtime is using the mounted configuration:
+   ```bash
+   kubectl exec <pod-name> -n <namespace> -- docker info | grep -A 5 "Insecure Registries"
+   ```
+
+3. For containerd, verify proxy address is properly configured:
+   ```bash
+   kubectl exec -it <node-name> -n <namespace> -- cat /etc/containerd/config.toml | grep -A 10 registry
+   ```
+
+## Advanced Troubleshooting
+
+### CSI Driver Logs
+
+Check CSI driver logs for detailed error information:
+
+```bash
+kubectl logs -n connectors-system -l app.kubernetes.io/name=connectors-csi -c csi-driver
+```
+
+### Proxy Service Logs
+
+Check the proxy service logs for authentication or access issues:
+
+```bash
+kubectl logs -n connectors-system -l app.kubernetes.io/name=connectors-proxy
+```
+
+### Testing with a Diagnostic Pod
+
+Create a diagnostic pod to test OCI functionality:
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: oci-debug-pod
+  namespace: <namespace>
+spec:
+  containers:
+  - name: debug
+    image: docker:20.10
+    command: ["sleep", "3600"]
+    volumeMounts:
+    - name: docker-config
+      mountPath: "/root/.docker"
+  volumes:
+  - name: docker-config
+    csi:
+      driver: connectors-csi
+      readOnly: true
+      volumeAttributes:
+        connector.name: "<connector-name>"
+        configuration.names: "docker-config"
+```
+
+## Additional Resources
+
+- [Connectors CSI Driver Concepts](../../connectors/concepts/connectors_csi.mdx)
+- [OCI Connector Quick Start](../quick_start.mdx)
+- [Connector Status Troubleshooting](../../connectors/trouble_shooting/connectors_issues.mdx)
+- [Using OCI Connector in Kubernetes Workloads](../how_to/using_oci_connector_in_k8s.mdx)
+- [Using OCI Connector in Tekton Pipeline](../how_to/using_oci_connector_in_tekton_pipeline.mdx) 

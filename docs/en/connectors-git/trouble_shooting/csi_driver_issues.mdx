@@ -1,0 +1,191 @@
+---
+weight: 72
+i18n:
+  title:
+    en: CSI Workload Configuration Troubleshooting
+title: CSI Workload Configuration Troubleshooting
+---
+
+# CSI Workload Configuration Troubleshooting
+
+This guide provides detailed steps for diagnosing and resolving common issues with the Connectors CSI Driver when mounting configurations in workloads.
+
+## Common Issues Overview
+
+| Issue | Potential Causes | Impact |
+|-------|-----------------|--------|
+| Volume mount failures | Incorrect CSI configuration, driver unavailable | Workload can't start |
+| Git configuration not found | Wrong mount path, missing volumes | Git operations fail |
+| Authentication failures | Token issues, configuration errors | Repository access denied |
+
+## Checking CSI Volume Configuration
+
+Verify the CSI volume configuration in your workload YAML:
+
+```yaml
+volumes:
+- name: gitconfig
+  csi:
+    readOnly: true
+    driver: connectors-csi
+    volumeAttributes:
+      connector.name: "<connector-name>"
+      configuration.names: "gitconfig"
+```
+
+* Set `driver` exactly to `connectors-csi`
+* Ensure connector exists in the same namespace
+* Set `configuration.names` to `gitconfig` for Git operations
+* Make sure connector is in the same namespace as pod
+
+**How to verify**:
+```bash
+# Check if the connector exists
+kubectl get connector <connector-name> -n <namespace>
+
+# Verify the connector is Ready
+kubectl get connector <connector-name> -n <namespace> -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'
+
+# Check CSI driver availability
+kubectl get pods -n connectors-system -l app.kubernetes.io/name=connectors-csi
+```
+
+## Verifying Volume Mount
+
+Check if the volume mount configuration is correct:
+
+```yaml
+volumeMounts:
+- name: gitconfig
+  mountPath: "/path/to/user/home/"
+```
+
+**Important considerations**:
+- The mount path must match the home directory of the user running Git commands
+- For Git configuration, the file is always created at `<mountPath>/.gitconfig`
+
+**Finding the correct home directory**:
+```bash
+# Check the user's home directory in the container
+kubectl exec <pod-name> -n <namespace> -- env | grep HOME
+
+# Common paths depending on container image:
+# - For root user: /root/
+# - For git user: /home/git/
+# - For non-root users: /home/<username>/
+```
+
+**Verifying mount success**:
+```bash
+# Check if volumes are properly mounted
+kubectl describe pod <pod-name> -n <namespace> | grep -A 5 "Mounts:"
+
+# Look for mount events in the pod description
+kubectl describe pod <pod-name> -n <namespace> | grep -A 10 "Events:"
+```
+
+## Examining Pod Events
+
+Check Pod events for mount-related issues:
+
+```bash
+kubectl describe pod <pod-name> -n <namespace>
+```
+
+**Common error messages and solutions**:
+
+| Error Message | Cause | Solution |
+|---------------|-------|----------|
+| `MountVolume.SetUp failed` | CSI driver issues or configuration errors | Check driver health and volume configuration |
+| `waiting for ephemeral inline CSI driver` | CSI driver not ready or not found | Verify CSI driver pods are running |
+| `connector not found` | Connector doesn't exist or wrong namespace | Create connector or fix namespace |
+| `failed to generate configuration` | Template rendering errors | Check connector and ConnectorClass status |
+
+**Example error and resolution**:
+```
+  Warning  FailedMount  3m (x5 over 5m)  kubelet  MountVolume.SetUp failed for volume "gitconfig" :
+  rpc error: code = NotFound desc = connector "git-github" not found
+```
+*Resolution*: Create the connector or correct the connector name in the volume attributes.
+
+## Finding the Generated Git Configuration
+
+Locate the Git configuration file:
+
+```bash
+# Check if the expected path has the file
+kubectl exec <pod-name> -n <namespace> -- ls -la /path/to/home/.gitconfig
+```
+
+If no configuration file is found, check:
+1. Volume mount is successful
+2. CSI driver is healthy
+3. ServiceAccount has permissions
+4. Connector is Ready
+
+## Examining Git Configuration Content
+
+Check the generated `.gitconfig` file content:
+
+```bash
+kubectl exec <pod-name> -n <namespace> -- cat /path/to/.gitconfig
+```
+
+**Expected configuration elements**:
+
+1. HTTP header with authentication token:
+   ```
+   [http]
+       extraHeader = Authorization: Basic <token>
+   ```
+
+2. URL rewriting rule:
+   ```
+   [url "http://c-<connector-name>.<connector-namespace>.svc"]
+       insteadOf = <original-git-url>
+   ```
+
+## Advanced Troubleshooting
+
+### CSI Driver Logs
+
+Check CSI driver logs for detailed error information:
+
+```bash
+kubectl logs -n connectors-system -l app.kubernetes.io/name=connectors-csi -c csi-driver
+```
+
+### Testing with a Diagnostic Pod
+
+Create a diagnostic pod to test CSI functionality:
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: csi-debug-pod
+  namespace: <namespace>
+spec:
+  containers:
+  - name: debug
+    image: alpine
+    command: ["sleep", "3600"]
+    volumeMounts:
+    - name: gitconfig
+      mountPath: "/root/"
+  volumes:
+  - name: gitconfig
+    csi:
+      driver: connectors-csi
+      readOnly: true
+      volumeAttributes:
+        connector.name: "<connector-name>"
+        configuration.names: "gitconfig"
+```
+
+## Additional Resources
+
+- [Connectors CSI Driver Concepts](../../connectors/concepts/connectors_csi.mdx)
+- [Git Connector Quick Start](../quick_start.mdx)
+- [Connector Status Troubleshooting](../../connectors/trouble_shooting/connectors_issues.mdx)
+- [Using Git Connector in Clone Tasks](../how_to/use-git-connector-in-clone-job.md)

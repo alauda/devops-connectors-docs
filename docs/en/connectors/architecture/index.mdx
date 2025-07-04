@@ -1,0 +1,66 @@
+---
+weight: 20
+sourceSHA: 42315d2c2177a8ffb1c691356b6ec75466dc3b91cfcc9d960cd5dd23044afb13
+---
+
+# Architecture
+
+![Architecture](./assets/arch.drawio.png)
+
+## Connector
+
+`Connector` is a resource that represents an integrated instance of a specific tool. By configuring the tool's access URL and authentication information, we can create an instance for the tool's integration.
+
+For example, integrating `https://github.com` using a `GitHub Private Access Token` is achieved through a `Connector`.
+
+In `Kubernetes`, `Connector` is a namespace-level custom resource. Users can create multiple `Connectors` within the same namespace to integrate different tools.
+
+For instance, within the `default` namespace, it is possible to create both a `Connector` for integrating `https://github.com` and a `Connector` for integrating `https://hub.docker.com/`.
+
+Platform administrators can manage tool integrations across the cluster by managing `Connector` resources.
+
+## ConnectorClass
+
+`ConnectorClass` defines the access methods and behavior specifications for specific types of tools. It stipulates the parameters required when integrating with a certain type of tool, such as tool address and authentication information.
+
+For example, the `Git ConnectorClass` defines the configuration items that need to be provided when integrating with Git tools, including the Git service's address and `Basic-Auth` authentication information.
+
+In `Kubernetes`, `ConnectorClass` is a cluster-level custom resource. Developers can extend the types of tools supported by the platform by defining new `ConnectorClasses`.
+
+For example, a `Harbor ConnectorClass` can be defined to support integration with the Harbor image repository, a `MySQL ConnectorClass` can be defined to support integration with MySQL databases, or a `Jira ConnectorClass` can be defined to support integration with Jira project management tools.
+
+## Connectors Proxy
+
+TODO:
+
+## Connectors API
+
+`Connectors API` provides capabilities for accessing internal tool resources based on `Connector` instances. For example, for a `Git Connector`, the `Connectors API` can retrieve the list of branches (References) in a Git repository.
+
+Developers can conveniently access resources within tools via the `Connectors API` without needing to concern themselves with specific tool addresses and authentication details.
+
+This API is very useful in practical applications, such as:
+
+- Retrieving the list of tags for container images when creating applications
+- Getting the list of branches (References) for a code repository during a Git Clone operation
+
+The implementation of the `Connectors API` is based on the underlying capabilities provided by the `ConnectorClass API`.
+
+# ConnectorClass API
+
+`ConnectorClass API` defines the APIs provided by specific types of tools.
+
+Different types of tools can offer various API capabilities, for example:
+
+- The `Git ConnectorClass API` can provide the capability to retrieve the list of branches for a code repository
+- The `OCI ConnectorClass API` can provide the capability to retrieve the list of tags for artifact repositories
+
+Developers can define unique API capabilities for each `ConnectorClass`, and these capabilities will ultimately be exposed to clients through the `Connectors API`.
+
+# Connectors CSI Driver
+
+To facilitate easier utilization of Connectors-Proxy capabilities by K8S workloads, we can use the Connectors CSI Driver.
+
+The Connectors CSI Driver can mount the rendered contents of the configuration file templates maintained within the ConnectorClass into the workload. The configuration file can include information for accessing the `Connectors Proxy`, enabling users to utilize Connectors Proxy capabilities with minimal modifications to their original scripts.
+
+For more information, refer to [connectors csi driver](../concepts/connectors_csi.mdx)

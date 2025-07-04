@@ -1,0 +1,209 @@
+---
+created: '2025-01-01'
+title: Connectors CSI Driver
+weight: 60
+sourceSHA: 9091741bd4c766d04451b1397900bfa0d600d3e58d1d3dadf78d24d8091d2947
+---
+
+# Connectors CSI Driver
+
+## Overview
+
+The Connectors CSI Driver is a storage driver implemented based on the Container Storage Interface (CSI) specification. It can mount configurations from the Connector as volumes into Kubernetes workloads. Key features include:
+
+- Mounting configuration files from the Connector into Pods
+- Supporting dynamic variable rendering in configuration files to automatically inject runtime information
+- Supporting the simultaneous mounting of multiple configuration files
+
+All configuration data comes from the [ConnectorClass configuration](./connectorclass.mdx#configurations) associated with the Connector.
+
+## Quick Start
+
+### 1. Create a ConnectorClass
+
+First, create a ConnectorClass that includes Git configuration:
+
+```shell
+cat << EOF | kubectl apply -f -
+apiVersion: connectors.alauda.io/v1alpha1
+kind: ConnectorClass
+metadata:
+  name: my-git
+spec:
+  address:
+    type: string
+  configurations:
+  - name: config
+    data:
+      .gitconfig: |
+        this is git config
+EOF
+```
+
+### 2. Create a Connector
+
+Then, create a Connector that connects to GitHub:
+
+```shell
+cat << EOF | kubectl apply -f -
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: git-connector
+spec:
+  address: https://github.com
+  connectorClassName: my-git
+EOF
+```
+
+### 3. Create a Pod Using the CSI Driver
+
+Now, we can create a Pod to mount the configuration from the ConnectorClass:
+
+```shell
+cat << EOF | kubectl create -f -
+apiVersion: v1
+kind: Pod
+metadata:
+  name: csi-demo
+  namespace: default
+spec:
+  restartPolicy: Never
+  containers:
+  - name: web
+    image: docker-mirrors.alauda.cn/bitnami/git:2.47.1
+    imagePullPolicy: IfNotPresent
+    command:
+    - "sleep"
+    args: [ "3600" ]
+    volumeMounts:
+    - name: git-config
+      mountPath: /tmp/config
+  volumes:
+  - name: git-config
+    csi:
+      readOnly: true
+      driver: connectors-csi
+      volumeAttributes:
+        connector.name: "git-connector"
+        connector.namespace: "default"
+        configuration.names: "config"
+EOF
+```
+
+### 4. Configure Access Permissions
+
+To allow the Pod to access the Connector's configuration, permissions must be granted to the Pod's ServiceAccount to read Connector resources:
+
+```shell
+cat << EOF | kubectl apply -f -
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: default-sa-connectors-connector-viewer
+  namespace: default
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: connectors-connector-viewer-role
+subjects:
+- kind: ServiceAccount
+  name: default
+  namespace: default
+EOF
+```
+
+Once the Pod is running, you can check the contents of the mounted configuration file with the following command:
+
+```shell
+kubectl exec -ti csi-demo -- cat /tmp/config/.gitconfig
+```
+
+## Configuration Description
+
+### CSI Volume Configuration Parameters
+
+| Parameter Name | Required | Description                        |
+|----------------|----------|------------------------------------|
+| readOnly       | Yes      | Must be set to true                 |
+| driver         | Yes      | Fixed value: connectors-csi         |
+
+### volumeAttributes Parameters
+
+| Parameter Name          | Required | Description                                                   |
+|------------------------|----------|---------------------------------------------------------------|
+| connector.name         | Yes      | The name of the Connector                                      |
+| connector.namespace    | No       | The namespace of the Connector, defaults to the Pod's namespace|
+| configuration.names    | Yes      | A comma-separated list of configuration names to mount        |
+| token.expiration       | No       | The expiration time of the token, defaults to 30m            |
+
+### Configuration Name Description
+
+The `configuration.names` parameter must correspond to the configuration names defined in the ConnectorClass. For example:
+
+```yaml
+kind: ConnectorClass
+apiVersion: connectors.alauda.io/v1alpha1
+spec:
+  configurations:
+  - name: config1
+    data:
+      key1.txt: value1
+      key2.txt: value2
+  - name: config2
+    data:
+      file1.txt: file-value1
+      file2.txt: file-value2
+```
+
+Mounting a single configuration:
+
+```yaml
+kind: Pod
+apiVersion: v1
+spec:
+  volumes:
+  - name: config
+    csi:
+      driver: connectors-csi
+      volumeAttributes:
+        configuration.names: "config1"  # Will mount key1.txt and key2.txt
+```
+
+Mounting multiple configurations:
+
+```yaml
+kind: Pod
+apiVersion: v1
+spec:
+  volumes:
+  - name: config
+    csi:
+      driver: connectors-csi
+      volumeAttributes:
+        configuration.names: "config1,config2"  # Will mount all configuration files
+```
+
+Note: If there are files with the same name in multiple configurations, the latter configuration will overwrite the former.
+
+## Configuration File Rendering
+
+The CSI Driver performs variable rendering when mounting configuration files, using [Go template](https://pkg.go.dev/text/template) syntax.
+
+### Available Variables
+
+| Variable                             | Description                                                  |
+|--------------------------------------|--------------------------------------------------------------|
+| `.connector.status.proxyAddress`     | Proxy address of the Connector; refer to [connectors-proxy](./connectors_proxy.mdx) |
+| `.connector.spec.address`            | Target address of the Connector                                |
+| `.context.token`                     | Authentication token for accessing the proxy service          |
+
+### Built-in Functions
+
+Refer to [sprig](https://masterminds.github.io/sprig/) for supported functions
+
+For example: `b64enc`: Base64 encoding of a string
+
+### About the Proxy Service
+
+Connectors provide a proxy service for each Connector, allowing clients to access target resources without needing to store the original credentials. For more details, please refer to [connectors-proxy](./connectors_proxy.mdx).

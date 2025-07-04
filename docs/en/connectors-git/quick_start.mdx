@@ -1,0 +1,250 @@
+---
+weight: 40
+sourceSHA: 01ab94c9b10d116d533d7a17d0b31a1e30e19ba399fc844cbc8f96f1aa8a5457
+---
+
+# Quick Start
+
+This document will help you quickly understand how to create a Git Connector and use it for securely cloning repositories without directly handling credentials.
+
+## Introduction
+
+### Applicable Scenarios
+
+The Git Connector allows you to perform code cloning operations securely by:
+- Managing credentials centrally rather than hardcoding them in workloads
+- Automatically injecting authentication during the cloning process
+- Providing controlled access to private repositories across teams
+
+This approach is particularly useful for:
+- CI/CD pipelines requiring secure access to private repositories
+- Teams sharing repository access without sharing credentials
+- Environments requiring centralized management of Git credentials
+
+### Estimated Reading Time
+
+15 minutes
+
+## Notes
+
+- The Git connector uses CSI driver integration to inject Git credentials securely.
+- Connector-generated configurations expire after 30 minutes.
+
+## Prerequisites
+
+- Kubernetes cluster with Connectors system installed (Operator, Core and Git components). See the [Installation Guide](../install) for details on installing these components.
+- kubectl configured to communicate with your cluster
+- Git repository with valid credentials (username/password or token)
+- Basic knowledge of Kubernetes resources
+
+## Process Overview
+
+| No. | Operation Step | Description |
+|-----|----------------|-------------|
+| 1 | Create Namespace | Create a dedicated namespace for the demonstration |
+| 2 | Create Git Credentials and Connector | Set up the credentials and connector for Git access |
+| 3 | Configure RBAC Permissions | Grant appropriate permissions to use the connector |
+| 4 | Create a Clone Job | Deploy a job that uses the connector to clone a repository |
+| 5 | Verify Operation | Check that the repository was successfully cloned |
+
+## Steps to Operate
+
+### Step 1: Create Namespace
+
+Create a dedicated namespace for this demonstration:
+
+```bash
+kubectl create ns git-connector-demo
+```
+
+### Step 2: Create Git Credentials and Connector
+
+Create both the Secret containing Git credentials and the Git Connector resource. For more detailed information about creating and configuring connectors, please refer to the [Connectors Quick Start Guide](../../connectors/quick_start).
+
+```bash
+cat <<EOF | kubectl apply -f -
+kind: Secret
+apiVersion: v1
+metadata:
+  name: git-auth
+  namespace: git-connector-demo
+type: kubernetes.io/basic-auth
+stringData:
+  username: your-username # Replace with your Git username
+  password: your-token    # Replace with your Git password or token
+---
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: git-connector
+  namespace: git-connector-demo
+spec:
+  connectorClassName: git
+  address: https://github.com  # Replace with your Git server address
+  auth:
+    name: basicAuth
+    secretRef:
+      name: git-auth
+    params:
+    - name: repository
+      value: your-org/your-repo.git  # Replace with your repository path
+EOF
+```
+
+Verify that the connector is in "Ready" status:
+
+```bash
+kubectl get connector git-connector -n git-connector-demo
+```
+
+The output should show:
+```
+NAME           CLASS   ADDRESS            READY   AGE
+git-connector  git     https://github.com True    1m
+```
+
+### Step 3: Create a Clone Job
+
+Create a job that uses the connector to clone the repository:
+
+```bash
+cat <<EOF | kubectl apply -f -
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: git-clone
+  namespace: git-connector-demo
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: git
+        image: bitnami/git:2.47.1
+        imagePullPolicy: IfNotPresent
+        command:
+        - "git"
+        args: [ "clone", "--progress", "https://github.com/your-org/your-repo.git", "/tmp/repo" ]  # Replace with your repo
+        volumeMounts:
+        - name: gitconfig
+          mountPath: /root/
+      volumes:
+      - name: gitconfig
+        csi:
+          readOnly: true
+          driver: connectors-csi
+          volumeAttributes:
+            connector.name: "git-connector"
+            configuration.names: "gitconfig"
+EOF
+```
+
+Key parameters:
+- `connector.name`: The name of your Git connector
+- `configuration.names`: Set to "gitconfig", which references a specific configuration template defined in the Git ConnectorClass. This template is used to generate the ".gitconfig" file with the appropriate settings for authentication and URL rewriting.
+- `mountPath`: Must be set to "/root/" because the container runs as the root user, and Git will look for configuration in the "/root/.gitconfig" path
+
+### Step 4: Verify Operation
+
+Check the job's logs to confirm the repository was successfully cloned:
+
+```bash
+kubectl logs -f job/git-clone -n git-connector-demo
+```
+
+You should see the Git clone operation completing successfully without any authentication errors.
+
+### Expected Results
+
+After successfully completing all steps, you will see:
+
+1. A Git connector in "Ready" status:
+   ```
+   NAME           CLASS   ADDRESS            READY   AGE
+   git-connector  git     https://github.com True    5m
+   ```
+
+2. A successful Git clone operation in the job logs:
+   ```
+   Cloning into '/tmp/repo'...
+   remote: Enumerating objects: 1324, done.
+   remote: Counting objects: 100% (1324/1324), done.
+   remote: Compressing objects: 100% (712/712), done.
+   remote: Total 1324 (delta 612), reused 1324 (delta 612), pack-reused 0
+   Receiving objects: 100% (1324/1324), 2.56 MiB | 4.25 MiB/s, done.
+   Resolving deltas: 100% (612/612), done.
+   ```
+
+## How It Works
+
+The Git Connector works by:
+
+1. Replacing the original Git repository URL with a proxy service URL
+2. Injecting authentication information into requests to the proxy service
+3. The proxy service adding the necessary credentials when forwarding requests to the Git server
+
+To examine the generated configuration:
+
+```bash
+cat <<EOF | kubectl apply -f -
+apiVersion: v1
+kind: Pod
+metadata:
+  name: inspect-git-config
+  namespace: git-connector-demo
+spec:
+  restartPolicy: Never
+  containers:
+  - name: git
+    image: bitnami/git:2.47.1
+    command: ["sleep", "3600"]
+    volumeMounts:
+    - name: gitconfig
+      mountPath: /root/
+  volumes:
+  - name: gitconfig
+    csi:
+      readOnly: true
+      driver: connectors-csi
+      volumeAttributes:
+        connector.name: "git-connector"
+        configuration.names: "gitconfig"
+EOF
+```
+
+View the generated configuration:
+
+```bash
+kubectl exec -it inspect-git-config -n git-connector-demo -- cat /root/.gitconfig
+```
+
+Example output:
+```
+[http]
+    extraHeader = Authorization: Basic OmV5Smhixxxxxxxxx==
+[url "http://c-git-connector.git-connector-demo.svc]
+    insteadOf = https://github.com
+```
+
+## Troubleshooting
+
+If your clone operation fails, check the following:
+
+1. **Connector Status**: Ensure the connector is in "Ready" state:
+   ```bash
+   kubectl describe connector git-connector -n git-connector-demo
+   ```
+
+2. **RBAC Permissions**: Verify the RoleBinding is correctly configured.
+
+3. **Job Configuration**:
+   - Ensure the volume mount path is correct (/root/)
+   - Verify the repository URL matches what's configured in the connector
+
+## Next Steps
+
+After successfully cloning your first repository using the Git Connector, you can:
+
+- Integrate this approach into your CI/CD pipelines
+- Use the connector in other Git operations like push, pull, and fetch
+- Create connectors for different Git services
