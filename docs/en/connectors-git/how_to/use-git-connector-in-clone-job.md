@@ -65,7 +65,27 @@ spec:
 EOF
 ```
 
-3. Create a clone job using the connector
+3. Authorize the Namespace to use the connector
+
+```shell
+cat <<EOF | kubectl apply -f -
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: connectors-reader-binding
+  namespace: connectors-git-demo
+subjects:
+  - kind: Group
+    name: system:serviceaccounts:connectors-git-demo
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: ClusterRole
+  name: connectors-connector-viewer-role
+  apiGroup: rbac.authorization.k8s.io
+EOF
+```
+
+4. Create a clone job using the connector
 
 ```shell
 cat <<EOF | kubectl apply -f -
@@ -99,7 +119,7 @@ spec:
 EOF
 ```
 
-4. View the clone job execution result
+5. View the clone job execution result
 
 ```shell
 kubectl logs -f job/git-clone -n connectors-git-demo

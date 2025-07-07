@@ -22,9 +22,8 @@ internalRoutes: # 可选，支持 glob 匹配，相对于 docs 目录，匹配�
 
 releaseNotes:
   queryTemplates:
-    ## TODO: change the versionMatch for the next releases
-    unfixed: |
-      project = <%= project %> AND affectedVersion in ("connectors-operator-<%= version %>") AND type = Bug AND status in (Cancelled) AND ReleaseNotesStatus = Publish
-
-    fixed: |
-      project = <%= project %> AND fixVersion in ("connectors-operator-<%= version %>") AND type = Bug AND status in (Done, Resolved) AND ReleaseNotesStatus = Publish
+  ## TODO: change the versionMatch for the next releases
+    unfixed: | 
+      project = <%= project %> and affectedVersion in versionMatch("connectors-operator-v1.0.[0-9]") and filter = 18959 AND ACPAffectVersions in (<%= acpversion %>) AND NOT (ACPFixVersions in (<%= acpversion %>) AND status in (Done, Resolved)) AND (labels not in (安全问题) OR labels is EMPTY) and ReleaseNotesStatus = Publish
+    fixed: | 
+      project = <%= project %> and affectedVersion in versionMatch("connectors-operator-v1.0.[0-9]") and filter = 16502 AND (resolution not in ("By Design", "Not a Bug", Duplicate, Rejected, "Cannot Reproduce") OR resolution is EMPTY) AND (ACPFixVersions in (<%= acpversion %>) or fixVersion in versionMatch(<%= acpversion %>)) AND status in (Done, Resolved, 已完成) AND (affectedVersion in versionMatch("3.1[0-8]") OR ((issueFunction in linkedIssuesOf("affectedVersion in versionMatch('3.1[0-8]')", clones) OR issueFunction in linkedIssuesOf("affectedVersion in versionMatch('3.1[0-8]')", "is cloned by")))) and ReleaseNotesStatus = Publish

@@ -13,7 +13,7 @@ This article will guide you on how to use the OCI Connector to build images with
 
 When using the OCI Connector within a Kubernetes Job, the following key points should be noted:
 
-- Change the address of the target image being built to the connector's proxy address. [What is the Connector Proxy Address](../concepts/oci_connectorclass.mdx#proxy)
+- Change the address of the target image being built to the connector's proxy address. [What is the Connector Proxy Address](./oci_connectorclass.mdx#proxy)
   - For example: harbor.example.cn/test/abc:v1 -> harbor.default.cluster.local/test/abc:v1
 - Mount the configuration provided by the Connector.
 - Configure `insecure registry` for the client tools.
@@ -82,7 +82,7 @@ EOF
 - To allow the client to access the HTTP proxy, we need to configure `insecure-registries` for the client. A volume must be provided to mount `buildkitd.toml`.
 - Modify the address of the pushed image to the connector's proxy address.
 
-> For information on obtaining the Connector's proxy address, see: [OCI Connector Class Proxy Information Description](../concepts/oci_connectorclass.mdx#proxy)
+> For information on obtaining the Connector's proxy address, see: [OCI Connector Class Proxy Information Description](./oci_connectorclass.mdx#proxy)
 
 The Job content is as follows:
 

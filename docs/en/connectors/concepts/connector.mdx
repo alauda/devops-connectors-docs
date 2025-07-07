@@ -2,7 +2,7 @@
 created: '2024-11-03'
 title: Connector
 weight: 20
-sourceSHA: 5f85529316aae0e6930af905ef774618f6f53077e89d0bb1cb7d8f6b1481d739
+sourceSHA: 9a2c3daa7eb2f3eaed5d8d392d6cdfc3bad3a66856a0f91d45f91eadf1c8ac92
 ---
 
 # Connector
@@ -27,7 +27,6 @@ spec:
   connectorClassName: git  ##  Specify the connector type as git, this ConnectorClass must exist
   address: "https://github.com"  ##  Access address of the tool
   auth:
-    name: basicAuth
     secretRef:  ##  Reference to authentication information
       name: github-secret
 ```
@@ -116,8 +115,6 @@ spec:
       value: "org/repo.git"
 ```
 
-Note that once the ConnectorClass specifies authentication detection params, parameters in connector must be provided, even if the Connector is created without specifying secret information, `spec.auth.params` must be passed.
-
 ## Proxy Address {#connector_proxy}
 
 If the `Connector` points to a `ConnectorClass` that has configured [proxy capability](./connectorclass.mdx#proxy), the system will allocate a proxy address for each `Connector`. 
@@ -152,50 +149,6 @@ The status information of the Connector is recorded in the `status` field, conta
 - `AuthReady`: Indicates whether the authentication information is valid.
 - `ProxyServiceReady`: Indicates whether the [proxy address](#connector_proxy) for the current Connector is successfully allocated.
 - `Ready`: Indicates the overall status.
-
-**SecretReady Condition**
-
-Indicates the status information of the secret for the Connector.
-
-| Status  | Reason         | Description                                     |
-| ------- | -------------- | ----------------------------------------------- |
-| True    | SecretOptional | ConnectorClass marks authentication information as optional, and the current Connector has no authentication information configured |
-| True    |                | Secret is configured and exists                           |
-| False   |                | Secret is configured, but an error occurred while checking if the Secret exists              |
-| Unknown |                | Checking if the configured Secret is normal                               |
-
-**AuthReady Condition**
-
-Indicates the status information of the authentication for the Connector.
-
-| Status  | Reason       | Description                      |
-| ------- | ------------ | -------------------------------- |
-| True    | NonAuthProbe | ConnectorClass does not specify Auth Probe information |
-| True    |              | Credential check is valid                           |
-| False   |              | Credential check failed                          |
-| Unknown |              | Credential check in progress                            |
-
-**LivenessReady Condition**
-
-Indicates the status information of the liveness for the Connector.
-
-| Status  | Reason           | Description                          |
-| ------- | ---------------- | ------------------------------------ |
-| True    | NonLivenessProbe | ConnectorClass does not specify Liveness Probe information |
-| True    |                  | Tool access is normal                               |
-| False   |                  | Tool access is abnormal                              |
-| Unknown |                  | Tool access check in progress                              |
-
-**ProxyServiceReady Condition**
-
-Indicates the status information of the proxy service for the Connector.
-
-| Status  | Reason   | Description                                                    |
-| ------- | -------- | -------------------------------------------------------------- |
-| True    | NonProxy | ConnectorClass does not specify Proxy Service information, the current Connector does not have Proxy capability |
-| True    |          | Connector proxy service created successfully                                             |
-| False   |          | Proxy service is in an abnormal state                                                    |
-| Unknown |          | Proxy service check in progress                                                        |
 
 For example:
 

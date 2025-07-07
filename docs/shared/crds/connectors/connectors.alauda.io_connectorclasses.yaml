@@ -193,13 +193,6 @@ spec:
                         types supported by connectors of the current connectorclass
                         type
                       properties:
-                        description:
-                          description: Description is the description of the AuthType
-                          type: string
-                        displayName:
-                          description: DisplayName is the human readable name of the
-                            AuthType
-                          type: string
                         generator:
                           description: |-
                             Generator specifies how to generate authentication data dynamically.
@@ -450,17 +443,6 @@ spec:
                               description: Path represents the API address accessed
                                 during the current detection
                               type: string
-                            scheme:
-                              description: |-
-                                Scheme to use for connecting to the host.
-                                If empty:
-                                  - When Host is empty or matches the connector's address, the scheme from the connector's address is used.
-                                  - Otherwise, defaults to http.
-                                If specified, this value will be used regardless of Host or connector's address.
-                              enum:
-                              - http
-                              - https
-                              type: string
                           required:
                           - path
                           type: object
@@ -548,17 +530,6 @@ spec:
                       path:
                         description: Path represents the API address accessed during
                           the current detection
-                        type: string
-                      scheme:
-                        description: |-
-                          Scheme to use for connecting to the host.
-                          If empty:
-                            - When Host is empty or matches the connector's address, the scheme from the connector's address is used.
-                            - Otherwise, defaults to http.
-                          If specified, this value will be used regardless of Host or connector's address.
-                        enum:
-                        - http
-                        - https
                         type: string
                     required:
                     - path
@@ -670,6 +641,9 @@ spec:
                     Condition defines a readiness condition for a Knative resource.
                     See: https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#typical-status-properties
                   properties:
+                    lastProbeTime:
+                      description: Last time we probed the condition.
+                      type: string
                     lastTransitionTime:
                       description: |-
                         LastTransitionTime is the last time the condition transitioned from one status to another.

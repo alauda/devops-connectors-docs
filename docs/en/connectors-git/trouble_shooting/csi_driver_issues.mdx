@@ -103,7 +103,7 @@ kubectl describe pod <pod-name> -n <namespace>
 
 **Example error and resolution**:
 ```
-  Warning  FailedMount  3m (x5 over 5m)  kubelet  MountVolume.SetUp failed for volume "gitconfig" :
+  Warning  FailedMount  3m (x5 over 5m)  kubelet  MountVolume.SetUp failed for volume "gitconfig" : 
   rpc error: code = NotFound desc = connector "git-github" not found
 ```
 *Resolution*: Create the connector or correct the connector name in the volume attributes.

@@ -1,0 +1,231 @@
+---
+weight: 20
+sourceSHA: 1fbb8b0362b96a100560390fe79ba19e8e3a115349a932ecbe5835620ae8584c
+---
+
+# OCI ConnectorClass
+
+OCI ConnectorClass is a connector class used to define the OCI Connector. It allows users to easily access the [OCI Registry](https://github.com/opencontainers/distribution-spec/blob/v1.0.0/spec.md#definitions) (OCI image repository) within the cluster.
+
+## Access Requirements
+
+The OCI Registry to be accessed must meet the following conditions:
+
+1. Interface Implementation Requirements:
+   - Must implement at least the interfaces defined in the [opencontainers/distribution-spec](https://github.com/opencontainers/distribution-spec/tree/v1.0.0) v1.0 specification.
+   - Must be able to pass the [conformance test](https://github.com/opencontainers/distribution-spec/tree/v1.0.0/conformance) of the distribution-spec.
+
+2. Authentication Method Requirements:
+   - Must implement Token-based authentication and comply with the [CNCF Distribution Token Authentication Specification](https://distribution.github.io/distribution/spec/auth/token/).
+
+## Quick Start
+
+```yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: dockerhub
+spec:
+  connectorClassName: oci
+  address: https://index.docker.io
+  auth:
+    name: tokenAuth
+    params:
+    - name: repository
+      value: library/ubuntu
+    secretRef:
+      name: dockerhub
+---
+apiVersion: v1
+stringData:
+  password: your-token
+  username: your-username
+kind: Secret
+metadata:
+  name: dockerhub
+type: cpaas.io/distribution-registry-token
+```
+
+## Parameter Constraints for Connector
+
+### spec.connectorClassName
+
+Must use the constant value `oci`.
+
+### spec.address
+
+Specifies the access address of the OCI Registry, for example: `http://harbor.example.com`.
+
+### spec.auth.name
+
+Authentication types supported by the OCI Connector:
+
+- `tokenAuth`: Token-based authentication (optional)
+  - Corresponding credential type: `cpaas.io/distribution-registry-token`, this type of credential is used for the authentication process defined in the [CNCF Distribution Token Authentication Specification](https://distribution.github.io/distribution/spec/auth/token/), and the credential must provide `username` and `password` information.
+
+For example:
+
+```yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: connector-oci
+spec:
+  connectorClassName: oci
+  address: http://<registry.url>
+  # . . .
+  auth:
+    name: tokenAuth
+    secretRef:
+      name: oci-secret
+---
+apiVersion: v1
+data:
+  password: YWRtaW4=
+  username: YWRtaW4=
+kind: Secret
+metadata:
+  name: oci-secret
+type: cpaas.io/distribution-registry-token
+```
+
+If the target OCI Registry does not require authentication, the authentication information can be omitted. The configuration example is as follows:
+
+```yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: connector-oci
+spec:
+  connectorClassName: oci
+  address: http://<registry.url>
+  auth:
+    name: tokenAuth
+```
+
+## spec.auth.params[]
+
+Health check configuration:
+
+- `repository`: Specifies the image repository used for health checks.
+  - Example: `library/ubuntu`.
+
+```yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: connector-oci
+spec:
+  connectorClassName: oci
+  address: http://<registry.url>
+  auth:
+    name: tokenAuth
+    params:
+    - name: repository
+      value: library/ubuntu
+    secretRef:
+      name: oci-secret
+---
+apiVersion: v1
+data:
+  password: YWRtaW4=
+  username: YWRtaW4=
+kind: Secret
+metadata:
+  name: oci-secret
+type: cpaas.io/distribution-registry-token
+```
+
+## Capability Description
+
+### Health Check
+
+After creating the Connector, the system will perform the following operations:
+
+1. Perform health checks using the image repository specified by `spec.auth.params[name=repository]`.
+2. Store the check results in the `status.conditions[type=AuthReady]` field.
+
+### Configuration Information {#configuration}
+
+`OCI ConnectorClass` provides the following configurations:
+
+- `docker-config`: Docker configuration information.
+  - Provides the `config.json` configuration file.
+  - Contains the authentication information required to access the proxy.
+
+For example:
+
+```json
+// config.json
+
+{
+  "auths": {
+      "<proxy address of the connector>": {
+          "auth": "<authentication information required to access the connector>"
+      }
+  }
+}
+```
+
+- `dockerd`: Configuration information for the Docker Daemon. A `daemon.json` configuration file will be provided, and by default, the Docker daemon configuration will set the current connector as `insecure-registries`.
+
+For example:
+
+```json
+{
+  "insecure-registries": [
+    "<proxy address of the connector>"
+  ]
+}
+```
+
+- `buildkitd`: Configuration information for the BuildKit Daemon. A `buildkitd.toml` configuration file will be provided, and by default, the BuildKit daemon configuration will set the current connector as `insecure-registries`.
+
+For example:
+
+```yaml
+insecure-entitlements = [ "network.host", "security.insecure" ]
+[registry."<proxy address of the connector>"]
+  http = true
+```
+
+You can mount this configuration information into Pods using connectors-csi, enabling keyless (Secretless) image pushing or pulling.
+
+### Proxy Information {#proxy}
+
+After creating the Connector, the system will:
+
+1. Automatically create a Service for proxy purposes.
+2. Record the proxy address in the `status.proxy.httpAddress` field.
+
+You can use this proxy address to perform image pushing and pulling operations.
+
+For example:
+
+```yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: harbor
+  namespace: default
+spec:
+  address: https://build.example.com
+  auth:
+    name: tokenAuth
+    secretRef:
+      name: harbor
+  connectorClassName: oci
+status:
+  conditions:
+  # . . .
+  proxy:
+    httpAddress:
+      url: http://c-harbor.default.svc.cluster.local
+```
+
+## More
+
+- [What is OCI Registry](https://github.com/opencontainers/distribution-spec/blob/v1.0.0/spec.md#definitions)
+- [General introduction to using the OCI connector's proxy in K8S Workload](../how_to/using_oci_connector_in_k8s.mdx)
+- [Using OCI Connector to build images in K8S Job](../how_to/using_oci_connector_in_k8s_job.mdx)
+- [Using OCI Connector to build images in Tekton Pipeline](../how_to/using_oci_connector_in_tekton_pipeline.mdx)

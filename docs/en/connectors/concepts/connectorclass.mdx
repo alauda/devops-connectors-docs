@@ -2,42 +2,36 @@
 created: '2024-11-03'
 title: ConnectorClass
 weight: 40
-sourceSHA: 9ce33535cf391b949b6d147e81680210896f97b70c4b88ea976ea5619a67552f
+sourceSHA: 4526f8e61c9f619e638cf3587ab7c513cdad159fd06f5d34312c908fa0c19922
 ---
 
 # ConnectorClass
 
 ## Overview
 
-`ConnectorClass` is a cluster-level resource that defines the access modes and behavior specifications for specific types of tools.
+`ConnectorClass` is a cluster-level resource that defines the access modes and behavior specifications for specific types of tools. It describes:
 
-The following example defines a `hello-git` type connector that supports basic authentication:
+- The format of the tool's access address
+- Supported authentication methods
+- The method for checking tool availability
+- The method for verifying authentication validity
+- The API address of the tool
+
+For example, the following definition describes a Git type connector that supports basic authentication:
 
 ```yaml
 apiVersion: connectors.alauda.io/v1alpha1
 kind: ConnectorClass
 metadata:
-  name: hello-git
+  name: git
 spec:
   address:
-    type: string  # Address in string format
+    type: string  #  Address in string format
   auth:
     types:
       - name: basicAuth
-        secretType: kubernetes.io/basic-auth  # Using Basic Auth for authentication
+        secretType: kubernetes.io/basic-auth  #  Using Basic Auth for authentication
 ```
-
-In the ConnectorClass, the access modes and behavior specifications for connecting tools to the platform are defined by describing the following information:
-
-- The format of the tool's access address
-- Supported authentication methods
-- How to check the tool's accessibility
-- How to verify the validity of authentication
-- How the tool provides API capabilities
-- What configuration capabilities the tool offers
-- Metadata for readability display
-
-This document also provides examples to help readers better understand how to customize ConnectorClass. [Examples](#examples)
 
 ## Address Information
 
@@ -60,7 +54,7 @@ The authentication type defines the type of credentials used for tool authentica
 Users can uniquely name the current authentication type via
 
 - `spec.auth.types[].name`, which must be unique and cannot be repeated.
-- `spec.auth.types[].secretType`, which specifies the type of `Secret` needed for authentication, corresponding to a [Kubernetes Secret Type](https://kubernetes.io/docs/concepts/configuration/secret/#secret-types).
+- `spec.auth.types[].secretType`, which specifies the type of `Secret` needed for authentication, corresponding to a `kubernetes secret type`.
 
 Example:
 
@@ -74,13 +68,7 @@ spec:
         secretType: kubernetes.io/ssh-auth
 ```
 
-In the built-in K8S Secret Type, all types except `Opaque` have field constraints. When providing a Secret, the user must ensure that the Secret's fields match the type constraints.
-
-When using the `Opaque` type, you must declare [authentication parameters](#auth_params).
-
-Like k8s, you can also use your own Secret Type. At this point, you must declare [authentication parameters](#auth_params).
-
-### Authentication Parameters \{#auth_params}
+### Authentication Parameters
 
 Parameters required for credentials during authentication are defined by `spec.auth.types[].params`.
 
@@ -89,7 +77,7 @@ For standard Kubernetes secret types with clearly defined data fields, parameter
 - `kubernetes.io/basic-auth`: username and password authentication
 - `kubernetes.io/ssh-auth`: SSH key authentication
 
-For custom authentication types, you can define the required authentication parameters, at this point `secretType` is marked as `Opaque` or a custom name.
+For custom authentication types, the required authentication parameters can be defined, and at this point, the `secretType` is marked as `kubernetes.io/opaque`.
 
 For example, for GitLab's Personal Access Token (PAT) authentication:
 
@@ -98,22 +86,15 @@ spec:
   auth:
     types:
       - name: privateToken
-        secretType: Opaque
+        secretType: kubernetes.io/opaque
         params:
           - name: username
             type: string
           - name: private-token
             type: string
-      - name: oauth2
-        secretType: example.com/oauth2
-        params:
-          - name: clientID
-            type: string
-          - name: clientSecret
-            type: string
 ```
 
-This definition requires that the credentials used in the tool connector include the fields specified in `params`.
+At this point, it will require that the credentials used in the tool connector include `username` and `private-token` information.
 
 ### Optional Authentication
 
@@ -151,7 +132,7 @@ When the tool returns a 200 status, it is considered accessible.
 
 ## Authentication Checking
 
-Authentication checking is used to verify how the validity of the authentication information for tools of this type is checked. If authentication checking is not needed, `authProbes` can be omitted.
+Authentication checking is used to verify how the validity of the authentication information for tools of this type is checked.
 
 For example, the following YAML indicates that during the authentication check of the tool, an `http GET` request will be initiated with the injected `Authorization: abc` header.
 
@@ -241,178 +222,11 @@ The above `yaml` indicates the authentication checking for `basic auth`:
 - `path`: Utilizes the `repository` value set in `auth.params` within the `Connector` information, concatenated as `/<repository>/info/refs?service=git-upload-pack`
 - `Authorization`: If the Connector is configured with a Secret, the `username` and `password` fields from the Secret will be returned in base64.
 
-### Rego-based Authentication Logic Configuration
+## ConnectorClass API \{connectorclass\_api}
 
-When tool connectors require more complex authentication logic, you can use Rego-based authentication logic configuration.
+The ConnectorClass can provide a RESTful API for the current ConnectorClass, making it easier for clients to access the resources within tools when using Connectors.
 
-Rego is a declarative policy language that allows you to define authentication logic. In ConnectorClass, Rego policies are specified in the `auth.types[].generator.rego` field:
-
-```yaml
-apiVersion: connectors.alauda.io/v1alpha1
-kind: ConnectorClass
-metadata:
-  name: example
-spec:
-  address:
-    name: address
-    type: string
-  auth:
-    types:
-    - name: rego-auth
-      secretType: Opaque
-      generator:
-        rego: |
-          package proxy
-          auth = {
-            "position": "header",
-            "auth": {
-              "Authorization": concat(" ", ["Bearer", input.token])
-            }
-          }
-```
-
-The Rego policy must follow these rules:
-
-- Define rules under the proxy package
-- Produce an auth object with the following structure:
-  - position: Where to inject authentication, such as "header", "query", or "body"
-  - contentType: Content type for body injection (optional, used with "body" position)
-  - auth: Map of authentication key-value pairs
-
-#### Example Rego Policies
-
-##### Basic Authentication
-
-```yaml
-spec:
-  auth:
-    types:
-    - name: basic-rego-auth
-      secretType: Opaque
-      generator:
-        rego: |
-          package proxy
-          auth = {
-            "position": "header",
-            "auth": {
-              "Authorization": concat(" ", ["Basic", base64.encode(concat(":", [input.username, input.password]))])
-            }
-          }
-```
-
-##### API Key Authentication
-
-```yaml
-spec:
-  auth:
-    types:
-    - name: apikey-rego-auth
-      secretType: Opaque
-      generator:
-        rego: |
-          package proxy
-          auth = {
-            "position": "query",
-            "auth": {
-              "api_key": input.apikey
-            }
-          }
-```
-
-##### JSON Body Authentication
-
-```yaml
-spec:
-  auth:
-    types:
-    - name: body-rego-auth
-      secretType: Opaque
-      generator:
-        rego: |
-          package proxy
-          auth = {
-            "position": "body",
-            "contentType": "application/json",
-            "auth": {
-              "username": input.username,
-              "password": input.password,
-              "client_id": input.client_id
-            }
-          }
-```
-
-#### Advanced Rego Techniques
-
-You can use Rego's conditional logic for different authentication methods:
-
-##### Conditional Authentication
-
-```yaml
-spec:
-  auth:
-    types:
-    - name: conditional-auth
-      secretType: Opaque
-      generator:
-        rego: |
-          package proxy
-
-          # Default uses API key
-          auth = {
-            "position": "header",
-            "auth": {
-              "X-API-Key": input.apikey
-            }
-          }
-
-          # Use OAuth token if available
-          auth = {
-            "position": "header",
-            "auth": {
-              "Authorization": concat(" ", ["Bearer", input.oauth_token])
-            }
-          } {
-            input.oauth_token != ""
-          }
-```
-
-##### Time-based Authentication
-
-```yaml
-spec:
-  auth:
-    types:
-    - name: time-based-auth
-      secretType: Opaque
-      generator:
-        rego: |
-          package proxy
-
-          import time
-
-          # Get current time
-          current_time := time.now_ns() / 1000000000
-
-          auth = {
-            "position": "header",
-            "auth": {
-              "X-Timestamp": sprintf("%d", [current_time]),
-              "X-Signature": hmac.sha256(input.api_secret, sprintf("%d", [current_time]))
-            }
-          }
-```
-
-For more Rego language details, refer to:
-
-- [Rego Policy Language](https://www.openpolicyagent.org/docs/latest/policy-language)
-
-## ConnectorClass API {#connectorclass_api}
-
-Provides a RESTful API for the current ConnectorClass, allowing clients to easily access resources within the tools when using Connectors.
-
-If there is no need to provide API capabilities for the tool, `spec.api` can be left undefined.
-
-The ConnectorClass API needs to be configured in the `spec.api` field, for example:
+ConnectorClass API needs to be configured in the `spec.api` field, such as:
 
 ```yaml
 spec:
@@ -423,7 +237,7 @@ spec:
       namespace: default
 ```
 
-You can specify the API's Service information through `spec.api.ref`. If the API address of the ConnectorClass has a fixed prefix, it can be specified using `spec.api.uri`. For example:
+You can specify the Service information of the API via `spec.api.ref`. If the API address of ConnectorClass has a fixed prefix, you can specify it using `spec.api.uri`. For example:
 
 ```yaml
 spec:
@@ -435,7 +249,7 @@ spec:
     uri: /api
 ```
 
-Additionally, you can use `spec.api.uri` to specify the absolute path of the API. For example:
+Alternatively, you can specify the absolute path of the API using `spec.api.uri`. For example:
 
 ```yaml
 spec:
@@ -443,9 +257,9 @@ spec:
     uri: https://git.example.com/api
 ```
 
-Regardless of the form, the final resolved API address will be stored in `status.api.address.url`. For example:
+Regardless of the form, the final resolved API address will be stored in `status.api.address.url`. For instance:
 
-Specifying the connectorclass API through service:
+To specify the connector class API through a service
 
 ```yaml
 spec:
@@ -460,7 +274,7 @@ status:
       url: https://git.default.svc
 ```
 
-Specifying the connectorclass API through uri:
+To specify the connector class API via URI
 
 ```yaml
 spec:
@@ -472,7 +286,7 @@ status:
       url: https://git.default.svc/api
 ```
 
-Specifying the connectorclass API through svc while using `spec.api.uri` to specify the API path:
+To specify the connector class API through service while using `spec.api.uri` to specify the API path
 
 ```yaml
 spec:
@@ -488,18 +302,14 @@ status:
       url: https://git.default.svc/api
 ```
 
-For more information, refer to:
+For more details, refer to
 
 - [connector-api](./connector_api.mdx)
 - [connectorclass-api definition specification](./connectorclass_api_spec.mdx)
 
-## Configuration Capabilities
+## Configurations
 
-Configuration capabilities are used to define the configuration information for this type of tool. This configuration information can be mounted into Pods in conjunction with [connectors-csi-driver](./connectors_csi.mdx).
-
-If the client does not need to rely on configuration information when accessing the tool, `spec.configurations` can be left undefined.
-
-Configuration information is specified through `spec.configurations`. For example:
+You can specify configuration information through `spec.configurations`. For example:
 
 ```yaml
 kind: ConnectorClass
@@ -513,16 +323,18 @@ spec:
         this is git config
 ```
 
-Typically, we can specify a certain type of configuration information for a class of tools to facilitate configuration during use. For example:
+Typically, we can specify a certain configuration information for a type of tool to facilitate configuration during use. For example:
 
-- For `git` type tools, provide configuration for `.gitconfig`
-- For `oci registry` type tools, provide configuration for `config.json`
+- For `git` type tools, provide the configuration for `.gitconfig`
+- For `oci registry` type tools, provide the configuration for `config.json`
 
-The configuration content supports the use of variables, which can be dynamically rendered during mounting. For details, refer to the description of "Configuration File Rendering" in [connectors-csi-driver](./connectors_csi.mdx).
+These configuration pieces can be mounted to Pods in file form through the [connectors-cs-driver](./connectors_csi.mdx).
+
+The configuration contents support using variables, which can be dynamically rendered during mounting. For specifics, refer to the description of "Configuration file rendering" in [connectors-cs-driver](./connectors_csi.mdx).
 
 ### Example
 
-The following ConnectorClass provides a file named `.gitconfig`, which is used to ignore SSL verification during `git clone`.
+The following ConnectorClass provides a file named `.gitconfig`, used to ignore SSL certificate verification during `git clone`.
 
 ```yaml
 kind: ConnectorClass
@@ -537,7 +349,7 @@ spec:
           sslVerify = false
 ```
 
-The following ConnectorClass provides a file named `.gitconfig`, which automatically injects headers and replaces the git URL during `git clone`.
+The following ConnectorClass provides a file named `.gitconfig` that automatically injects headers and replaces the Git URL during `git clone`.
 
 ```yaml
 kind: ConnectorClass
@@ -558,19 +370,9 @@ spec:
 
 - [connectors csi driver](./connectors_csi.mdx)
 
-## Metadata Information for Readability Display {#metadata}
+## Metadata
 
-`ConnectorClass` is a standard k8s resource that can be tagged with custom information using `labels` and `annotations`.
-
-For example:
-
-| Key                              | Description                                                             |
-| -------------------------------- | ----------------------------------------------------------------------- |
-| `ui.cpaas.io/icon`               | The icon for ConnectorClass, optional. Format: `data:image/svg+xml;base64,PD94bWwgdmVyc2...` |
-| `cpaas.io/display-name`          | The display name for ConnectorClass, optional.                                                |
-| `cpaas.io/description`           | The description for ConnectorClass, optional.                                                  |
-| `connectors.cpaas.io/readme`    | Usage instructions for ConnectorClass, optional. Typically used for custom scenarios when `docs-link` cannot be provided. Supports Markdown format.    |
-| `connectors.cpaas.io/docs-link` | Documentation link for ConnectorClass, optional. Relative or absolute path.                                    |
+`ConnectorClass` is a standard k8s resource that can be tagged with custom information through `labels` and `annotations`.
 
 For example:
 
@@ -582,69 +384,66 @@ metadata:
   labels:
     connectors.cpaas.io/git: "true"
   annotations:
-    ui.cpaas.io/icon: "data:image/svg+xml;base64,PD94bWwgdmVyc2..."
-    cpaas.io/display-name: Git
+    cpaas.io/icon: ""
+    cpaas.io/displayName: Git
     cpaas.io/description: "Connect to any Git tool"
-    connectors.cpaas.io/readme: "this is readme..."
-    connectors.cpaas.io/docs-link: "/alauda-devops-connectors/concepts/connectorclass/git"
+    cpaas.io/readme: "this is readme..."
 ```
 
 ## Status Information
 
-Once you have defined the ConnectorClass resource, the status information of the resource will be stored in `status`.
-
-The `status.conditions` type includes:
+Condition information will be stored in `status.conditions`. The types include:
 
 - `APIReady`: Status information of the API capability
 - `ProxyReady`: Status information of the Proxy capability
-- `Ready`: Marks the overall status of the current ConnectorClass
+- `Ready`: Indicates the overall status of the current ConnectorClass
 
 **Ready Condition**
 
-The `Ready Condition` is used to mark the status of the current ConnectorClass. It aggregates the status of other conditions.
+The `Ready Condition` is used to indicate the current status of the ConnectorClass. It aggregates the status of other conditions.
 
-- When other Conditions are True, the current Condition is True.
-- When any other Condition is False, the current Condition is False.
-- When any other Condition is Unknown, the current Condition is Unknown.
+When all other conditions are True, the current condition is True.
+When any other condition is False, the current condition is False.
+When any other condition is Unknown, the current condition is Unknown.
 
 **APIReady Condition**
 
-Indicates the status information of the API service configured for the ConnectorClass. The API service is configured through [ConnectorClass's spec.api](#connectorclass_api).
+Indicates the status information of the API service configured for the ConnectorClass. The API service is specified through [spec.api of the ConnectorClass](#connectorclass_api).
 
-| Status  | Reason | Description                                 |
-| ------- | ------ | ------------------------------------------- |
-| True    | NonAPI | `spec.api` not configured, the current ConnectorClass has no API capability |
-| True    |        | `spec.api` defined, API service is normal                    |
-| False   |        | `spec.api` defined, API capability is abnormal or detection itself is abnormal          |
-| Unknown |        | API capability detection in progress                                   |
+| Status  | Reason | Description                |
+| ------- | ------ | -------------------------- |
+| True    | NonAPI | API capability check is normal, but no API service configuration detected |
+| True    |        | API capability is normal                   |
+| False   |        | API capability is not normal or the check itself is abnormal         |
+| Unknown |        | API capability check in progress                  |
 
 Note:
 
-- The API detection will only attempt to request the link and will not make any HTTP return value judgments. The health check of the API service should rely on the health check mechanism of the API service itself.
-- Since the API service may change at any time, the status information of the API cannot reflect real-time information. It is recommended that clients use this status information as a hint rather than relying on it to block client behavior.
+- The API detection only attempts to request the link without checking any HTTP return value. Health checks for the API service should rely on the API service's own health check mechanism.
+- Due to the potential for external services to change at any time, the API's status information cannot represent real-time information. It is recommended that clients use this status information merely as a prompt and not rely on it to block client actions.
 
 **ProxyReady Condition**
 
-Indicates the status information of the Proxy service configured for the ConnectorClass. The Proxy service is configured through [ConnectorClass's spec.proxy](#connectorclass_proxy).
+Indicates the status information of the Proxy service configured for the ConnectorClass. The Proxy service is specified through [spec.proxy of the ConnectorClass](#connectorclass_proxy).
 
-| Status  | Reason   | Description                                     |
-| ------- | -------- | ----------------------------------------------- |
-| True    | NonProxy | `spec.proxy` not configured, the current ConnectorClass has no Proxy capability |
-| True    |          | `spec.proxy` defined, Proxy service is normal                    |
-| False   |          | `spec.proxy` defined, Proxy capability is abnormal or detection itself is abnormal          |
-| Unknown |          | Proxy capability detection in progress                                     |
+| Status  | Reason   | Description                    |
+| ------- | -------- | ------------------------------ |
+| True    | NonProxy | Proxy capability check is normal, but no Proxy service configuration detected |
+| True    |          | Proxy capability is normal                     |
+| False   |          | Proxy capability is not normal or the check itself is abnormal           |
+| Unknown |          | Proxy capability check in progress                    |
 
 ## Compatibility
 
-Updates to the ConnectorClass may affect existing Connectors. If there are incompatible changes to the ConnectorClass, it may cause previously created Connectors to become invalid. Here are some possible changes that may lead to incompatibility:
+Updates to the ConnectorClass may impact existing Connectors. If there are incompatible changes to the ConnectorClass, it may cause previously created Connectors to become invalid. The following are some changes that may lead to incompatibility:
 
-1. Changes in authentication information: If the ConnectorClass modifies the supported authentication types or methods, it may cause Connectors using the old authentication method to malfunction.
+1. Changes to authentication information: If the ConnectorClass modifies supported authentication types or methods, it may cause Connectors using the old authentication method to fail to function properly.
 
-2. Changes in configuration information: If the configuration information of the ConnectorClass changes, such as removing an existing configuration, it may cause Kubernetes workloads that depend on the old configuration to malfunction.
+2. Changes to configuration information: If there are changes to the configuration information of the ConnectorClass, such as removing an existing configuration, it may lead to Kubernetes workloads relying on the old configuration failing to work.
 
-It is recommended to confirm the scope of impact when updating the ConnectorClass, or if necessary, create a new ConnectorClass.
+It is recommended to assess the scope of impact before updating the ConnectorClass, or if necessary, create a new ConnectorClass.
 
-## More Examples {#examples}
+## More Examples
 
 - ConnectorClass supporting `basic-auth` authentication type
 
@@ -660,10 +459,28 @@ spec:
     types:
       - name: basicAuth
         secretType: kubernetes.io/basic-auth
-        optional: true
 ```
 
-- Custom authentication type ConnectorClass
+- ConnectorClass simultaneously supporting both `basic-auth` and `ssh-auth` authentication types, with `basic-auth` having optional authentication information.
+
+```yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: ConnectorClass
+metadata:
+  name: git
+spec:
+  address:
+    type: string
+  auth:
+    types:
+      - name: basicAuth
+        optional: true
+        secretType: kubernetes.io/basic-auth
+      - name: sshAuth
+        secretType: kubernetes.io/ssh-auth
+```
+
+- ConnectorClass for a custom authentication type
 
 ```yaml
 apiVersion: connectors.alauda.io/v1alpha1
@@ -677,13 +494,13 @@ spec:
     types:
       - name: patAuth
         optional: true
-        secretType: Opaque
+        secretType: kubernetes.io/opaque
         params:
         - name: username
         - name: privateToken
 ```
 
-- ConnectorClass configured with `liveness probe`
+- ConnectorClass configured with a `liveness probe`
 
 ```yaml
 apiVersion: connectors.alauda.io/v1alpha1
@@ -703,7 +520,7 @@ spec:
       path: /
 ```
 
-- ConnectorClass configured with `auth probe`
+- ConnectorClass configured with an `auth probe`
 
 ```yaml
 apiVersion: connectors.alauda.io/v1alpha1
@@ -753,6 +570,8 @@ spec:
       - name: basicAuth
         secretType: kubernetes.io/basic-auth
         optional: true
+      - name: sshAuth
+        secretType: kubernetes.io/ssh-auth
   livenessProbe:
     http:
       path: /
