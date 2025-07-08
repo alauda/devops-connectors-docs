@@ -211,6 +211,7 @@ To add support for container registries, like Harbor, Docker Registry, etc., ins
 
 1. Create the ConnectorsOCI custom resource:
 
+   ClusterIP Expose:
    ```bash
    cat <<EOF | kubectl apply -f -
    apiVersion: operator.connectors.alauda.io/v1alpha1
@@ -220,6 +221,38 @@ To add support for container registries, like Harbor, Docker Registry, etc., ins
      namespace: connectors-system
    spec: {}
    EOF
+   ```
+
+   NodePort Expose:
+   ```bash
+   cat <<EOF | kubectl apply -f -
+   apiVersion: operator.connectors.alauda.io/v1alpha1
+   kind: ConnectorsOCI
+   metadata:
+     name: connectors-oci
+     namespace: connectors-system
+   spec:
+    expose:
+      type: NodePort
+      domain: 192.168.1.123
+      nodePort:
+        port: 30000
+   EOF
+   ```
+
+   Ingress Expose:
+
+   ```bash
+   cat <<EOF | kubectl apply -f -
+   apiVersion: operator.connectors.alauda.io/v1alpha1
+   kind: ConnectorsOCI
+   metadata:
+     name: connectors-oci
+     namespace: connectors-system
+   spec:
+    expose:
+      type: Ingress
+      domain: connectors.proxy.com
    ```
 
 2. Monitor the deployment progress:
