@@ -155,7 +155,7 @@ spec:
           --frontend=dockerfile.v0 \
           --local context=/workspace \
           --local dockerfile=/workspace \
-          --output type=image,name=c-oci-connector.oci-connector-demo.svc.cluster.local/your-username/test-image:v1,push=true
+          --output type=image,name=c-oci-connector.oci-connector-demo.svc.cluster.local/namespaces/oci-connector-demo/connectors/oci-connector/your-username/test-image:v1,push=true
         volumeMounts:
         - name: dockerfile
           mountPath: /workspace
@@ -246,7 +246,7 @@ The connector generates three types of configuration files that serve different 
    This configuration is essential for authentication and is required for all container operations.
 
 2. **buildkitd**: Creates a `buildkitd.toml` file that configures BuildKit to trust the insecure registry proxy
-   ```toml
+   ```
    insecure-entitlements = [ "network.host", "security.insecure" ]
    [registry."<proxy-address>"]
      http = true

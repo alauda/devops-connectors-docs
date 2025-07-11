@@ -178,7 +178,7 @@ kubectl exec <pod-name> -n <namespace> -- cat /etc/buildkit/buildkitd.toml
 
 **Expected configuration elements**:
 
-```toml
+```
 insecure-entitlements = [ "network.host", "security.insecure" ]
 [registry."c-<connector-name>.<namespace>.svc.cluster.local"]
   http = true

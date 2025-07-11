@@ -14,7 +14,7 @@ This article will guide you on how to use the OCI Connector to build images with
 When using the OCI Connector within a Kubernetes Job, the following key points should be noted:
 
 - Change the address of the target image being built to the connector's proxy address. [What is the Connector Proxy Address](../concepts/oci_connectorclass.mdx#proxy)
-  - For example: harbor.example.cn/test/abc:v1 -> harbor.default.cluster.local/test/abc:v1
+  - For example: `harbor.example.cn/test/abc:v1` -> `harbor.default.cluster.local/namespaces/<connector-ns>/connectors/<connector-name>/test/abc:v1`
 - Mount the configuration provided by the Connector.
 - Configure `insecure registry` for the client tools.
 
@@ -115,7 +115,7 @@ spec:
       --opt filename=Dockerfile \
       --local context=/workspace \
       --local dockerfile=/workspace \
-      --output type=image,name=c-harbor.default.svc.cluster.local/test/test-cjt:v1,push=true \
+      --output type=image,name=c-harbor.default.svc.cluster.local/namespaces/oci-connector-demo/connectors/oci-connector/test-cjt:v1,push=true \
       --export-cache type=inline
     volumeMounts:
     - name: dockerfile

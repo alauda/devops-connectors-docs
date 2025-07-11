@@ -1,0 +1,27 @@
+---
+title: Upgrading Connectors
+weight: 20
+---
+
+Upgrading Connectors is a relatively straightforward process, but the complexity can increase based on:
+
+## Upgrade Path
+
+The table below contains the complete upgrade path. When upgrading, you need to upgrade the Operator and Connectors instance will be upgraded automatically.
+
+| No  | Alauda Build of Connectors Operator Version |
+| --- | ---------------- |
+| 1   | 1.0.z           |
+| 2   | 1.1.z          |
+
+:::info
+In the version numbers above, the `.z` indicates the latest available patch version for that minor release.
+When performing an upgrade, you should always use the most recent patch version to ensure you benefit from the latest security updates and bug fixes.
+The latest patch versions for each release can be found in the [Release Notes](../overview/release_notes.mdx).
+:::
+
+## Upgrade Steps
+
+To upgrade Connectors components, you only need to upgrade the Operator version. The Connectors components will be upgraded automatically.
+
+When upgrading, you need to upgrade the <ExternalSiteLink name="acp" href="extend/operator.html#upgrading-operators" children="Operator" /> version.
