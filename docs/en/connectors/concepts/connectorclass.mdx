@@ -589,6 +589,46 @@ metadata:
     connectors.cpaas.io/docs-link: "/alauda-devops-connectors/concepts/connectorclass/git"
 ```
 
+## ConnectorClass Proxy {#connectorclass_proxy}
+
+The ConnectorClass Proxy is used to configure the proxy address for the ConnectorClass. 
+
+The ConnectorClass Proxy is configured through `spec.proxy`. For example:
+
+```yaml
+spec:
+  proxy:
+    ref:
+      kind: Service
+      name: proxy
+      namespace: default
+    uri: https://proxy.example.com
+```
+
+The Connector will use the proxy address to proxy the request to the ConnectorClass. [More information](./connectors_proxy.mdx)
+
+### Resolver Type
+
+The proxy address of the ConnectorClass will be resolved according to the specified `resolver` type. 
+
+The `resolver` type is configured through annotations `connectors.cpaas.io/proxy-resolver`. For example:
+
+```yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: ConnectorClass
+metadata:
+  name: oci
+  annotations:
+    connectors.cpaas.io/proxy-resolver: "path"
+```
+
+This field is a convention between ConnectorClass-Proxy and Connector. Optional.
+
+Supported values: `host`, `path`. Default is `host`. 
+
+- `host` format: `http://{.ConnectorClass.Status.ProxyAddress.URL}`
+- `path` format: `http://{.ConnectorClass.Status.ProxyAddress.URL}/namespaces/{namespace}/connectors/{connector-name}`
+
 ## Status Information
 
 Once you have defined the ConnectorClass resource, the status information of the resource will be stored in `status`.

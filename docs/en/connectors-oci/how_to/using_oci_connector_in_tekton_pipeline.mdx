@@ -14,7 +14,7 @@ This article will teach you how to use the OCI Connector in the `Tekton Pipeline
 When using the OCI Connector in Tekton Pipeline, there are several key points to note:
 
 - The address of the target image to be built is changed to the connector's proxy address.
-  - For example, build-harbor.alauda.cn/test/abc:v1 -> harbor.default.cluster.local/test/abc:v1
+  - For example: `harbor.example.cn/test/abc:v1` -> `harbor.default.cluster.local/namespaces/<connector-ns>/connectors/<connector-name>/test/abc:v1`
 - Mount the configuration provided by the Connector.
 - Configure `insecure registry` for the client tools.
 
@@ -151,7 +151,7 @@ spec:
           configuration.names: "buildkitd"
   params:
     - name: repository
-      value: "c-harbor.default.svc.cluster.local/test/demo:v1" # Push to proxy address
+      value: "c-harbor.default.svc.cluster.local/namespaces/oci-connector-demo/connectors/oci-connector/test/demo:v1" # Push to proxy address
 EOF
 ```
 

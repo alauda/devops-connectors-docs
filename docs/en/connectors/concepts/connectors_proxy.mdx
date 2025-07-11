@@ -24,7 +24,9 @@ ConnectorsProxy enables clients to access tool resources without needing to hand
 When a Connector is created, ConnectorsProxy automatically:
 
 1. Creates a Kubernetes Service for proxy purposes
-2. Assigns a proxy address in the format: `http://c-{connector-name}.{namespace}.svc.cluster.local`
+2. Assigns a proxy address in the format:
+   - host resolver: `http://c-{connector-name}.{namespace}.svc.cluster.local`
+   - path resolver: `http://c-{connector-name}.{namespace}.svc.cluster.local/namespaces/{namespace}/connectors/{connector-name}`
 3. Records the proxy address in the Connector's `status.proxy.httpAddress` field
 
 ### Protocol Support
@@ -51,8 +53,11 @@ Example for an OCI Registry:
 # Original image address
 harbor.example.com/test/abc:v1
 
-# Proxied address
+# Proxied address(host resolver)
 c-harbor-connector.default.svc.cluster.local/test/abc:v1
+
+# Proxied address(path resolver)
+c-harbor-connector.default.svc.cluster.local/namespaces/default/connectors/harbor/test/abc:v1
 ```
 
 ### Configuration

@@ -142,6 +142,26 @@ status:
       url: http://c-harbor.default.svc.cluster.local
 ```
 
+When the ConnectorClass has configured proxy resolver type is `path`, the format of the proxy address is `http://c-{connector-name}.{namespace}.svc.cluster.local/namespaces/{namespace}/connectors/{connector-name}`, where `{path}` is the path of the Connector.
+
+For example, the following example describes a connector with a proxy address:
+
+```yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: harbor
+  namespace: default
+spec:
+  address: https://example.com
+status:
+ proxy:
+    httpAddress:
+      url: http://c-harbor.default.svc.cluster.local/namespaces/default/connectors/harbor
+```
+
+
+
 ## Status Information
 
 The status information of the Connector is recorded in the `status` field, containing the following content:

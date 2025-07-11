@@ -1,15 +1,14 @@
 # Documentation Sync Information
 
-- **Last synced**: 2025-07-08 08:36:32 UTC
+- **Last synced**: 2025-07-11 09:52:49 UTC
 - **Source repository**: alaudadevops/connectors-operator
-- **Source commit**: [610601746c23c75326edb09c81d4d6b642a39d86](https://github.com/alaudadevops/connectors-operator/commit/610601746c23c75326edb09c81d4d6b642a39d86)
+- **Source commit**: [0bb59857a9f1d8260d15738ef173f3a5a60cef89](https://github.com/alaudadevops/connectors-operator/commit/0bb59857a9f1d8260d15738ef173f3a5a60cef89)
 - **Triggered by**: kycheng
-- **Workflow run**: [#4](https://github.com/alaudadevops/connectors-operator/actions/runs/16138230910)
+- **Workflow run**: [#5](https://github.com/alaudadevops/connectors-operator/actions/runs/16217159934)
 
 ## Files synced:
 - docs/
 - .yarn/
-- doom.config.yml
 - yarn.lock
 - tsconfig.json
 - package.json
