@@ -13,9 +13,9 @@ ConnectorsProxy is a core component of the Connectors system that provides a sec
 
 ### Secretless Access
 
-ConnectorsProxy enables clients to access tool resources without needing to handle authentication credentials directly. This significantly improves security by:
+`ConnectorsProxy` enables clients to access tool resources without needing to handle authentication credentials directly. This significantly improves security by:
 
-- Eliminating the need to distribute credentials to workloads
+- Eliminates the need to distribute tool credentials directly to clients by using short-lived tokens issued by ServiceAccount.
 - Preventing credential exposure in logs or environment variables
 - Centralizing credential management
 

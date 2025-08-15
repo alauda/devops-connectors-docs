@@ -29,81 +29,81 @@ Follow these steps to use the Git Connector to complete code cloning:
 
 1. Create a Namespace
 
-```shell
-kubectl create ns connectors-git-demo
-```
+    ```shell
+    kubectl create ns connectors-git-demo
+    ```
 
 2. Create Git Connector and its credentials
 
-```shell
-cat <<EOF | kubectl apply -f -
-kind: Secret
-apiVersion: v1
-metadata:
-  name: test-secret
-  namespace: connectors-git-demo
-type: kubernetes.io/basic-auth
-stringData:
-  username: username # Replace with your Git Server username
-  password: password # Replace with your Git Server password
----
-apiVersion: connectors.alauda.io/v1alpha1
-kind: Connector
-metadata:
-  name: test-connector
-  namespace: connectors-git-demo
-spec:
-  connectorClassName: git
-  address: https://github.com # Replace with your Git Server address
-  auth:
-    name: basicAuth
-    secretRef:
+    ```shell
+    cat <<EOF | kubectl apply -f -
+    kind: Secret
+    apiVersion: v1
+    metadata:
       name: test-secret
-    params:
-    - name: repository
-      value: AlaudaDevops/connectors-git.git # Replace with the path to the repository accessible by the current credentials
-EOF
-```
+      namespace: connectors-git-demo
+    type: kubernetes.io/basic-auth
+    stringData:
+      username: username # Replace with your Git Server username
+      password: password # Replace with your Git Server password
+    ---
+    apiVersion: connectors.alauda.io/v1alpha1
+    kind: Connector
+    metadata:
+      name: test-connector
+      namespace: connectors-git-demo
+    spec:
+      connectorClassName: git
+      address: https://github.com # Replace with your Git Server address
+      auth:
+        name: basicAuth
+        secretRef:
+          name: test-secret
+        params:
+        - name: repository
+          value: AlaudaDevops/connectors-git.git # Replace with the path to the repository accessible by the current credentials
+    EOF
+    ```
 
 3. Create a clone job using the connector
 
-```shell
-cat <<EOF | kubectl apply -f -
-apiVersion: batch/v1
-kind: Job
-metadata:
-  name: git-clone
-  namespace: connectors-git-demo
-spec:
-  template:
+    ```shell
+    cat <<EOF | kubectl apply -f -
+    apiVersion: batch/v1
+    kind: Job
+    metadata:
+      name: git-clone
+      namespace: connectors-git-demo
     spec:
-      restartPolicy: Never
-      containers:
-      - name: git
-        image: bitnami/git:2.47.1
-        imagePullPolicy: IfNotPresent
-        command:
-        - "git"
-        args: [ "clone", "--progress", "https://github.com/AlaudaDevops/connectors-git.git", "/tmp/demo" ] # Change to your repository address
-        volumeMounts:
-        - name: gitconfig
-          mountPath: /root/
-      volumes:
-      - name: gitconfig
-        csi:
-          readOnly: true
-          driver: connectors-csi
-          volumeAttributes:
-            connector.name: "test-connector"
-            configuration.names: "gitconfig"
-EOF
-```
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+          - name: git
+            image: bitnami/git:2.47.1
+            imagePullPolicy: IfNotPresent
+            command:
+            - "git"
+            args: [ "clone", "--progress", "https://github.com/AlaudaDevops/connectors-git.git", "/tmp/demo" ] # Change to your repository address
+            volumeMounts:
+            - name: gitconfig
+              mountPath: /root/
+          volumes:
+          - name: gitconfig
+            csi:
+              readOnly: true
+              driver: connectors-csi
+              volumeAttributes:
+                connector.name: "test-connector"
+                configuration.names: "gitconfig"
+    EOF
+    ```
 
 4. View the clone job execution result
 
-```shell
-kubectl logs -f job/git-clone -n connectors-git-demo
-```
+    ```shell
+    kubectl logs -f job/git-clone -n connectors-git-demo
+    ```
 
 Parameter descriptions are as follows:
 
