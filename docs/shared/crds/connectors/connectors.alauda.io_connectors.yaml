@@ -137,9 +137,6 @@ spec:
                     Condition defines a readiness condition for a Knative resource.
                     See: https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#typical-status-properties
                   properties:
-                    lastProbeTime:
-                      description: Last time we probed the condition.
-                      type: string
                     lastTransitionTime:
                       description: |-
                         LastTransitionTime is the last time the condition transitioned from one status to another.

@@ -31,7 +31,21 @@ For example, a `Harbor ConnectorClass` can be defined to support integration wit
 
 ## Connectors Proxy
 
-TODO:
+`ConnectorsProxy` is a core component of the `Connectors` system that provides a secure, secretless way to access integrated tools within a Kubernetes cluster. It acts as a proxy server that handles authentication and routing of requests to the actual tool endpoints.
+
+`ConnectorsProxy` enables clients to access tool resources without needing to handle authentication credentials directly. This significantly improves security by:
+
+- Eliminates the need to distribute tool credentials directly to clients by using short-lived tokens issued by ServiceAccount.
+- Preventing credential exposure in logs or environment variables
+- Centralizing credential management
+
+It supports various protocols and can handle different types of tool integrations:
+
+- HTTP/HTTPS protocols for REST APIs
+- Git protocol witch HTTP Basic Auth for code repositories server (e.g. GitHub, GitLab)
+- OCI protocol witch Bearar Token Authorization for OCI registries (e.g. Harbor, Docker Registry)
+
+More information: [Connectors Proxy](../concepts/connectors_proxy.mdx)
 
 ## Connectors API
 

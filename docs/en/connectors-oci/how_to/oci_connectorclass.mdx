@@ -107,8 +107,7 @@ spec:
 
 Health check configuration:
 
-- `repository`: Specifies the image repository used for health checks.
-  - Example: `library/ubuntu`.
+`repository`: Specifies the image repository used for health checks, example: `library/ubuntu`.
 
 ```yaml
 apiVersion: connectors.alauda.io/v1alpha1
@@ -145,7 +144,7 @@ After creating the Connector, the system will perform the following operations:
 1. Perform health checks using the image repository specified by `spec.auth.params[name=repository]`.
 2. Store the check results in the `status.conditions[type=AuthReady]` field.
 
-### Configuration Information {#configuration}
+### Configuration Information \{#configuration}
 
 `OCI ConnectorClass` provides the following configurations:
 
@@ -191,7 +190,7 @@ insecure-entitlements = [ "network.host", "security.insecure" ]
 
 You can mount this configuration information into Pods using connectors-csi, enabling keyless (Secretless) image pushing or pulling.
 
-### Proxy Information {#proxy}
+### Proxy Information \{#proxy}
 
 After creating the Connector, the system will:
 
