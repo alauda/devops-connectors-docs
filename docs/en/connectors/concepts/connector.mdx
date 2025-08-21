@@ -32,6 +32,42 @@ spec:
       name: github-secret
 ```
 
+## Connector Address
+
+The `address` field specifies the target tool's URL endpoint that the Connector will integrate with. It accepts both root URLs and URLs with path prefixes.
+
+### Basic URL Format
+
+For tools accessible at the root domain:
+
+```yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: git-github
+spec:
+  connectorClassName: git
+  address: "https://github.com"
+  # ...
+```
+
+### URL with Path Prefix
+
+For tools deployed behind reverse proxies or accessible via specific paths:
+
+```yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: git-gitlab
+spec:
+  connectorClassName: git
+  address: "https://internal-tool.com/gitlab/"
+  # ...
+```
+
+**Note**: When a path prefix is specified, it becomes the default base path for all operations including authentication and liveness checks performed by this Connector.
+
 ## Authentication Information
 
 The authentication information defines the credentials for accessing the tool. Depending on the type of tool, different authentication methods can be configured. This authentication method is defined in the `ConnectorClass`. For more details, refer to the [description of authentication information in ConnectorClass](./connectorclass.md).
@@ -276,38 +312,6 @@ spec:
     name: basic-auth
     secretRef:
       name: git-auth
-      namespace: default
-    params:
-    - name: repository
-      value: "org/repo.git"
-```
-
-### Git Connector with SSH Authentication
-
-```yaml
-##  Create SSH Key
-apiVersion: v1
-kind: Secret
-metadata:
-  name: git-ssh
-  namespace: default
-type: kubernetes.io/ssh-auth
-data:
-  ssh-privatekey: LS0tLS1CRUdJTi...  ##  Base64 encoded private key
----
-##  Create Connector
-apiVersion: connectors.alauda.io/v1alpha1
-kind: Connector
-metadata:
-  name: git-github-ssh
-  namespace: default
-spec:
-  connectorClassName: git
-  address: "git@github.com"
-  auth:
-    name: ssh-auth
-    secretRef:
-      name: git-ssh
       namespace: default
     params:
     - name: repository

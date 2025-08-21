@@ -7,64 +7,94 @@ sourceSHA: a3690e0a66ff0d323093db716163521315b340274eb2dbec21ada430d120870d
 
 # ConnectorsProxy
 
-ConnectorsProxy is a core component of the Connectors system that provides a secure, secretless way to access integrated tools within a Kubernetes cluster. It acts as a proxy server that handles authentication and routing of requests to the actual tool endpoints.
+`ConnectorsProxy` is a core component that provides secure, secretless access to integrated tools within Kubernetes clusters. It acts as a proxy server, handling authentication injection and request routing to target tool.
 
-## Features
+`ConnectorsProxy` enables clients to access tool resources without direct credential handling. This approach delivers significant security benefits:
 
-### Secretless Access
+- **Secretless Access**: Eliminates the need to distribute tool credentials directly to clients by using short-lived tokens issued by ServiceAccount. This prevents credential exposure in clients like logs or environment variables.
+- **Centralized Credential Management**: All tool credentials are managed centrally by connectors, and no need to distribute credentials to each client.
 
-`ConnectorsProxy` enables clients to access tool resources without needing to handle authentication credentials directly. This significantly improves security by:
+The platform supports both built-in and custom proxy implementations to accommodate diverse tool authentication requirements.
 
-- Eliminates the need to distribute tool credentials directly to clients by using short-lived tokens issued by ServiceAccount.
-- Preventing credential exposure in logs or environment variables
-- Centralizing credential management
+## Built-in Connectors Proxy
 
-### Automatic Service Creation
+The built-in `ConnectorsProxy` implementation provides comprehensive HTTP/HTTPS protocol support with Basic Auth and Bearer Token authentication methods. It offers both forward proxy and reverse proxy capabilities.
 
-When a Connector is created, ConnectorsProxy automatically:
+### Forward Proxy
 
-1. Creates a Kubernetes Service for proxy purposes
-2. Assigns a proxy address in the format:
-   - host resolver: `http://c-{connector-name}.{namespace}.svc.cluster.local`
-   - path resolver: `http://c-{connector-name}.{namespace}.svc.cluster.local/namespaces/{namespace}/connectors/{connector-name}`
-3. Records the proxy address in the Connector's `status.proxy.httpAddress` field
+Operates as a standard HTTP proxy using `http_proxy` and `https_proxy` environment variables. When the proxy receives client requests, it:
 
-### Protocol Support
+1. Authenticates the client
+2. Injects tool credentials specified in the Connector into the request
+3. Forwards the authenticated request to the target tool
 
-ConnectorsProxy supports various protocols and can handle different types of tool integrations:
+### Reverse Proxy
 
-- HTTP/HTTPS protocols for REST APIs
-- Git protocol witch HTTP Authorization for code repositories
-- OCI protocol witch Bearar Token Authorization for container registries
+Clients access tools by connecting directly to the Connector Proxy Address instead of the original tool URL. The proxy:
 
-## Usage
+1. Receives client requests at the proxy endpoint
+2. Performs client authentication
+3. Injects tool credentials specified in the Connector and forwards requests to the backend tool
 
-### Accessing Tool Resources
+## Custom Connectors Proxy
 
-To use ConnectorsProxy, clients should:
+For tools requiring specialized authentication mechanisms, custom proxy implementations can be developed. These proxies can be implemented as either forward or reverse proxies based on specific requirements.
 
-1. Use the proxy address instead of the original tool address
-2. Configure their clients to work with the proxy (if required)
-3. Access resources through the proxy endpoint
+**Example**: The OCI Connector uses a custom OCI Plugin Proxy that supports OCI protocol with Bearer Token authorization for registries like Harbor and Docker Registry.
 
-Example for an OCI Registry:
+User can develop a custom proxy server and specified in the connectorclass.
 
-```yaml
-# Original image address
-harbor.example.com/test/abc:v1
+## Connector Proxy Address
 
-# Proxied address(host resolver)
-c-harbor-connector.default.svc.cluster.local/test/abc:v1
+Each `Connector` has a unique proxy address for accessing tool resources. The proxy address is stored in the `status.proxy.httpAddress` field:
 
-# Proxied address(path resolver)
-c-harbor-connector.default.svc.cluster.local/namespaces/default/connectors/harbor/test/abc:v1
+``` yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: github
+spec:
+  address: https://github.com/kubernetes/kubernetes.git
+  auth:
+    name: basicAuth
+    params:
+    - name: repository
+      value: kubernetes/kubernetes.git
+  connectorClassName: git
+status:
+  # . . .
+  proxy:
+    httpAddress:
+      url: http://c-github.default.svc.cluster.local
 ```
 
-### Configuration
+Clients use this proxy address to access resources within the tool specified by the Connector.
 
-ConnectorsProxy can be configured through the ConnectorClass definition:
+For more fields about connectorclass, please refer to [ConnectorClass](./connectorclass.mdx#connectorclass_proxy)
 
-```yaml
+## Use with Connectors CSI Driver
+
+`Connectors Proxy` works seamlessly with the Connectors CSI Driver to provide a complete secretless access solution:
+
+1. The Connectors CSI Driver mounts necessary configuration files that contains the proxy address and proxy authentication information
+2. `Connectors Proxy` handles authentication injection and request routing to target tool.
+3. Clients can access resources without credential management.
+
+This integration is particularly useful in scenarios like:
+
+- Git clone operations in Kubernetes Jobs
+- Image push/pull operations in Tekton Pipelines
+- API access in custom workloads
+
+For complete secretless access scenarios using `Connectors Proxy` and `Connectors CSI Driver`, see [How to use the Git Connector to complete Git clone without storing credentials on the client](../../connectors-git/how_to/use-git-connector-in-clone-job.mdx)
+
+## Deep Understanding of Connectors Proxy \{#deeps-understanding-connectors-proxy}
+
+### Specifying Proxy in ConnectorClass
+
+You can specify the proxy server to use in the ConnectorClass:
+
+``` yaml
 apiVersion: connectors.alauda.io/v1alpha1
 kind: ConnectorClass
 metadata:
@@ -77,25 +107,51 @@ spec:
       namespace: connectors-system
 ```
 
-## Integration with CSI Driver
+Connectors created from this ConnectorClass will use `connectors-proxy-service` as their real proxy server.
 
-ConnectorsProxy works seamlessly with the Connectors CSI Driver to provide a complete secretless access solution:
+**Built-in Proxy Configuration:**
 
-1. The CSI Driver mounts necessary configuration files
-2. ConnectorsProxy handles the actual proxying of requests
-3. Clients can access resources without credential management
+``` yaml
+ref:
+  kind: Service
+  name: connectors-proxy-service
+  namespace: <connector-namespace> # Namespace where Connector components are deployed
+```
 
-This integration is particularly useful in scenarios like:
+**Custom Proxy Configuration:**
 
-- Git clone operations in Kubernetes Jobs
-- Image push/pull operations in Tekton Pipelines
-- API access in custom workloads
+Custom proxies can point to any address capable of handling proxy requests.
 
-## Security Considerations
+### Connectors Proxy Authentication
 
-ConnectorsProxy enhances security by:
+Clients must provide authentication when using Connectors Proxy. Authentication uses ServiceAccount tokens, and the ServiceAccount must have read permissions for the target Connector.
 
-1. Centralizing credential management
-2. Preventing credential exposure in workloads
-3. Supporting TLS encryption for proxy connections
-4. Implementing proper authentication and authorization
+**Built-in Forward Proxy Authentication**
+
+Authentication credentials are passed via `Proxy-Authorization` header:
+
+- **Username**: `<connector-namespace>/<connector-name>`
+- **Password**: ServiceAccount token with read permissions for the Connector
+
+**Example**: For a `github` Connector in the `default` namespace:
+
+```bash
+export http_proxy=http://default%2Fgithub:xxxxxxx@c-github.default.svc.cluster.local
+```
+
+Requests through this proxy automatically inject the `default/github` connector's authentication credentials when accessing GitHub services.
+
+**Built-in Reverse Proxy Authentication**
+
+Authentication credentials are passed via Basic Auth:
+
+- **Username**: Any value
+- **Password**: ServiceAccount token with read permissions for the Connector
+
+**Example**: For a `github` Connector in the `default` namespace:
+
+```bash
+curl -u any:sa-token-xxxxxxx "http://c-github.default.svc.cluster.local/xxx"
+```
+
+The proxy automatically injects the `default/github` connector's authentication credentials when forwarding requests to GitHub services.

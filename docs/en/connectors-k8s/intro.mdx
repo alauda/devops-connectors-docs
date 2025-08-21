@@ -1,0 +1,27 @@
+---
+weight: 10
+---
+
+# Introduction
+
+## What is Kubernetes Connector
+
+Kubernetes Connector is a specialized connector component that enables secure and convenient integration with Kubernetes clusters, allowing users to interact with Kubernetes clusters secretlessly in clients like `kubectl`.
+
+Once Kubernetes Connector Component is deployed, users can:
+
+- Create Kubernetes connectors to integrate with various Kubernetes clusters
+- Perform kubernetes operations in CI/CD pipelines or kubernetes workloads without directly handling credentials.
+
+## Application Scenarios
+
+The Kubernetes Connector allows you to perform kubernetes operations securely by:
+
+- Managing credentials centrally rather than hardcoding them in clients
+- Automatically injecting authentication during the kubernetes operations
+
+This approach is particularly useful for:
+
+- `CI/CD pipelines` or `kubernetes jobs` requiring access kubernetes resources
+- Teams sharing kubernetes cluster access without sharing credentials
+- Environments requiring centralized management of kubernetes credentials without distributing credentials to each client

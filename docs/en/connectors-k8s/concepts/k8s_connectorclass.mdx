@@ -1,0 +1,234 @@
+---
+weight: 20
+---
+
+# Kubernetes Connector
+
+The Kubernetes connector is a platform-agnostic connector that you can use to connect to any Kubernetes cluster.
+
+You can use the Kubernetes Connector to securely perform kubernetes operations in CICD pipelines, or use it in kubernetes workloads to perform kubernetes operations without credentials.
+
+Additionally, you can centralize the management of kubernetes access configurations across namespaces, avoiding the need to repeat the kubernetes credentials in each namespace.
+
+## Overview
+
+This document covers:
+
+- **Integration Requirements**: Prerequisites for target Kubernetes clusters
+- **Creating Kubernetes connector**
+- **Advanced Features**: Proxy capabilities and configuration capabilities about Kubernetes connector
+
+## Integration Requirements
+
+Target Kubernetes clusters must meet the following prerequisites:
+
+- **CNCF Certification**: The cluster must be [CNCF Certified Kubernetes](https://www.cncf.io/training/certification/software-conformance/) compliant
+
+## Creating a simple Kubernetes connector
+
+Here's how to create a basic Kubernetes Connector:
+
+```yaml
+# Authentication Secret
+apiVersion: v1
+kind: Secret
+metadata:
+  name: k8s-secret
+type: connectors.cpaas.io/bearer-token
+stringData:
+  token: eyJhbGciOiJSUzI1NiIxxxxxxxx # Replace with your actual bearer token
+---
+# Kubernetes Connector
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: k8s-connector
+spec:
+  connectorClassName: k8s
+  address: https://192.168.1.100:6443
+  auth:
+    name: bearerTokenAuth
+    secretRef:
+      name: k8s-secret
+```
+
+## Fields Reference
+
+**spec.connectorClassName**:
+
+`k8s` (constant), specifies the ConnectorClass name for Kubernetes integration.
+
+**spec.address**:
+
+Target Kubernetes cluster API server endpoint, for example: `https://192.168.1.100:6443`.
+
+It also supports url with path, for example: `https://192.168.1.100:6443/kubernetes/global`, it is useful when the kubernetes cluster API server is exposed behind a proxy.
+
+**spec.auth**:
+
+specifies the authentication method of the kubernetes cluster
+
+- `spec.auth.name`: should be `bearerTokenAuth` for kubernetes connector.
+
+- `spec.auth.secretRef`: specifies the secret that contains the authentication information of the kubernetes cluster, the secret should be created in the same namespace as the connector.
+
+**Optional Metadata fields**:
+
+- `cpaas.io/description`: Description information for the kubernetes connector, for example:
+
+  ```yaml
+  apiVersion: connectors.alauda.io/v1alpha1
+  kind: Connector
+  metadata:
+    name: k8s-connector
+    annotations:
+      cpaas.io/description: "Connect to team development kubernetes cluster"
+  ```
+
+## Capabilities of Kubernetes Connector
+
+### Authentication
+
+The Kubernetes connector supports the following authentication types:
+
+- `bearerTokenAuth`: Bearer token-based authentication, corresponding secret type: `connectors.cpaas.io/bearer-token`
+
+For example:
+
+```yaml
+apiVersion: v1
+stringData:
+  token: your-k8s-bearer-token
+kind: Secret
+metadata:
+  name: k8s-secret
+type: connectors.cpaas.io/bearer-token
+```
+
+If the secret is not correct, the `status.conditions` field in the kubernetes connector will show the error message.
+
+```yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: k8s-connector
+spec: {}
+status:
+  conditions:
+    - type: Ready
+      status: False
+      reason: "xxxxx"
+      message: "xxxx"
+```
+
+For comprehensive status information, see [Connector Status Documentation](../../connectors/concepts/connector.mdx#status-information).
+
+### Proxy and Kubeconfig Configuration
+
+To provide clients with the ability to access kubernetes resources without credentials, the Kubernetes connector provides a proxy server to automatically inject authentication information.
+
+Clients can use this proxy server to access kubernetes resources without needing to configure credentials on the client side.
+
+To simplify usage, the Kubernetes connectorclass provides `kubeconfig` files that can be mounted into Pods via CSI. In the Pod, when executing kubernetes operations, the proxy service can be automatically inject authentication information.
+
+#### Proxy Address
+
+Upon Connector creation, the system automatically provisions a proxy service for the target cluster.
+
+The proxy endpoint is recorded in `status.proxy.httpAddress`:
+
+For example:
+
+```yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: k8s-connector
+spec:
+  # connector spec fields
+status:
+  conditions:
+    # status conditions
+  proxy:
+    httpAddress:
+      url: http://c-k8s-connector.default.svc.cluster.local
+```
+
+#### kubeconfig configuration file {#kubeconfig-configuration-file}
+
+The Kubernetes connector provides the following configuration:
+
+**kubeconfig**:
+
+- Provides a `kubeconfig` configuration file. Combined with the connector-csi-driver, this configuration file will be mounted into the Pod, allowing access to the kubernetes cluster through the proxy without needing to configure credentials on the client side.
+
+Example of the configuration file generated in the Pod:
+
+``` yaml
+apiVersion: v1
+kind: Config
+clusters:
+- name: k8s
+  cluster:
+    server: https://192.168.1.100:6443
+    proxy-url: http://connector-namespace%2Fconnector-name:temporary-token@c-k8s-connector.connector-namespace.svc.cluster.local
+    certificate-authority-data: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0xxxxxQo=
+contexts:
+- name: k8s
+  context:
+    cluster: k8s
+    user: k8s
+users:
+- name: k8s
+  user:
+    token: fake-token
+current-context: k8s
+```
+
+**Key Fields**:
+- **`server`**: Target Kubernetes API server endpoint
+- **`proxy-url`**: Connector proxy address with embedded proxy authentication
+- **`certificate-authority-data`**: Proxy server certificate for TLS validation
+
+For detailed proxy mechanics, see [How It Works](../quick_start.mdx#what-happens-under-the-hood) in the Quick Start guide.
+
+#### Using Connectors CSI Driver to mount kubeconfig file \{#using-connectors-csi-driver-to-mount-kubeconfig-file}
+
+The Kubernetes connector provides a `kubeconfig` configuration file that can be mounted into the Pod via Connector CSI Driver.
+
+For example:
+
+``` yaml
+spec:
+  volumes:
+  - name: kubeconfig
+    csi:
+      readOnly: true
+      driver: connectors-csi
+      volumeAttributes:
+        connector.name: "k8s-connector"
+        configuration.names: "kubeconfig"
+```
+
+parameter descriptions:
+
+- `csi.readOnly`: Fixed value `true`
+- `csi.driver`: The Connector CSI Driver, fixed as `connectors-csi`.
+- `csi.volumeAttributes`: CSI Volume attributes
+  - `connector.name`: Name of the Kubernetes Connector
+  - `connector.namespace`: Namespace of the Kubernetes Connector; if not specified, the Pod's namespace is used
+  - `configuration.names`: Configuration name, provide by the Kubernetes Connector. As above, `kubeconfig` is supported.
+
+For detailed information about how to use the `kubeconfig` file in the Pod by connectors-csi-driver, please refer to [Using Kubernetes Connectors in kubernetes jobs](../quick_start.mdx)
+
+## Further Reading
+
+- [Using Kubernetes Connectors in kubernetes jobs](../quick_start.mdx)
+- [Using Kubernetes Connectors in tektoncd pipelines](../how_to/using-in-tekton-task.mdx)
+
+## References
+
+- [Concepts of Connector](../../connectors/concepts/connector.mdx)
+- [Connector Proxy](../../connectors/concepts/connectors_proxy.mdx)
+- [Connector CSI Driver](../../connectors/concepts/connectors_csi.mdx)
+- [Kubernetes CSI Volume](https://kubernetes.io/docs/concepts/storage/volumes/#csi)

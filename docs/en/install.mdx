@@ -15,10 +15,10 @@ The Connectors system has a modular architecture with the following components:
 - **Connectors Operator**: The central management component that handles the deployment and lifecycle of other connector components
 - **ConnectorsCore**: Required core component that provides the foundation for all connector types
 - **ConnectorsGit**: Optional component that adds support for Git services (GitHub, GitLab, etc.)
-- **ConnectorsOCI**: Optional component that adds support for container registries
+- **ConnectorsOCI**: Optional component that adds support for container registries (Harbor, Docker Registry, etc.)
+- **ConnectorsK8S**: Optional component that adds support for Kubernetes clusters
 
 This document provides instructions for installing and configuring the Connectors system.
-
 
 ### Prerequisites
 
@@ -279,6 +279,42 @@ To add support for container registries, like Harbor, Docker Registry, etc., ins
    kubectl get connectorclass oci
    ```
 
+### Install ConnectorsK8S (Optional)
+
+To add support for integration with Kubernetes clusters, install the ConnectorsK8S component:
+
+1. Create the ConnectorsK8S custom resource:
+
+   ClusterIP Expose:
+   ```bash
+   cat <<EOF | kubectl apply -f -
+   apiVersion: operator.connectors.alauda.io/v1alpha1
+   kind: ConnectorsK8S
+   metadata:
+     name: connectors-k8s
+     namespace: connectors-system
+   spec: {}
+   EOF
+   ```
+
+2. Monitor the deployment progress:
+
+   ```bash
+   kubectl get connectorsk8s -n connectors-system
+   ```
+
+3. Wait until the status shows that ConnectorsOCI is ready:
+
+   ```bash
+   kubectl wait --for=condition=Ready connectorsk8s/connectors-k8s -n connectors-system --timeout=300s
+   ```
+
+4. Verify that the Kubernetes ConnectorClass is ready:
+
+   ```bash
+   kubectl get connectorclass k8s
+   ```
+
 ## Uninstall Connectors
 
 To uninstall the Connectors system, remove components in the reverse order of installation.
@@ -291,6 +327,9 @@ To uninstall the Connectors system, remove components in the reverse order of in
 
    # Delete ConnectorsGit
    kubectl delete connectorsgit --all -n connectors-system
+
+   # Delete ConnectorsK8S
+   kubectl delete connectorsk8s --all -n connectors-system
    ```
 
 2. Delete the core component:
@@ -305,19 +344,7 @@ To uninstall the Connectors system, remove components in the reverse order of in
    kubectl delete -n connectors-operator subscription.operators.coreos.com/connectors-operator
    ```
 
-4. Delete the CRDs:
-
-   **Warning: This will delete all user data about connectors**
-
-   ```bash
-   kubectl delete crd connectors.connectors.alauda.io
-   kubectl delete crd connectorclasses.connectors.alauda.io
-   kubectl delete crd connectorscore.operator.connectors.alauda.io
-   kubectl delete crd connectorsgit.operator.connectors.alauda.io
-   kubectl delete crd connectorsoci.operator.connectors.alauda.io
-   ```
-
-6. Delete the namespaces:
+4. Delete the namespaces:
 
    ```bash
    kubectl delete namespace connectors-system
