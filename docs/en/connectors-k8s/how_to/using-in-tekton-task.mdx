@@ -1,0 +1,55 @@
+---
+weight: 10
+title: Using Kubernetes Connector in Tekton Task
+---
+
+# Using Kubernetes Connector in Tekton Task
+
+Using Kubernetes Connector in Tekton Tasks enables centralized management of tool integration information and secure access to Kubernetes clusters during Tekton Task execution.
+
+## Requirements for Tekton Task
+
+Not all Tekton Tasks can use Kubernetes Connector.
+
+Kubernetes Connector essentially injects temporary Kubernetes credentials through a Connector CSI Driver. It provides a configuration named `kubeconfig` that generates a `kubeconfig` file with temporary authentication.
+
+Therefore, Tekton Tasks must meet the following requirements to use Kubernetes Connector:
+
+**Support mounting a `kubeconfig` file via Workspace, and the Workspace must support providing only the `kubeconfig` file**
+
+## Usage Instructions
+
+After confirming that your Tekton Task can use Kubernetes Connector, you can add Kubernetes Connector to the TaskRun YAML file:
+
+For example:
+
+```yaml
+apiVersion: tekton.dev/v1
+kind: TaskRun
+metadata:
+  name: k8s-connector-demo
+spec:
+  # .  . .
+  workspaces:
+  - name: kubeconfig
+    csi:
+      driver: connectors-csi
+      readOnly: true
+      volumeAttributes:
+        connector.name: k8s-connector
+        connector.namespace: ""
+        configuration.names: "kubeconfig"
+```
+
+For workspaces parameters, please refer to [Using Connectors CSI Driver to mount kubeconfig file](../concepts/k8s_connectorclass.mdx#using-connectors-csi-driver-to-mount-kubeconfig-file) in Kubernetes Connector Concepts document.
+
+For more information about Connectors CSI Driver, please refer to [Connectors CSI Configuration](../../connectors/concepts/connectors_csi.mdx).
+
+## Further Reading
+
+- [Using Kubernetes Connector in kubernetes jobs](../quick_start.mdx)
+
+## References
+
+- [Using CSI Volumes in Tekton](https://tekton.dev/docs/pipelines/workspaces/#csi)
+- [Connectors CSI Configuration](../../connectors/concepts/connectors_csi.mdx)

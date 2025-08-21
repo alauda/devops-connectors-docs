@@ -31,19 +31,26 @@ For example, a `Harbor ConnectorClass` can be defined to support integration wit
 
 ## Connectors Proxy
 
-`ConnectorsProxy` is a core component of the `Connectors` system that provides a secure, secretless way to access integrated tools within a Kubernetes cluster. It acts as a proxy server that handles authentication and routing of requests to the actual tool endpoints.
+`ConnectorsProxy` is a core component that provides secure, secretless access to integrated tools within Kubernetes clusters. It acts as a proxy server, handling authentication injection and request routing to target tool.
 
-`ConnectorsProxy` enables clients to access tool resources without needing to handle authentication credentials directly. This significantly improves security by:
+`ConnectorsProxy` enables clients to access tool resources without direct credential handling. This approach delivers significant security benefits:
 
-- Eliminates the need to distribute tool credentials directly to clients by using short-lived tokens issued by ServiceAccount.
-- Preventing credential exposure in logs or environment variables
-- Centralizing credential management
+- **Secretless Access**: Eliminates the need to distribute tool credentials directly to clients by using short-lived tokens issued by ServiceAccount. This prevents credential exposure in clients like logs or environment variables.
+- **Centralized Credential Management**: All tool credentials are managed centrally by connectors, and no need to distribute credentials to each client.
 
-It supports various protocols and can handle different types of tool integrations:
+The platform supports both built-in and custom proxy implementations to accommodate diverse tool authentication requirements.
 
-- HTTP/HTTPS protocols for REST APIs
-- Git protocol witch HTTP Basic Auth for code repositories server (e.g. GitHub, GitLab)
-- OCI protocol witch Bearar Token Authorization for OCI registries (e.g. Harbor, Docker Registry)
+### Built-in Connectors Proxy
+
+The built-in implementation provides comprehensive HTTP/HTTPS protocol support with Basic Auth and Bearer Token authentication methods. It offers both forward and reverse proxy capabilities for maximum flexibility.
+
+**Used by ConnectorClass**: K8s ConnectorClass, Git ConnectorClass
+
+### Custom Connectors Proxy
+
+For tools requiring specialized authentication mechanisms, custom proxy implementations can be developed. 
+
+**Example**: The OCI ConnectorClass utilizes a custom OCI Plugin Proxy supporting OCI protocol with Bearer Token authorization for registries like Harbor and Docker Registry.
 
 More information: [Connectors Proxy](../concepts/connectors_proxy.mdx)
 

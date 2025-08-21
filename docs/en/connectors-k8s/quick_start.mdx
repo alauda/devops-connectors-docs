@@ -1,0 +1,285 @@
+---
+weight: 30
+---
+
+# Quick Start
+
+This document will help you quickly understand how to create a kubernetes connector to connect to a kubernetes cluster and perform `kubectl` operations securely without directly handling credentials.
+
+
+## Estimated Reading Time
+
+15 minutes
+
+## Prerequisites
+
+- Kubernetes cluster with Connectors system installed (Operator, Core and K8S components). See the [Installation Guide](../install) for details on installing these components.
+- kubernetes cluster apiserver address and bearer token has list kubernetes pod permission
+- Basic knowledge of Kubernetes
+
+## Process Overview
+
+| Step | Operation                             | Description                                                     |
+| ---- | ------------------------------------- | --------------------------------------------------------------- |
+| 1    | Create Namespace                      | Set up a dedicated namespace for the demonstration              |
+| 2    | Configure K8s Credentials & Connector | Create authentication secret and kubernetes connector resource  |
+| 3    | Deploy a Kubernetes Job for testing   | Create a job that performs kubectl operations via the connector |
+| 4    | Verify Results                        | Validate successful execution of kubectl operations             |
+
+## Steps to Operate
+
+### Step 1: Create Namespace
+
+Create a dedicated namespace for this demonstration:
+
+```bash
+kubectl create ns k8s-connector-demo
+```
+
+### Step 2: Create K8S Credentials and Connector
+
+Create both the Secret containing k8s credentials and the kubernetes connector resource. For more detailed information about creating and configuring connectors, please refer to the [Connectors Quick Start Guide](../../connectors/quick_start).
+
+```bash
+cat <<EOF | kubectl apply -n k8s-connector-demo -f -
+kind: Secret
+apiVersion: v1
+metadata:
+  name: k8s-secret
+type: connectors.cpaas.io/bearer-token
+stringData:
+  token: eyJhbGciOiJSUzI1NiIxxxxxxxx # Replace with your k8s bearer token
+---
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: k8s-connector
+spec:
+  connectorClassName: k8s
+  address: https://192.168.1.100:6443 # Replace with your k8s apiserver address
+  auth:
+    name: bearerTokenAuth
+    secretRef:
+      name: k8s-secret
+EOF
+```
+
+Verify that the connector is in "Ready" status:
+
+```bash
+kubectl get connector k8s-connector -n k8s-connector-demo
+```
+
+The output should show:
+```
+NAME           CLASS   ADDRESS            READY   AGE
+k8s-connector  k8s     https://192.168.1.100:6443 True    1m
+```
+
+### Step 3: Create a Job to Perform Kubectl Operations
+
+Create a job that uses the connector to perform k8s operations:
+
+```bash
+cat <<EOF | kubectl apply -n k8s-connector-demo -f -
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: k8s-access
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: kubectl
+        image: bitnami/kubectl:1.30.1 # Replace with your image contains kubectl
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: KUBECONFIG
+          value: /opt/kube/kubeconfig
+        command:
+        - "kubectl"
+        args: [ "get", "pods", "-v=5", "--all-namespaces" ]  # Replace with your kubectl operations
+        volumeMounts:
+        - name: kubeconfig
+          mountPath: /opt/kube
+      volumes:
+      - name: kubeconfig
+        csi:
+          readOnly: true
+          driver: connectors-csi
+          volumeAttributes:
+            connector.name: "k8s-connector"
+            configuration.names: "kubeconfig"
+EOF
+```
+
+Key parameters in volumeAttributes:
+
+- `connector.name`: The name of your kubernetes connector
+- `configuration.names`: Set to "kubeconfig", which references a specific configuration template defined in the kubernetes connectorClass. This template is used to generate the ".kubeconfig" file with the appropriate settings for authentication.
+
+### Step 4: Verify Operation
+
+Check the job's logs to confirm the kubectl operations were successfully performed:
+
+```bash
+kubectl logs -f job/k8s-access -n k8s-connector-demo
+```
+
+You should see the kubectl operations completing successfully and list all pods in the cluster without any secret configuration in the job.
+
+## What happens under the hood \{#what-happens-under-the-hood}
+
+The kubernetes connector works by:
+
+1. Creating a proxy service that sits between your workloads and the target k8s cluster
+2. Injecting authentication information when requests pass through the proxy
+3. Providing `kubeconfig` files for client to perform kubectl operations with the proxy
+
+To demonstrate this mechanism, let's inspect the generated kubeconfig file:
+
+```bash
+cat <<EOF | kubectl apply -n k8s-connector-demo -f -
+apiVersion: v1
+kind: Pod
+metadata:
+  name: inspect-k8s-access
+spec:
+  restartPolicy: Never
+  containers:
+  - name: kubectl
+    image: bitnami/kubectl:1.30.1 # Replace with your image contains kubectl
+    command: ["sleep", "3600"]
+    env:
+    - name: KUBECONFIG
+      value: /opt/kube/kubeconfig
+    volumeMounts:
+    - name: kubeconfig
+      mountPath: /opt/kube
+  volumes:
+  - name: kubeconfig
+    csi:
+      readOnly: true
+      driver: connectors-csi
+      volumeAttributes:
+        connector.name: "k8s-connector"
+        configuration.names: "kubeconfig"
+EOF
+```
+
+View the generated `kubeconfig` file:
+
+```bash
+kubectl exec -it inspect-k8s-access -n k8s-connector-demo -- cat /opt/kube/kubeconfig
+```
+
+Example output:
+
+``` yaml
+apiVersion: v1
+kind: Config
+clusters:
+- name: k8s
+  cluster:
+    server: https://192.168.1.100:6443
+    proxy-url: http://k8s-connector-demo%2Fk8s-connector:eyJhbGcxxxx@c-k8s-connector.k8s-connector-demo.svc.cluster.local
+    certificate-authority-data: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0xxxxxQo=
+contexts:
+- name: k8s
+  context:
+    cluster: k8s
+    user: k8s
+users:
+- name: k8s
+  user:
+    token: fake-token
+current-context: k8s
+```
+
+### Key Observations
+
+- The `server` field matches the Kubernetes API server address specified in the Connector
+- Additional proxy related fields enable proxy-based authentication, like `cluster.proxy-url` and `cluster.certificate-authority-data`.
+- The `kubeconfig` file contains no original bearer tokens and mount to the Pod via Connectors CSI Driver.
+
+### Proxy Configuration Fields
+
+- **`cluster.proxy-url`**: The connector proxy address from `status.proxy.httpAddress` field in the connector named `k8s-connector`:
+
+  ```bash
+  kubectl get connector k8s-connector -n k8s-connector-demo -o yaml
+  ```
+  The output should show:
+
+  ``` yaml
+  apiVersion: connectors.alauda.io/v1alpha1
+  kind: Connector
+  metadata:
+    name: k8s-connector
+    namespace: k8s-connector-demo
+  spec:
+    # ...
+  status:
+    # ...
+    proxy:
+      httpAddress:
+        url: http://c-k8s-connector.k8s-connector-demo.svc.cluster.local
+  ```
+
+  the `cluster.proxy-url` contains the proxy authentication information:
+
+  - **username**: `<connector-namespace>/<connector-name>` format, the connector namespace and name
+  - **password**: Temporary ServiceAccount token automatically generated by the connector (expires after 30 minutes) (not the original k8s cluster token)
+
+- **`cluster.certificate-authority-data`**: CA certificate data for proxy server TLS validation, the client should trust the proxy server's certificate.
+
+### Authentication Flow
+
+The `inspect-k8s-access` pod contains no original cluster tokens. When kubectl makes HTTPS requests to the Kubernetes API server, the proxy server intercepts these requests, injects authentication credentials from the `k8s-connector`, and forwards the authenticated requests to the backend API server.
+
+### Kubeconfig Volume
+
+The `kubeconfig` file is mounted into the Pod via Connectors CSI Driver.
+
+``` yaml
+  volumes:
+  - name: kubeconfig
+    csi:
+      readOnly: true
+      driver: connectors-csi
+      volumeAttributes:
+        connector.name: "k8s-connector"
+        configuration.names: "kubeconfig"
+```
+
+For volumes parameters, please refer to [Using Connectors CSI Driver to mount kubeconfig file](./concepts/k8s_connectorclass.mdx#using-connectors-csi-driver-to-mount-kubeconfig-file) in Kubernetes Connector Concepts document.
+
+## Troubleshooting
+
+If your kubectl operation fails, check the following:
+
+1. **Connector Status**: Ensure the connector is in "Ready" state:
+
+   ```bash
+   kubectl describe connector k8s-connector -n k8s-connector-demo
+   ```
+
+2. **Verify the connectors deployment status**: ensure all components are deployed and in "Ready" state
+
+   ```bash
+   kubectl get pods -n <connector-component-namespace>
+   ```
+
+## Further Reading
+
+After successfully performing kubectl operations using the kubernetes connector, you can:
+
+- Change kubectl command to what you want, like `kubectl create`, `kubectl apply`
+- Learn more about [Concepts of Kubernetes Connectors](./concepts/k8s_connectorclass.mdx)
+- [Using Kubernetes Connectors in CI/CD pipelines](./how_to/using-in-tekton-task.mdx)
+
+
+## References
+
+- [Kubernetes Connector Installation Guide](../install.mdx)
