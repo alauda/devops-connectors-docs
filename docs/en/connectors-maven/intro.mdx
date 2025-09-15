@@ -1,0 +1,27 @@
+---
+weight: 10
+---
+
+# Introduction
+
+## What is Maven Connector
+
+Maven Connector is a specialized connector component that enables secure and convenient integration with Maven Registry, allowing users to interact with Maven Registry secretlessly in clients like `mvn`.
+
+Once Maven Connector Component is deployed, users can:
+
+- Create Maven connectors to integrate with various Maven Registries (Maven Central, Maven repository hosted by Nexus, Artifactory, etc.)
+- Perform `mvn` operations in CI/CD pipelines or kubernetes workloads without directly handling credentials.
+
+## Application Scenarios
+
+The Maven Connector allows you to perform `mvn` operations securely by:
+
+- Managing credentials centrally rather than hardcoding them in clients
+- Automatically injecting authentication during the `mvn` operations
+
+This approach is particularly useful for:
+
+- `CI/CD pipelines` or `kubernetes jobs` requiring access Maven Registry
+- Teams sharing Maven Registry access without sharing credentials
+- Environments requiring centralized management of Maven Registry credentials without distributing credentials to each client

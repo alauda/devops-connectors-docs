@@ -1,0 +1,327 @@
+---
+weight: 30
+---
+
+# Quick Start
+
+This document will help you quickly understand how to create a maven connector to connect to a maven registry and perform `mvn` operations securely without directly handling credentials.
+
+We will create a maven connector, and use it to perform `mvn deploy` without directly handling credentials in client side.
+
+## Estimated Reading Time
+
+15 minutes
+
+## Prerequisites
+
+- Kubernetes cluster with Connectors system installed (Operator, ConnectorsCore and ConnectorsMaven components). See the [Installation Guide](../install) for details on installing these components.
+- maven registry address (snapshots) and credentials
+- Basic knowledge of Kubernetes and Maven
+
+## Process Overview
+
+| Step | Operation                                        | Description                                               |
+| ---- | ------------------------------------------------ | --------------------------------------------------------- |
+| 1    | Create Namespace                                 | Set up a dedicated namespace for the demonstration        |
+| 2    | Configure Maven Registry Credentials & Connector | Create authentication secret and maven connector resource |
+| 3    | Create a Maven Job for executing  `mvn deploy`   | Create a job that performs `mvn deploy` via the connector |
+| 4    | Verify Results                                   | Validate successful execution of `mvn deploy` operations  |
+
+## Steps to Operate
+
+### Step 1: Create Namespace
+
+Create a dedicated namespace for this demonstration:
+
+```bash
+kubectl create ns connectors-maven-demo
+```
+
+### Step 2: Create Maven Registry Credentials and Connector
+
+Create both the Secret containing maven registry credentials and the maven connector resource. Your maven registry should be a snapshots repository.
+
+For more detailed information about creating and configuring connectors, please refer to the [Connectors Quick Start Guide](../../connectors/quick_start).
+
+```bash
+cat <<EOF | kubectl apply -n connectors-maven-demo -f -
+kind: Secret
+apiVersion: v1
+metadata:
+  name: maven-registry-secret
+type: kubernetes.io/basic-auth
+stringData:
+  username: your-registry-username # Replace with your Maven registry username
+  password: your-registry-password # Replace with your Maven registry password
+---
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: maven-connector
+spec:
+  connectorClassName: maven
+  address: https://nexus.example.com/repository/maven-snapshots # Replace with your Maven snapshots repository address, we will deploy jar to this repository.
+  auth:
+    name: basicAuth
+    secretRef:
+      name: maven-registry-secret
+EOF
+```
+
+Verify that the connector is in "Ready" status:
+
+```bash
+kubectl get connector maven-connector -n connectors-maven-demo
+```
+
+The output should show:
+
+```
+NAME              CLASS   ADDRESS                                                    READY   REASON   AGE
+maven-connector   maven   https://nexus.example.com/repository/maven-snapshots   True             10s
+```
+
+### Step 3: Create a Job to Perform `mvn deploy`
+
+Create a job that uses the connector to perform maven operations:
+
+```bash
+cat <<'EOF' | kubectl apply -n connectors-maven-demo -f -
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mvn-deploy
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: mvn
+        image: docker.io/library/maven:3.9.11-eclipse-temurin-24-alpine # Replace with your image contains maven
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: MAVEN_OPTS
+          value: -Dmaven.resolver.transport=wagon
+        command:
+        - "sh"
+        - "-c"
+        - |
+          set -ex
+
+          mkdir -p ~/.m2
+          cp /opt/maven/settings.xml ~/.m2/settings.xml
+
+          keytool -importcert -noprompt \
+            -trustcacerts \
+            -keystore $JAVA_HOME/lib/security/cacerts \
+            -storepass changeit \
+            -alias corp-ca \
+            -file /opt/maven/ca.cert
+
+          echo "Generating project using maven archetype"
+          cd /tmp
+          mvn archetype:generate -DgroupId=com.example -DartifactId=HelloWorldApp -DarchetypeArtifactId=maven-archetype-quickstart -DinteractiveMode=false
+
+          cd HelloWorldApp/
+          echo "Building and deploying project"
+          mvn package deploy -DaltDeploymentRepository=maven-snapshots::default::https://nexus.example.com/repository/maven-snapshots
+
+        volumeMounts:
+        - name: settings
+          mountPath: /opt/maven
+      volumes:
+      - name: settings
+        csi:
+          readOnly: true
+          driver: connectors-csi
+          volumeAttributes:
+            connector.name: "maven-connector"
+            configuration.names: "settings"
+EOF
+```
+
+#### Key settings
+
+**MAVEN_OPTS in container environment**:
+
+Set to `MAVEN_OPTS=-Dmaven.resolver.transport=wagon`
+
+**Scripts in container**:
+
+Using the `keytool` command to import the `ca.cert` file to your client's truststore for trust the connector proxy server before executing mvn operations.
+
+``` sh
+keytool -importcert -noprompt \
+  -trustcacerts \
+  -keystore $JAVA_HOME/lib/security/cacerts \
+  -storepass changeit \
+  -alias corp-ca \
+  -file /opt/maven/ca.cert
+```
+
+**volumes[].volumeAttributes**
+
+- `connector.name`: The name of your maven connector
+- `configuration.names`: Set to "settings", which references a specific configuration template defined in the maven connectorClass. This template is used to generate the "settings.xml" file with the appropriate settings for authentication.
+
+### Step 4: Verify Operation
+
+Check the job's logs to confirm the mvn deploy operations were successfully performed:
+
+```bash
+kubectl logs -f job/mvn-deploy -n connectors-maven-demo
+```
+
+You should see the mvn deploy operations completing successfully and upload the jar to the maven repository.
+
+Example output:
+
+``` log
+Uploading to maven-snapshots: https://nexus.example.com/repository/maven-snapshots/com/example/HelloWorldApp/1.0-SNAPSHOT/maven-metadata.xml
+Uploaded to maven-snapshots: https://nexus.example.com/repository/maven-snapshots/com/example/HelloWorldApp/1.0-SNAPSHOT/maven-metadata.xml (768 B at 80 B/s)
+Uploading to maven-snapshots: https://nexus.example.com/repository/maven-snapshots/com/example/HelloWorldApp/maven-metadata.xml
+Uploaded to maven-snapshots: https://nexus.example.com/repository/maven-snapshots/com/example/HelloWorldApp/maven-metadata.xml (282 B at 29 B/s)
+[INFO] ------------------------------------------------------------------------
+[INFO] BUILD SUCCESS
+[INFO] ------------------------------------------------------------------------
+[INFO] Total time:  01:27 min
+[INFO] Finished at: 2025-09-02T10:18:50Z
+[INFO] ------------------------------------------------------------------------
+```
+
+## What happens under the hood \{#what-happens-under-the-hood}
+
+The maven connector works by:
+
+1. Creating a proxy service that sits between your maven client and the target maven registry
+2. Injecting authentication information when requests pass through the proxy
+3. Providing `settings.xml` files for client to perform mvn operations with the proxy
+
+To demonstrate this mechanism, let's inspect the generated settings.xml file:
+
+```bash
+cat <<EOF | kubectl apply -n connectors-maven-demo -f -
+apiVersion: v1
+kind: Pod
+metadata:
+  name: inspect-mvn-deploy
+spec:
+  restartPolicy: Never
+  containers:
+  - name: mvn
+    image: docker.io/library/maven:3.9.11-eclipse-temurin-24-alpine # Replace with your image contains maven
+    command: ["sleep", "3600"]
+    env:
+    - name: MAVEN_OPTS
+      value: -Dmaven.resolver.transport=wagon
+    volumeMounts:
+    - name: settings
+      mountPath: /opt/maven
+  volumes:
+  - name: settings
+    csi:
+      readOnly: true
+      driver: connectors-csi
+      volumeAttributes:
+        connector.name: "maven-connector"
+        configuration.names: "settings"
+EOF
+```
+
+View the generated files in `/opt/maven/`:
+
+```bash
+$ kubectl exec -it inspect-mvn-deploy -n connectors-maven-demo -- ls -l /opt/maven
+
+total 8
+-r--r--r-- 1 root root 1261 Sep  2 10:25 ca.cert
+-r--r--r-- 1 root root 1679 Sep  2 10:25 settings.xml
+```
+
+View the generated `settings.xml` file:
+
+``` bash
+$ kubectl exec -it inspect-mvn-deploy -n connectors-maven-demo -- cat /opt/maven/settings.xml
+```
+
+Example output:
+
+``` xml
+<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0 https://maven.apache.org/xsd/settings-1.0.0.xsd">
+
+  <proxies>
+    <proxy>
+      <id>connectors-proxy</id>
+      <active>true</active>
+      <protocol>http</protocol>
+      <host>c-maven-connector.connectors-maven-demo.svc.cluster.local</host>
+      <port>80</port>
+      <username>connectors-maven-demo/maven-connector</username>
+      <password>eyJhbGciOiJEnEZaTQ</password>
+      <nonProxyHosts>localhost</nonProxyHosts>
+    </proxy>
+  </proxies>
+</settings>
+```
+
+### Key Notes
+
+- Two files are mounted into the Pod via Connectors CSI Driver: `settings.xml` and `ca.cert`.
+- The `settings.xml` file contains the proxy configuration section, it provides ability to connect to the maven registry via the proxy. The proxy will inject the authentication information when requests pass through the proxy.
+- The `settings.xml` file contains no original secret and mount to the Pod via Connectors CSI Driver.
+
+### Authentication Flow
+
+The `inspect-mvn-deploy` pod contains no original cluster tokens. When maven makes HTTPS requests to the maven registry, the proxy server intercepts these requests, injects authentication credentials from the `maven-connector`, and forwards the authenticated requests to the backend maven registry server.
+
+### Settings Volume
+
+The `settings.xml` file is mounted into the Pod via Connectors CSI Driver.
+
+``` yaml
+  volumes:
+  - name: settings
+    csi:
+      readOnly: true
+      driver: connectors-csi
+      volumeAttributes:
+        connector.name: "maven-connector"
+        configuration.names: "settings"
+```
+
+In the above example, the `settings.xml` and `ca.cert` file is mounted into the Pod via Connectors CSI Driver.
+
+- The `settings.xml` file contains the proxy configuration section, it provides ability to connect to the maven registry via the proxy. The proxy will inject the authentication information when requests pass through the proxy.
+- The `ca.cert` file is used to trust the connectors proxy server, so you should import the `ca.cert` file to your client's truststore before executing mvn operations.
+
+For volumes parameters, please refer to [Using Connectors CSI Driver to mount settings.xml file](./concepts/maven_connectorclass.mdx#using-connectors-csi-driver-to-mount-settingsxml-file) in Maven Connector Concepts document.
+
+## Troubleshooting
+
+If your mvn deploy operation fails, check the following:
+
+1. **Connector Status**: Ensure the connector is in "Ready" state:
+
+   ```bash
+   kubectl describe connector maven-connector -n connectors-maven-demo
+   ```
+
+2. **Verify the connectors deployment status**: ensure all components are deployed and in "Ready" state
+
+   ```bash
+   kubectl get pods -n <connector-component-namespace>
+   ```
+
+## Further Reading
+
+After successfully performing mvn deploy operations using the maven connector, you can:
+
+- Learn more about [Concepts of Maven Connectors](./concepts/maven_connectorclass.mdx)
+- [Using Maven Connectors as Maven Registry Mirror](./how_to/using-as-maven-registry-mirror.mdx)
+- [Using Maven Connectors in Tekton Pipelines](./how_to/using-in-tekton-task.mdx)
+
+
+## References
+
+- [Maven Connector Installation Guide](../install.mdx)

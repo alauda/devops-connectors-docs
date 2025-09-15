@@ -17,6 +17,7 @@ The Connectors system has a modular architecture with the following components:
 - **ConnectorsGit**: Optional component that adds support for Git services (GitHub, GitLab, etc.)
 - **ConnectorsOCI**: Optional component that adds support for container registries (Harbor, Docker Registry, etc.)
 - **ConnectorsK8S**: Optional component that adds support for Kubernetes clusters
+- **ConnectorsMaven**: Optional component that adds support for Maven registries (e.g., Maven Central, or Maven repositories hosted on Sonatype Nexus).
 
 This document provides instructions for installing and configuring the Connectors system.
 
@@ -285,7 +286,6 @@ To add support for integration with Kubernetes clusters, install the ConnectorsK
 
 1. Create the ConnectorsK8S custom resource:
 
-   ClusterIP Expose:
    ```bash
    cat <<EOF | kubectl apply -f -
    apiVersion: operator.connectors.alauda.io/v1alpha1
@@ -315,6 +315,41 @@ To add support for integration with Kubernetes clusters, install the ConnectorsK
    kubectl get connectorclass k8s
    ```
 
+### Install ConnectorsMaven (Optional)
+
+To add support for integration with Maven registries, install the ConnectorsMaven component:
+
+1. Create the ConnectorsMaven custom resource:
+
+   ```bash
+   cat <<EOF | kubectl apply -f -
+   apiVersion: operator.connectors.alauda.io/v1alpha1
+   kind: ConnectorsMaven
+   metadata:
+     name: connectors-maven
+     namespace: connectors-system
+   spec: {}
+   EOF
+   ```
+
+2. Monitor the deployment progress:
+
+   ```bash
+   kubectl get connectorsmaven -n connectors-system
+   ```
+
+3. Wait until the status shows that ConnectorsOCI is ready:
+
+   ```bash
+   kubectl wait --for=condition=Ready connectorsmaven/connectors-maven -n connectors-system --timeout=300s
+   ```
+
+4. Verify that the Kubernetes ConnectorClass is ready:
+
+   ```bash
+   kubectl get connectorclass maven
+   ```
+
 ## Uninstall Connectors
 
 To uninstall the Connectors system, remove components in the reverse order of installation.
@@ -330,6 +365,9 @@ To uninstall the Connectors system, remove components in the reverse order of in
 
    # Delete ConnectorsK8S
    kubectl delete connectorsk8s --all -n connectors-system
+
+   # Delete ConnectorsMaven
+   kubectl delete connectorsmaven --all -n connectors-system
    ```
 
 2. Delete the core component:

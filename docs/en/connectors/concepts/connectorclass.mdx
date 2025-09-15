@@ -1,7 +1,7 @@
 ---
 created: '2024-11-03'
 title: ConnectorClass
-weight: 40
+weight: 10
 sourceSHA: 9ce33535cf391b949b6d147e81680210896f97b70c4b88ea976ea5619a67552f
 ---
 
@@ -216,7 +216,7 @@ spec:
 
 ### Example
 
-- Basic Auth authentication checking
+Basic Auth authentication checking
 
 ```yaml
 spec:
@@ -406,6 +406,34 @@ For more Rego language details, refer to:
 
 - [Rego Policy Language](https://www.openpolicyagent.org/docs/latest/policy-language)
 
+## Parameters
+
+Parameters are used to defines additional parameters when creating a connector.
+
+You can define required parameters for connector creation using the `connectorclass` `spec.params` field.
+
+- `spec.params[].name` - Parameter name.
+- `spec.params[].type` - Parameter type. Currently only supports `string` type.
+- `spec.params[].default` - Default parameter value (optional). When a default value is provided, users can omit this parameter when creating a connector.
+- `spec.params[].description` - Parameter description (optional).
+
+For example, the following definition allows users to provide an `sslVerify` parameter when creating a git-type connector, with a default value of `true`.
+
+```yaml
+kind: ConnectorClass
+metadata:
+  name: git
+spec:
+  params:
+    - name: sslVerify
+      type: string
+      default: "true"
+```
+
+For parameter configuration when creating Connectors, refer to the [Connector](./connector.mdx#parameters) documentation.
+
+Combined with [connectors-csi-driver](./connectors_csi.mdx) capabilities, this enables more flexible configuration. This is particularly useful when you need to provide parameterized configurations. For example, when creating a git-type connector, users can provide the `sslVerify` parameter to control SSL certificate verification. For more details, refer to the [ConnectorClass Configuration](./connectorclass.mdx#configuration-capabilities) documentation.
+
 ## ConnectorClass API \{#connectorclass_api}
 
 Provides a RESTful API for the current ConnectorClass, allowing clients to easily access resources within the tools when using Connectors.
@@ -493,7 +521,7 @@ For more information, refer to:
 - [connector-api](./connector_api.mdx)
 - [connectorclass-api definition specification](./connectorclass_api_spec.mdx)
 
-## Configuration Capabilities
+## Configuration Capabilities \{#configuration-capabilities}
 
 Configuration capabilities are used to define the configuration information for this type of tool. This configuration information can be mounted into Pods in conjunction with [connectors-csi-driver](./connectors_csi.mdx).
 
@@ -518,45 +546,9 @@ Typically, we can specify a certain type of configuration information for a clas
 - For `git` type tools, provide configuration for `.gitconfig`
 - For `oci registry` type tools, provide configuration for `config.json`
 
-The configuration content supports the use of variables, which can be dynamically rendered during mounting. For details, refer to the description of "Configuration File Rendering" in [connectors-csi-driver](./connectors_csi.mdx).
+The configuration content supports the use of variables, which can be dynamically rendered during mounting.
 
-### Example
-
-The following ConnectorClass provides a file named `.gitconfig`, which is used to ignore SSL verification during `git clone`.
-
-```yaml
-kind: ConnectorClass
-metadata:
-  name: git
-spec:
-  configurations:
-  - name: config
-    data:
-      .gitconfig: |
-        [http]
-          sslVerify = false
-```
-
-The following ConnectorClass provides a file named `.gitconfig`, which automatically injects headers and replaces the git URL during `git clone`.
-
-```yaml
-kind: ConnectorClass
-metadata:
-  name: git
-spec:
-  configurations:
-  - name: config
-    data:
-      .gitconfig: |
-        [http]
-            extraHeader = Authorization: Basic {{ printf ":%s" .context.token | b64enc }}
-        [url "{{ .connector.status.proxyAddress }}"]
-            insteadOf = {{.connector.spec.address}}
-```
-
-### More Information
-
-- [connectors csi driver](./connectors_csi.mdx)
+More examples of using the configuration, refer to the [connectors csi driver](./connectors_csi.mdx#configuration-examples) documentation.
 
 ## Metadata Information for Readability Display \{#metadata}
 
@@ -688,127 +680,127 @@ It is recommended to confirm the scope of impact when updating the ConnectorClas
 
 - ConnectorClass supporting `basic-auth` authentication type
 
-```yaml
-apiVersion: connectors.alauda.io/v1alpha1
-kind: ConnectorClass
-metadata:
-  name: git
-spec:
-  address:
-    type: string
-  auth:
-    types:
-      - name: basicAuth
-        secretType: kubernetes.io/basic-auth
-        optional: true
-```
+    ```yaml
+    apiVersion: connectors.alauda.io/v1alpha1
+    kind: ConnectorClass
+    metadata:
+      name: git
+    spec:
+      address:
+        type: string
+      auth:
+        types:
+          - name: basicAuth
+            secretType: kubernetes.io/basic-auth
+            optional: true
+    ```
 
 - Custom authentication type ConnectorClass
 
-```yaml
-apiVersion: connectors.alauda.io/v1alpha1
-kind: ConnectorClass
-metadata:
-  name: sample
-spec:
-  address:
-    type: string
-  auth:
-    types:
-      - name: patAuth
-        optional: true
-        secretType: Opaque
-        params:
-        - name: username
-        - name: privateToken
-```
+    ```yaml
+    apiVersion: connectors.alauda.io/v1alpha1
+    kind: ConnectorClass
+    metadata:
+      name: sample
+    spec:
+      address:
+        type: string
+      auth:
+        types:
+          - name: patAuth
+            optional: true
+            secretType: Opaque
+            params:
+            - name: username
+            - name: privateToken
+    ```
 
 - ConnectorClass configured with `liveness probe`
 
-```yaml
-apiVersion: connectors.alauda.io/v1alpha1
-kind: ConnectorClass
-metadata:
-  name: git
-spec:
-  address:
-    type: string
-  auth:
-    types:
-      - name: basicAuth
-        optional: true
-        secretType: kubernetes.io/basic-auth
-  livenessProbe:
-    http:
-      path: /
-```
+    ```yaml
+    apiVersion: connectors.alauda.io/v1alpha1
+    kind: ConnectorClass
+    metadata:
+      name: git
+    spec:
+      address:
+        type: string
+      auth:
+        types:
+          - name: basicAuth
+            optional: true
+            secretType: kubernetes.io/basic-auth
+      livenessProbe:
+        http:
+          path: /
+    ```
 
 - ConnectorClass configured with `auth probe`
 
-```yaml
-apiVersion: connectors.alauda.io/v1alpha1
-kind: ConnectorClass
-metadata:
-  name: git
-  labels:
-    connectors.cpaas.io/git: "true"
-spec:
-  address:
-    type: string
-  auth:
-    types:
-      - name: basicAuth
-        secretType: kubernetes.io/basic-auth
-        optional: true
-  livenessProbe:
-    http:
-      path: /
-  authProbes:
-    - authName: basicAuth
-      params:
-        - name: repository
-          type: string
-      probe:
+    ```yaml
+    apiVersion: connectors.alauda.io/v1alpha1
+    kind: ConnectorClass
+    metadata:
+      name: git
+      labels:
+        connectors.cpaas.io/git: "true"
+    spec:
+      address:
+        type: string
+      auth:
+        types:
+          - name: basicAuth
+            secretType: kubernetes.io/basic-auth
+            optional: true
+      livenessProbe:
         http:
-          path: /{{- range .Connector.Spec.Auth.Params }}{{- if eq .Name "repository" }}{{ .Value.StringVal }}{{ end }}{{- end }}/info/refs?service=git-upload-pack
-          httpHeaders:
-          - name: Authorization
-            value: >-
-              {{- if .Secret }}Basic {{ printf "%s:%s" .Secret.StringData.username .Secret.StringData.password | b64enc }} {{- end }}
-```
+          path: /
+      authProbes:
+        - authName: basicAuth
+          params:
+            - name: repository
+              type: string
+          probe:
+            http:
+              path: /{{- range .Connector.Spec.Auth.Params }}{{- if eq .Name "repository" }}{{ .Value.StringVal }}{{ end }}{{- end }}/info/refs?service=git-upload-pack
+              httpHeaders:
+              - name: Authorization
+                value: >-
+                  {{- if .Secret }}Basic {{ printf "%s:%s" .Secret.StringData.username .Secret.StringData.password | b64enc }} {{- end }}
+    ```
 
 - Complete Git connector configuration example:
 
-```yaml
-apiVersion: connectors.alauda.io/v1alpha1
-kind: ConnectorClass
-metadata:
-  name: git
-spec:
-  address:
-    name: address
-    type: string
-  auth:
-    types:
-      - name: basicAuth
-        secretType: kubernetes.io/basic-auth
-        optional: true
-  livenessProbe:
-    http:
-      path: /
-  authProbes:
-    - authName: basicAuth
-      params:
-        - name: repository
-          type: string
-      probe:
+    ```yaml
+    apiVersion: connectors.alauda.io/v1alpha1
+    kind: ConnectorClass
+    metadata:
+      name: git
+    spec:
+      address:
+        name: address
+        type: string
+      auth:
+        types:
+          - name: basicAuth
+            secretType: kubernetes.io/basic-auth
+            optional: true
+      livenessProbe:
         http:
-          path: /{{- range .Connector.Spec.Auth.Params }}{{- if eq .Name "repository" }}{{ .Value.StringVal }}{{ end }}{{- end }}/info/refs?service=git-upload-pack
-          httpHeaders:
-          - name: Authorization
-            value: >-
-              {{- if .Secret }}Basic {{ printf "%s:%s" .Secret.StringData.username .Secret.StringData.password | b64enc }} {{- end }}
-```
+          path: /
+      authProbes:
+        - authName: basicAuth
+          params:
+            - name: repository
+              type: string
+          probe:
+            http:
+              path: /{{- range .Connector.Spec.Auth.Params }}{{- if eq .Name "repository" }}{{ .Value.StringVal }}{{ end }}{{- end }}/info/refs?service=git-upload-pack
+              httpHeaders:
+              - name: Authorization
+                value: >-
+                  {{- if .Secret }}Basic {{ printf "%s:%s" .Secret.StringData.username .Secret.StringData.password | b64enc }} {{- end }}
+    ```
 
 ## More
 

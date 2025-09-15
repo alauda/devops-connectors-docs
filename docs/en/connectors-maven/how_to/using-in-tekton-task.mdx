@@ -1,0 +1,56 @@
+---
+weight: 20
+title: Using Maven Connector in Tekton Task
+---
+
+# Using Maven Connector in Tekton Task
+
+Using Maven Connector in Tekton Tasks enables centralized management of tool integration information and secure access to Maven registry during Tekton Task execution.
+
+## Requirements for Tekton Task
+
+Not all Tekton Tasks can use Maven Connector.
+
+Maven Connector essentially injects temporary Maven credentials through a Connector CSI Driver. It provides a configuration named `settings` that generates a `settings.xml` file with temporary authentication and `ca.cert` file for trust the connector proxy server.
+
+Therefore, Tekton Tasks must meet the following requirements to use Maven Connector:
+
+**Support mounting a `settings.xml` and `ca.cert` file via Workspace**
+
+## Usage Instructions
+
+After confirming that your Tekton Task can use Maven Connector, you can add Maven Connector to the TaskRun YAML file:
+
+For example:
+
+```yaml
+apiVersion: tekton.dev/v1
+kind: TaskRun
+metadata:
+  name: maven-connector-demo
+spec:
+  # .  . .
+  workspaces:
+  - name: settings
+    csi:
+      driver: connectors-csi
+      readOnly: true
+      volumeAttributes:
+        connector.name: maven-connector
+        connector.namespace: ""
+        configuration.names: "settings"
+```
+
+For workspaces parameters, please refer to [Using Connectors CSI Driver to mount settings.xml file](../concepts/maven_connectorclass.mdx#using-connectors-csi-driver-to-mount-settingsxml-file) in Maven Connector Concepts document.
+
+For more information about Connectors CSI Driver, please refer to [Connectors CSI Configuration](../../connectors/concepts/connectors_csi.mdx).
+
+## Further Reading
+
+- [Using Maven Connectors as Distribution Management Repository](../quick_start.mdx)
+- [Using Maven Connectors as Maven Registry Mirror](../how_to/using-as-maven-registry-mirror.mdx)
+
+## References
+
+- [Using CSI Volumes in Tekton](https://tekton.dev/docs/pipelines/workspaces/#csi)
+- [Connectors CSI Configuration](../../connectors/concepts/connectors_csi.mdx)

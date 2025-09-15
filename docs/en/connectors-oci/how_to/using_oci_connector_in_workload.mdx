@@ -127,12 +127,13 @@ kubectl create secret docker-registry oci-connector-secret \
 
 **Explanation:**
 
-- The `docker-server` points to the connector proxy service address in the cluster, you can get the address from the connector status
+The `docker-server` points to the connector proxy service address in the cluster, you can get the address from the connector status
 
 ```bash
 $ kubectl get connectors.connector harbor -n oci-connector-demo -o jsonpath='{.status.proxy.httpAddress.url}'
 http://192.168.x.x:31567/namespaces/oci-connector-demo/connectors/harbor
 ```
+
 - The `docker-username` is set to "u" (a placeholder username)
 - The `docker-password` uses the Service Account token from the previous step
 - The `docker-email` can be any valid email address (used for Docker registry compatibility)

@@ -1,0 +1,229 @@
+---
+weight: 20
+---
+
+# Maven Connector
+
+The Maven connector is a platform-agnostic connector that you can use to connect to any Maven registry.
+
+You can use the Maven Connector to securely perform maven operations in CICD pipelines, or use it in kubernetes workloads to perform maven operations without credentials.
+
+Additionally, you can centralize the management of maven access configurations across namespaces, avoiding the need to repeat the maven credentials in each namespace.
+
+## Overview
+
+This document covers:
+
+- **Integration Requirements**: Prerequisites for target Maven registries
+- **Creating Maven connector**
+- **Advanced Features**: Proxy capabilities and configuration capabilities about Maven connector
+
+## Integration Requirements
+
+**Maven Registries Prerequisites**
+
+- The maven registry must be able to support the maven operations, like `mvn deploy`, `mvn install`, `mvn package`, etc. it must be one of maven snapshots repository or maven release repository or maven proxy repository. like maven central, maven repository hosted by nexus, artifactory, etc.
+
+There are some prerequisites for the client to use the Maven connector:
+
+**Client Prerequisites**
+
+- The client should trust the connectors proxy server's certificate, so you should import the `ca.cert` file to your client's truststore before executing mvn operations. Generally, you can use `keytool -importcert` command to import the `ca.cert` file to your client's truststore. for example:
+
+  ```sh
+  keytool -importcert -noprompt \
+              -trustcacerts \
+              -keystore $JAVA_HOME/lib/security/cacerts \
+              -storepass changeit \
+              -alias corp-ca \
+              -file /opt/maven/ca.cert
+  ```
+
+- The mvn client should use transport=wagon to execute mvn operations. it could achieve by add the `-Dmaven.resolver.transport=wagon` parameter to the mvn command or set the `MAVEN_OPTS` environment variable to `-Dmaven.resolver.transport=wagon`.
+
+## Creating a simple Maven connector
+
+Here's how to create a basic Maven Connector:
+
+```yaml
+# Maven Connector
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: maven-connector
+spec:
+  connectorClassName: maven
+  address: https://repo.maven.apache.org/maven2
+  auth:
+    name: basicAuth
+```
+
+## Fields Reference
+
+**spec.connectorClassName**:
+
+`maven` (constant), specifies the ConnectorClass name for Maven integration.
+
+**spec.address**:
+
+Target Maven registry address, for example: `https://nexus.example.com/repository/maven-snapshots` or `https://repo.maven.apache.org/maven2`. It must be one of maven snapshots repository or maven release repository or maven proxy repository.
+
+**spec.auth**:
+
+specifies the authentication method of the maven registry
+
+- `spec.auth.name`: should be `basicAuth` for maven connector.
+
+- `spec.auth.secretRef`: specifies the secret that contains the authentication information of the maven registry, the secret should be created in the same namespace as the connector. If your maven registry does not require authentication, you can omit this field.
+
+**Optional Metadata fields**:
+
+- `cpaas.io/description`: Description information for the maven connector, for example:
+
+  ```yaml
+  apiVersion: connectors.alauda.io/v1alpha1
+  kind: Connector
+  metadata:
+    name: maven-connector
+    annotations:
+      cpaas.io/description: "Connect to team development maven registry"
+  ```
+
+## Capabilities of Maven Connector
+
+### Authentication
+
+The Maven connector supports the following authentication types:
+
+- `basicAuth`: Username and password-based authentication, corresponding secret type: `kubernetes.io/basic-auth`
+
+For example:
+
+```yaml
+apiVersion: v1
+stringData:
+  username: your-maven-registry-username
+  password: your-maven-registry-password
+kind: Secret
+metadata:
+  name: maven-secret
+type: kubernetes.io/basic-auth
+```
+
+For comprehensive status information, see [Connector Status Documentation](../../connectors/concepts/connector.mdx#status-information).
+
+### Proxy and settings.xml Configuration
+
+To provide clients with the ability to access maven registry without credentials, the Maven connector provides a proxy server to automatically inject authentication information.
+
+Clients can use this proxy server to access maven registry without needing to configure credentials on the client side.
+
+To simplify usage, the Maven connectorclass provides `settings.xml` files that can be mounted into Pods via CSI. In the Pod, when executing maven operations, the proxy service can be automatically inject authentication information.
+
+#### Proxy Address
+
+Upon Connector creation, the system automatically provisions a proxy service for the target maven registry.
+
+The proxy endpoint is recorded in `status.proxy.httpAddress`:
+
+For example:
+
+```yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: maven-connector
+spec:
+  # connector spec fields
+status:
+  conditions:
+    # status conditions
+  proxy:
+    httpAddress:
+      url: http://c-maven-connector.default.svc.cluster.local
+```
+
+#### settings.xml configuration file \{#settingsxml-configuration-file}
+
+The Maven connector provides the following configuration:
+
+**settings.xml**:
+
+- Provides a `settings.xml` configuration file. Combined with the connector-csi-driver, this configuration file will be mounted into the Pod, allowing access to the maven registry through the proxy without needing to configure credentials on the client side.
+
+Example of the configuration file generated in the Pod:
+
+``` yaml
+<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0 https://maven.apache.org/xsd/settings-1.0.0.xsd">
+
+  <proxies>
+    <proxy>
+      <id>connectors-proxy</id>
+      <active>true</active>
+      <protocol>http</protocol>
+      <host>c-maven-connector.connectors-maven-demo.svc.cluster.local</host>
+      <port>80</port>
+      <username>connectors-maven-demo/maven-connector</username>
+      <password>eyJhbGciOiJEnEZaTQ</password>
+      <nonProxyHosts>localhost</nonProxyHosts>
+    </proxy>
+  </proxies>
+</settings>
+```
+
+For detailed proxy mechanics, see [How It Works](../quick_start.mdx#what-happens-under-the-hood) in the Quick Start guide.
+
+#### ca.cert file
+
+The Maven connector provides a `ca.cert` file that can be mounted into the Pod via Connector CSI Driver. It is used to trust the connectors proxy server, so you should import the `ca.cert` file to your client's truststore before executing mvn operations.
+
+``` sh
+keytool -importcert -noprompt \
+  -trustcacerts \
+  -keystore $JAVA_HOME/lib/security/cacerts \
+  -storepass changeit \
+  -alias corp-ca \
+  -file /opt/maven/ca.cert
+```
+
+#### Using Connectors CSI Driver to mount settings.xml and ca.cert file \{#using-connectors-csi-driver-to-mount-settingsxml-file}
+
+The Maven connector provides a `settings.xml` and `ca.cert` file that can be mounted into the Pod via Connector CSI Driver.
+
+For example:
+
+``` yaml
+spec:
+  volumes:
+  - name: settings
+    csi:
+      readOnly: true
+      driver: connectors-csi
+      volumeAttributes:
+        connector.name: "maven-connector"
+        configuration.names: "settings"
+```
+
+parameter descriptions:
+
+- `csi.readOnly`: Fixed value `true`
+- `csi.driver`: The Connector CSI Driver, fixed as `connectors-csi`.
+- `csi.volumeAttributes`: CSI Volume attributes
+  - `connector.name`: Name of the Maven Connector
+  - `connector.namespace`: Namespace of the Maven Connector; if not specified, the Pod's namespace is used
+  - `configuration.names`: Configuration name, provide by the Maven Connector. As above, `settings` is supported.
+
+For detailed information about how to use the `settings` file in the Pod by connectors-csi-driver, please refer to [Using Maven Connectors in kubernetes jobs](../quick_start.mdx)
+
+## Further Reading
+
+- [Using Maven Connectors as Distribution Management Repository](../quick_start.mdx)
+- [Using Maven Connectors as Maven Registry Mirror](../how_to/using-as-maven-registry-mirror.mdx)
+- [Using Maven Connectors in Tekton Pipelines](../how_to/using-in-tekton-task.mdx)
+
+## References
+
+- [Concepts of Connector](../../connectors/concepts/connector.mdx)
+- [Connector Proxy](../../connectors/concepts/connectors_proxy.mdx)
+- [Connector CSI Driver](../../connectors/concepts/connectors_csi.mdx)
+- [Kubernetes CSI Volume](https://kubernetes.io/docs/concepts/storage/volumes/#csi)

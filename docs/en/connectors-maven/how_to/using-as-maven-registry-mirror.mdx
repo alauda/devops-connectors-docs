@@ -1,0 +1,160 @@
+---
+weight: 10
+title: Using Maven Connector as Maven Registry Mirror
+---
+
+# Using Maven Connector as Maven Registry Mirror
+
+Using Maven Connector as Maven Registry Mirror enables you to use Maven maven registry as a mirror when executing `mvn` operations.
+
+## Prerequisites
+
+- Kubernetes cluster with Connectors system installed (Operator, ConnectorsCore and ConnectorsMaven components). See the [Installation Guide](../../install.mdx) for details on installing these components.
+- maven registry address and credentials, the maven registry should be able to use as a mirror. like maven central, proxy-type maven repository hosted by nexus etc.
+- Basic knowledge of Kubernetes and Maven
+
+## Process Overview
+
+You should create a maven connector that set the connector address to the maven registry address, and set the `useAsMirror` parameter to `true`.
+Then create a job that performs `mvn package` via the connector.
+
+**Note:**
+
+- The maven registry should be able to use as a mirror. like maven central, proxy-type maven repository hosted by nexus etc.
+
+| Step | Operation                                        | Description                                               |
+| ---- | ------------------------------------------------ | --------------------------------------------------------- |
+| 1    | Create Namespace                                 | Set up a dedicated namespace for the demonstration        |
+| 2    | Configure Maven Connector | Create maven connector resource |
+| 3    | Create a Maven Job for executing  `mvn package`   | Create a job that performs `mvn package` via the connector |
+| 4    | Verify Results                                   | Validate successful execution of `mvn package` operations  |
+
+## Steps to Operate
+
+### Step 1: Create Namespace
+
+Create a dedicated namespace for this demonstration:
+
+```bash
+kubectl create ns connectors-maven-demo
+```
+
+### Step 2: Create Maven Connector
+
+Create the maven connector resource, set `spec.address` to the maven registry address, and set the `useAsMirror` parameter to `true` .
+For more detailed information about creating and configuring connectors, please refer to the [Connectors Quick Start Guide](../../connectors/quick_start.mdx).
+
+```bash
+cat <<EOF | kubectl apply -n connectors-maven-demo -f -
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: maven-mirror-connector
+spec:
+  connectorClassName: maven
+  address: https://nexus.example.com/repository/maven-public # Replace with your Maven proxy repository address, we will download jar from this repository.
+  params:
+  - name: useAsMirror
+    value: "true" # Set to "true" to use the maven registry as a mirror
+  auth:
+    name: basicAuth
+EOF
+```
+
+Verify that the connector is in "Ready" status:
+
+```bash
+kubectl get connector maven-mirror-connector -n connectors-maven-demo
+```
+
+The output should show:
+
+```
+NAME              CLASS   ADDRESS                                                    READY   REASON   AGE
+maven-connector   maven   https://nexus.example.com/repository/maven-snapshots   True             10s
+```
+
+### Step 3: Create a Job to Perform `mvn package`
+
+Create a job that uses the connector to perform `mvn package`:
+
+```bash
+cat <<'EOF' | kubectl apply -n connectors-maven-demo -f -
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mvn-package
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: mvn
+        image: docker.io/library/maven:3.9.11-eclipse-temurin-24-alpine # Replace with your image contains maven
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: MAVEN_OPTS
+          value: -Dmaven.resolver.transport=wagon
+        command:
+        - "sh"
+        - "-c"
+        - |
+          set -ex
+
+          mkdir -p ~/.m2
+          cp /opt/maven/settings.xml ~/.m2/settings.xml
+
+          keytool -importcert -noprompt \
+            -trustcacerts \
+            -keystore $JAVA_HOME/lib/security/cacerts \
+            -storepass changeit \
+            -alias corp-ca \
+            -file /opt/maven/ca.cert
+
+          echo "Generating project using maven archetype"
+          cd /tmp
+          mvn archetype:generate -DgroupId=com.example -DartifactId=HelloWorldApp -DarchetypeArtifactId=maven-archetype-quickstart -DinteractiveMode=false
+
+          cd HelloWorldApp/
+          echo "Package project"
+          mvn package
+
+        volumeMounts:
+        - name: settings
+          mountPath: /opt/maven
+      volumes:
+      - name: settings
+        csi:
+          readOnly: true
+          driver: connectors-csi
+          volumeAttributes:
+            connector.name: "maven-mirror-connector"
+            configuration.names: "settings"
+EOF
+```
+
+### Step 4: Verify Operation
+
+Check the job's logs to confirm the mvn package operations were successfully performed, and the jar is downloaded from the maven registry mirror when executing `mvn package` operations.
+
+```bash
+kubectl logs -f job/mvn-package -n connectors-maven-demo
+```
+
+Wait for a few minutes, you should see the `mvn package` operation completing successfully and download the jar from the maven registry specified by the connector address when executing `mvn package`.
+
+Example output:
+
+``` log
+Downloaded from connectors-mirror: https://nexus.example.com/repository/maven-public/org/apache/commons/commons-compress/1.26.1/commons-compress-1.26.1.jar (1.1 MB at 386 kB/s)
+Downloaded from connectors-mirror: https://nexus.example.com/repository/maven-public/commons-codec/commons-codec/1.16.1/commons-codec-1.16.1.jar (365 kB at 126 kB/s)
+Downloaded from connectors-mirror: https://nexus.example.com/repository/maven-public/com/github/luben/zstd-jni/1.5.5-11/zstd-jni-1.5.5-11.jar (6.8 MB at 1.7 MB/s)
+[INFO] Building jar: /tmp/HelloWorldApp/target/HelloWorldApp-1.0-SNAPSHOT.jar
+[INFO] ------------------------------------------------------------------------
+[INFO] BUILD SUCCESS
+[INFO] ------------------------------------------------------------------------
+[INFO] Total time:  42.678 s
+[INFO] Finished at: 2025-09-02T23:14:46Z
+[INFO] ------------------------------------------------------------------------
+```

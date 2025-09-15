@@ -1,7 +1,7 @@
 ---
 created: '2025-01-01'
 title: Connectors CSI Driver
-weight: 60
+weight: 30
 sourceSHA: 9091741bd4c766d04451b1397900bfa0d600d3e58d1d3dadf78d24d8091d2947
 ---
 
@@ -71,7 +71,7 @@ spec:
   restartPolicy: Never
   containers:
   - name: web
-    image: docker-mirrors.alauda.cn/bitnami/git:2.47.1
+    image: bitnami/git:2.47.1
     imagePullPolicy: IfNotPresent
     command:
     - "sleep"
@@ -91,28 +91,6 @@ spec:
 EOF
 ```
 
-### 4. Configure Access Permissions
-
-To allow the Pod to access the Connector's configuration, permissions must be granted to the Pod's ServiceAccount to read Connector resources:
-
-```shell
-cat << EOF | kubectl apply -f -
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: default-sa-connectors-connector-viewer
-  namespace: default
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: connectors-connector-viewer-role
-subjects:
-- kind: ServiceAccount
-  name: default
-  namespace: default
-EOF
-```
-
 Once the Pod is running, you can check the contents of the mounted configuration file with the following command:
 
 ```shell
@@ -123,19 +101,19 @@ kubectl exec -ti csi-demo -- cat /tmp/config/.gitconfig
 
 ### CSI Volume Configuration Parameters
 
-| Parameter Name | Required | Description                        |
-|----------------|----------|------------------------------------|
-| readOnly       | Yes      | Must be set to true                 |
-| driver         | Yes      | Fixed value: connectors-csi         |
+| Parameter Name | Required | Description                 |
+| -------------- | -------- | --------------------------- |
+| readOnly       | Yes      | Must be set to true         |
+| driver         | Yes      | Fixed value: connectors-csi |
 
 ### volumeAttributes Parameters
 
-| Parameter Name          | Required | Description                                                   |
-|------------------------|----------|---------------------------------------------------------------|
-| connector.name         | Yes      | The name of the Connector                                      |
-| connector.namespace    | No       | The namespace of the Connector, defaults to the Pod's namespace|
-| configuration.names    | Yes      | A comma-separated list of configuration names to mount        |
-| token.expiration       | No       | The expiration time of the token, defaults to 30m            |
+| Parameter Name      | Required | Description                                                     |
+| ------------------- | -------- | --------------------------------------------------------------- |
+| connector.name      | Yes      | The name of the Connector                                       |
+| connector.namespace | No       | The namespace of the Connector, defaults to the Pod's namespace |
+| configuration.names | Yes      | A comma-separated list of configuration names to mount          |
+| token.expiration    | No       | The expiration time of the token, defaults to 30m               |
 
 ### Configuration Name Description
 
@@ -192,12 +170,12 @@ The CSI Driver performs variable rendering when mounting configuration files, us
 
 ### Available Variables
 
-| Variable                             | Description                                                  |
-|--------------------------------------|--------------------------------------------------------------|
-| `.connector.status.proxyAddress`     | Proxy address of the Connector; refer to [connectors-proxy](./connectors_proxy.mdx) |
-| `.connector.spec.address`            | Target address of the Connector                                |
-| `.context.token`                     | Authentication token for accessing the proxy service          |
-| `.context.proxy.caCert`              | CA certificate for accessing the connectors proxy (forward proxy); refer to [connectors-proxy](./connectors_proxy.mdx)               |
+| Variable                         | Description                                                                                                                    |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `.connector.status.proxyAddress` | Proxy address of the Connector; refer to [connectors-proxy](./connectors_proxy.mdx)                                            |
+| `.connector.spec.*`              | Spec of the Connector, you can get all fields of the Connector Spec, eg. `.connector.spec.address` or `.connector.spec.params` |
+| `.context.token`                 | Authentication token for accessing the proxy service                                                                           |
+| `.context.proxy.caCert`          | CA certificate for accessing the connectors proxy (forward proxy); refer to [connectors-proxy](./connectors_proxy.mdx)         |
 
 ### Built-in Functions
 
@@ -208,3 +186,66 @@ For example: `b64enc`: Base64 encoding of a string
 ### About the Proxy Service
 
 Connectors provide a proxy service for each Connector, allowing clients to access target resources without needing to store the original credentials. For more details, please refer to [connectors-proxy](./connectors_proxy.mdx).
+
+## Configuration examples \{#configuration-examples}
+
+**Constant content**
+
+``` yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: ConnectorClass
+metadata:
+  name: my-git
+spec:
+  address:
+    type: string
+  configurations:
+  - name: config
+    data:
+      .gitconfig: |
+        this is git config
+```
+
+**Using connector.spec.params**
+
+The following ConnectorClass defines a parameter `sslVerify` to control the SSL verification during `git clone`.
+
+  ```yaml
+  kind: ConnectorClass
+  metadata:
+    name: git
+  spec:
+
+    params:
+    - name: sslVerify
+      type: string
+      default: "true"
+
+    configurations:
+    - name: config
+      data:
+        .gitconfig: |
+          {{ $sslVerify := "true" -}}
+          {{- range .connector.spec.params }}{{- if eq .name "sslVerify" }}{{$sslVerify = .value }}{{ end }}{{- end }}
+          [http]
+            sslVerify = {{ $sslVerify }}
+  ```
+
+**Using proxy service and token**
+
+The following ConnectorClass provides a file named `.gitconfig`, which automatically injects headers and replaces the git URL during `git clone` by using the proxy service and token.
+
+  ```yaml
+  kind: ConnectorClass
+  metadata:
+    name: git
+  spec:
+    configurations:
+    - name: config
+      data:
+        .gitconfig: |
+          [http]
+              extraHeader = Authorization: Basic {{ printf ":%s" .context.token | b64enc }}
+          [url "{{ .connector.status.proxyAddress }}"]
+              insteadOf = {{.connector.spec.address}}
+  ```

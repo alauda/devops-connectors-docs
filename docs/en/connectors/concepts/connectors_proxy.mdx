@@ -1,7 +1,7 @@
 ---
 created: '2024-11-03'
 title: ConnectorsProxy
-weight: 50
+weight: 40
 sourceSHA: a3690e0a66ff0d323093db716163521315b340274eb2dbec21ada430d120870d
 ---
 
@@ -25,7 +25,7 @@ The built-in `ConnectorsProxy` implementation provides comprehensive HTTP/HTTPS 
 Operates as a standard HTTP proxy using `http_proxy` and `https_proxy` environment variables. When the proxy receives client requests, it:
 
 1. Authenticates the client
-2. Injects tool credentials specified in the Connector into the request
+2. Injects tool credentials specified in the Connector into the request if current request path is pointing to the target tool specified by the Connector
 3. Forwards the authenticated request to the target tool
 
 ### Reverse Proxy
