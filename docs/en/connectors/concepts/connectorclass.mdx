@@ -216,7 +216,7 @@ spec:
 
 ### Example
 
-- Basic Auth authentication checking
+Basic Auth authentication checking
 
 ```yaml
 spec:
@@ -688,127 +688,127 @@ It is recommended to confirm the scope of impact when updating the ConnectorClas
 
 - ConnectorClass supporting `basic-auth` authentication type
 
-```yaml
-apiVersion: connectors.alauda.io/v1alpha1
-kind: ConnectorClass
-metadata:
-  name: git
-spec:
-  address:
-    type: string
-  auth:
-    types:
-      - name: basicAuth
-        secretType: kubernetes.io/basic-auth
-        optional: true
-```
+    ```yaml
+    apiVersion: connectors.alauda.io/v1alpha1
+    kind: ConnectorClass
+    metadata:
+      name: git
+    spec:
+      address:
+        type: string
+      auth:
+        types:
+          - name: basicAuth
+            secretType: kubernetes.io/basic-auth
+            optional: true
+    ```
 
 - Custom authentication type ConnectorClass
 
-```yaml
-apiVersion: connectors.alauda.io/v1alpha1
-kind: ConnectorClass
-metadata:
-  name: sample
-spec:
-  address:
-    type: string
-  auth:
-    types:
-      - name: patAuth
-        optional: true
-        secretType: Opaque
-        params:
-        - name: username
-        - name: privateToken
-```
+    ```yaml
+    apiVersion: connectors.alauda.io/v1alpha1
+    kind: ConnectorClass
+    metadata:
+      name: sample
+    spec:
+      address:
+        type: string
+      auth:
+        types:
+          - name: patAuth
+            optional: true
+            secretType: Opaque
+            params:
+            - name: username
+            - name: privateToken
+    ```
 
 - ConnectorClass configured with `liveness probe`
 
-```yaml
-apiVersion: connectors.alauda.io/v1alpha1
-kind: ConnectorClass
-metadata:
-  name: git
-spec:
-  address:
-    type: string
-  auth:
-    types:
-      - name: basicAuth
-        optional: true
-        secretType: kubernetes.io/basic-auth
-  livenessProbe:
-    http:
-      path: /
-```
+    ```yaml
+    apiVersion: connectors.alauda.io/v1alpha1
+    kind: ConnectorClass
+    metadata:
+      name: git
+    spec:
+      address:
+        type: string
+      auth:
+        types:
+          - name: basicAuth
+            optional: true
+            secretType: kubernetes.io/basic-auth
+      livenessProbe:
+        http:
+          path: /
+    ```
 
 - ConnectorClass configured with `auth probe`
 
-```yaml
-apiVersion: connectors.alauda.io/v1alpha1
-kind: ConnectorClass
-metadata:
-  name: git
-  labels:
-    connectors.cpaas.io/git: "true"
-spec:
-  address:
-    type: string
-  auth:
-    types:
-      - name: basicAuth
-        secretType: kubernetes.io/basic-auth
-        optional: true
-  livenessProbe:
-    http:
-      path: /
-  authProbes:
-    - authName: basicAuth
-      params:
-        - name: repository
-          type: string
-      probe:
+    ```yaml
+    apiVersion: connectors.alauda.io/v1alpha1
+    kind: ConnectorClass
+    metadata:
+      name: git
+      labels:
+        connectors.cpaas.io/git: "true"
+    spec:
+      address:
+        type: string
+      auth:
+        types:
+          - name: basicAuth
+            secretType: kubernetes.io/basic-auth
+            optional: true
+      livenessProbe:
         http:
-          path: /{{- range .Connector.Spec.Auth.Params }}{{- if eq .Name "repository" }}{{ .Value.StringVal }}{{ end }}{{- end }}/info/refs?service=git-upload-pack
-          httpHeaders:
-          - name: Authorization
-            value: >-
-              {{- if .Secret }}Basic {{ printf "%s:%s" .Secret.StringData.username .Secret.StringData.password | b64enc }} {{- end }}
-```
+          path: /
+      authProbes:
+        - authName: basicAuth
+          params:
+            - name: repository
+              type: string
+          probe:
+            http:
+              path: /{{- range .Connector.Spec.Auth.Params }}{{- if eq .Name "repository" }}{{ .Value.StringVal }}{{ end }}{{- end }}/info/refs?service=git-upload-pack
+              httpHeaders:
+              - name: Authorization
+                value: >-
+                  {{- if .Secret }}Basic {{ printf "%s:%s" .Secret.StringData.username .Secret.StringData.password | b64enc }} {{- end }}
+    ```
 
 - Complete Git connector configuration example:
 
-```yaml
-apiVersion: connectors.alauda.io/v1alpha1
-kind: ConnectorClass
-metadata:
-  name: git
-spec:
-  address:
-    name: address
-    type: string
-  auth:
-    types:
-      - name: basicAuth
-        secretType: kubernetes.io/basic-auth
-        optional: true
-  livenessProbe:
-    http:
-      path: /
-  authProbes:
-    - authName: basicAuth
-      params:
-        - name: repository
-          type: string
-      probe:
+    ```yaml
+    apiVersion: connectors.alauda.io/v1alpha1
+    kind: ConnectorClass
+    metadata:
+      name: git
+    spec:
+      address:
+        name: address
+        type: string
+      auth:
+        types:
+          - name: basicAuth
+            secretType: kubernetes.io/basic-auth
+            optional: true
+      livenessProbe:
         http:
-          path: /{{- range .Connector.Spec.Auth.Params }}{{- if eq .Name "repository" }}{{ .Value.StringVal }}{{ end }}{{- end }}/info/refs?service=git-upload-pack
-          httpHeaders:
-          - name: Authorization
-            value: >-
-              {{- if .Secret }}Basic {{ printf "%s:%s" .Secret.StringData.username .Secret.StringData.password | b64enc }} {{- end }}
-```
+          path: /
+      authProbes:
+        - authName: basicAuth
+          params:
+            - name: repository
+              type: string
+          probe:
+            http:
+              path: /{{- range .Connector.Spec.Auth.Params }}{{- if eq .Name "repository" }}{{ .Value.StringVal }}{{ end }}{{- end }}/info/refs?service=git-upload-pack
+              httpHeaders:
+              - name: Authorization
+                value: >-
+                  {{- if .Secret }}Basic {{ printf "%s:%s" .Secret.StringData.username .Secret.StringData.password | b64enc }} {{- end }}
+    ```
 
 ## More
 

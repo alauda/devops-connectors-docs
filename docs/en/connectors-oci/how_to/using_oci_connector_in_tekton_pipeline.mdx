@@ -122,6 +122,8 @@ Pass the following parameters to TaskRun:
 - Specify the `buildkitd-config` workspace as the `buildkitd` configuration of the OCI connector, thereby mounting `buildkitd.toml`.
 - Adjust the target image address for the push to the proxy address.
 
+{/* lint-ignore code-block-split-list */}
+
 ```shell
 kubectl create -f - <<EOF
 apiVersion: tekton.dev/v1beta1
