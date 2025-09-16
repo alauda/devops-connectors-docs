@@ -51,6 +51,35 @@ spec:
 
 At this point, it indicates that the address information for connecting the tool to the platform must be of `string` type.
 
+## Parameters \{#parameters}
+
+Parameters are used to defines additional parameters when creating a connector.
+
+You can define required parameters for connector creation using the `connectorclass` `spec.params` field.
+
+- `spec.params[].name` - Parameter name.
+- `spec.params[].type` - Parameter type. Currently only supports `string` type.
+- `spec.params[].default` - Default parameter value (optional). When a default value is provided, users can omit this parameter when creating a connector.
+- `spec.params[].description` - Parameter description (optional).
+
+For example, the following definition allows users to provide an `sslVerify` parameter when creating a git-type connector, with a default value of `true`.
+
+```yaml
+kind: ConnectorClass
+metadata:
+  name: git
+spec:
+  params:
+    - name: sslVerify
+      type: string
+      default: "true"
+```
+
+For parameter configuration when creating Connectors, refer to the [Connector](./connector.mdx#parameters) documentation.
+
+Combined with [connectors-csi-driver](./connectors_csi.mdx) capabilities, this enables more flexible configuration. This is particularly useful when you need to provide parameterized configurations. For example, when creating a git-type connector, users can provide the `sslVerify` parameter to control SSL certificate verification. For more details, refer to the [ConnectorClass Configuration](./connectorclass.mdx#configuration-capabilities) documentation.
+
+
 ## Authentication Information
 
 ### Authentication Type
@@ -134,11 +163,19 @@ spec:
 
 At this point, when connecting this type of tool to the platform, the basicAuth type of authentication can be omitted.
 
-## Accessibility Check
+## Liveness Probe \{#livenessProbe}
 
 Accessibility checks are used to verify if the tool can be accessed normally. The configuration of how this type is conducted is done through the `livenessProbe` field.
 
-For example, the following snippet indicates that detection is performed using HTTP requests.
+A liveness check can be performed using either HTTP requests or the ConnectorClass API.
+
+### Probe using HTTP Requests
+
+you can configure `spec.livenessProbe.http` to perform a liveness check using HTTP requests.
+
+**Example**
+
+the following snippet indicates that detection is performed using HTTP requests.
 
 ```yaml
 spec:
@@ -149,13 +186,52 @@ spec:
 
 When the tool returns a 200 status, it is considered accessible.
 
-## Authentication Checking
+For more details, refer to [Probe using HTTP Requests in Authentication Probe](#authProbeByHTTP). The configuration is identical, except for the field paths.
 
-Authentication checking is used to verify how the validity of the authentication information for tools of this type is checked. If authentication checking is not needed, `authProbes` can be omitted.
+### Probe using ConnectorClass API
 
-For example, the following YAML indicates that during the authentication check of the tool, an `http GET` request will be initiated with the injected `Authorization: abc` header.
+you can configure `spec.livenessProbe.api` to perform a liveness check using the ConnectorClass API.
+
+**Example**
+
+the following snippet indicates that detection is performed using the ConnectorClass API.
 
 ```yaml
+spec:
+  livenessProbe:
+    api:
+      path: /
+```
+
+For more details, refer to [Probe using ConnectorClass API in Authentication Probe](#authProbeByAPI). The configuration is identical, except for the field paths.
+
+## Authentication Probe \{#authProbe}
+
+Authentication validation is used to verify the validity of authentication credentials for tools of this type. If authentication validation is not required, the `authProbes` field can be omitted.
+
+- `spec.authProbes[].authName` specifies the authentication type being validated and must match one of the names defined in `spec.auth.types[].name`.
+
+Authentication validation can be performed using either HTTP requests or the ConnectorClass API.
+
+### Probe using HTTP Requests \{#authProbeByHTTP}
+
+You can configure `spec.authProbes[].probe.http` to perform authentication validation using HTTP requests.
+
+- `spec.authProbes[].probe.http.host` specifies the target host for authentication validation. Defaults to the host from the connector address.
+- `spec.authProbes[].probe.http.path` specifies the request path for authentication validation. This is an absolute path that will be appended to the host URI resolved from the connector's `spec.address` when executing the probe. If `spec.address` contains a path prefix, the path prefix will be ignored during authentication validation. To include the path prefix, use `Authentication Check Expressions` to dynamically retrieve it.
+- `spec.authProbes[].probe.http.method` specifies the HTTP method for authentication validation, supporting GET and POST. Defaults to GET.
+- `spec.authProbes[].probe.http.disableRedirect` specifies whether to disable HTTP redirects during authentication validation. Defaults to false (automatic redirection is allowed).
+- `spec.authProbes[].probe.http.httpHeaders` specifies the HTTP headers to include in authentication validation requests.
+- `spec.authProbes[].probe.http.scheme` specifies the URI scheme for authentication validation. Defaults to the scheme from the connector address.
+
+**Example**
+
+The following YAML configuration demonstrates that during authentication validation, the system will send a `GET https://example.com/ HTTP/1.1` request to the connector address with an `Authorization: abc` header.
+
+```yaml
+kind: ConnectorClass
+metadata:
+  name: example-class
 spec:
   authProbes:
     - authName: basicAuth  # Corresponding authentication type
@@ -166,18 +242,58 @@ spec:
           path: /
           method: GET # Defaults to GET, supports both POST and GET methods
           disableRedirect: false # Defaults to false, allowing automatic redirection
+---
+kind: Connector
+metadata:
+  name: example
+spec:
+  connectorClassName: example-class
+  address: https://example.com
 ```
 
-- `authName` indicates the authentication type being used, needing to align with `spec.auth.types[].name`.
-- During the authentication check, the address information of the connector tool will be directly used.
-- `spec.authProbes[].probe.http.method` specifies the HTTP method used for authentication, supporting GET and POST. Defaults to GET.
-- `spec.authProbes[].probe.http.disableRedirect` specifies whether to disable redirection during authentication. Defaults to allow automatic redirection.
+### Probe using ConnectorClass API \{#authProbeByAPI}
 
-### Custom Authentication Check Parameters
+You can configure `spec.authProbes[].probe.api` to perform authentication validation using the ConnectorClass API. You must first configure `spec.api` in the ConnectorClass specification. A 200 response indicates successful authentication, while a 401 or 403 response indicates authentication failure. [More about ConnectorClass API](./connectorclass_api_spec.mdx).
 
-Some authentication checks may require additional parameters, such as specifying the repository name when checking access to a Git repository. These can be specified via `spec.authProbes[].params`.
+- `spec.authProbes[].probe.api.path` specifies the API endpoint path for authentication validation. This is a relative path that will be appended to the API address resolved from the ConnectorClass's `spec.api` configuration. If `spec.api` contains a path prefix, the path prefix will be included when performing authentication validation.
+
+**Example**
+
+The following YAML configuration demonstrates that during authentication validation, the system will send a `GET https://example-api.default.svc.cluster.local/api/auth/check HTTP/1.1` request to the ConnectorClass API.
 
 ```yaml
+kind: ConnectorClass
+metadata:
+  name: example-class
+spec:
+  api:
+    ref:
+      kind: Service
+      name: example-api
+      namespace: default
+    uri: /api
+  authProbes:
+    - authName: basicAuth
+      probe:
+        api:
+          path: /auth/check # It is a relative path of the API address resolved from `spec.api` of connectorclass
+---
+kind: Connector
+metadata:
+  name: example
+spec:
+  connectorClassName: example-class
+  address: https://example.com
+```
+
+### Custom Authentication Validation Parameters
+
+Some authentication validation scenarios may require additional parameters, such as specifying the repository name when validating access to a Git repository. These parameters can be defined using `spec.authProbes[].params`.
+
+```yaml
+kind: ConnectorClass
+metadata:
+  name: example-class
 spec:
   authProbes:
     - authName: basicAuth  # Corresponding authentication type
@@ -186,11 +302,11 @@ spec:
           type: string
 ```
 
-### Authentication Check Expressions
+### Authentication Validation Expressions
 
-When configuring `authProbes`, expressions can dynamically obtain credential information or Connector information.
+When configuring `authProbes`, expressions can be used to dynamically retrieve credential information or Connector metadata.
 
-For example,
+For example:
 
 ```yaml
 spec:
@@ -206,17 +322,17 @@ spec:
           type: string
 ```
 
-- Expressions can be used in `httpHeaders` and `path` fields.
-- The expression format is [go template](https://pkg.go.dev/text/template)
-- Supported top-level fields are:
-  - `.Connector`: The information of the Connector itself
-  - `.Secret`: The Secret information used for Connector data.
-- The methods available within expressions can be referenced in the [sprig](https://masterminds.github.io/sprig/) documentation
-  - For example: `b64enc`: Base64 encoding for strings, `trimPrefix` to remove string prefixes
+- Expressions can be used in the `probe.http.httpHeaders`, `probe.http.path`, and `probe.api.path` fields.
+- The expression format follows [Go template](https://pkg.go.dev/text/template) syntax.
+- Supported top-level fields include:
+  - `.Connector`: Contains information about the Connector resource itself
+  - `.Secret`: Contains the Secret data used for Connector authentication
+- Available methods within expressions are documented in the [sprig](https://masterminds.github.io/sprig/) library:
+  - For example: `b64enc` for Base64 encoding strings, `trimPrefix` for removing string prefixes
 
-### Example
+**Example**
 
-Basic Auth authentication checking
+Basic Authentication validation:
 
 ```yaml
 spec:
@@ -234,12 +350,12 @@ spec:
               {{- if .Secret }}Basic {{ printf "%s:%s" .Secret.StringData.username .Secret.StringData.password | b64enc }} {{- end }}
 ```
 
-The connector will perform validity checks based on the information in the ConnectorClass.
+The connector will perform authentication validation based on the configuration defined in the ConnectorClass.
 
-The above `yaml` indicates the authentication checking for `basic auth`:
+The above YAML demonstrates basic authentication validation:
 
-- `path`: Utilizes the `repository` value set in `auth.params` within the `Connector` information, concatenated as `/<repository>/info/refs?service=git-upload-pack`
-- `Authorization`: If the Connector is configured with a Secret, the `username` and `password` fields from the Secret will be returned in base64.
+- `path`: Uses the `repository` value from the Connector's `auth.params`, constructing the path as `/<repository>/info/refs?service=git-upload-pack`
+- `Authorization`: When the Connector is configured with a Secret, the `username` and `password` fields are Base64-encoded and included in the Basic authentication header.
 
 ### Rego-based Authentication Logic Configuration
 
@@ -405,34 +521,6 @@ spec:
 For more Rego language details, refer to:
 
 - [Rego Policy Language](https://www.openpolicyagent.org/docs/latest/policy-language)
-
-## Parameters
-
-Parameters are used to defines additional parameters when creating a connector.
-
-You can define required parameters for connector creation using the `connectorclass` `spec.params` field.
-
-- `spec.params[].name` - Parameter name.
-- `spec.params[].type` - Parameter type. Currently only supports `string` type.
-- `spec.params[].default` - Default parameter value (optional). When a default value is provided, users can omit this parameter when creating a connector.
-- `spec.params[].description` - Parameter description (optional).
-
-For example, the following definition allows users to provide an `sslVerify` parameter when creating a git-type connector, with a default value of `true`.
-
-```yaml
-kind: ConnectorClass
-metadata:
-  name: git
-spec:
-  params:
-    - name: sslVerify
-      type: string
-      default: "true"
-```
-
-For parameter configuration when creating Connectors, refer to the [Connector](./connector.mdx#parameters) documentation.
-
-Combined with [connectors-csi-driver](./connectors_csi.mdx) capabilities, this enables more flexible configuration. This is particularly useful when you need to provide parameterized configurations. For example, when creating a git-type connector, users can provide the `sslVerify` parameter to control SSL certificate verification. For more details, refer to the [ConnectorClass Configuration](./connectorclass.mdx#configuration-capabilities) documentation.
 
 ## ConnectorClass API \{#connectorclass_api}
 

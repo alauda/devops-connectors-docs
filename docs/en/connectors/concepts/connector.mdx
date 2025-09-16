@@ -62,11 +62,56 @@ metadata:
   name: git-gitlab
 spec:
   connectorClassName: git
-  address: "https://internal-tool.com/gitlab/"
+  address: "https://internal-tool.com/gitlab"
   # ...
 ```
 
-**Note**: When a path prefix is specified, it becomes the default base path for all operations including authentication and liveness checks performed by this Connector.
+**Note**
+
+The `http` based authentication probe and liveness probe will not be performed against the path prefix. If you want to perform the probe against the path prefix, you can use [authentication check expressions](./connectorclass.mdx#authProbe) and [liveness check expressions](./connectorclass.mdx#livenessProbe).
+
+More about it please refer to [liveness probe](./connectorclass.mdx#livenessProbe) and [authentication probe](./connectorclass.mdx#authProbe).
+
+## Connector Parameters \{#parameters}
+
+Connector parameters enable you to pass additional configuration information to a Connector instance. These parameters are first defined in the `ConnectorClass` specification and can then be configured when creating individual `Connector` resources.
+
+You can specify parameter values in the `Connector` using the `spec.params` field.
+
+- `spec.params[].name`: The parameter name, which must match a parameter name defined in the corresponding `ConnectorClass`.
+- `spec.params[].value`: The parameter value. The value type must match the parameter type defined in the `ConnectorClass`. Currently, only `string` type is supported.
+
+If a parameter has a default value defined in the `ConnectorClass`, you can omit the parameter when creating the `Connector`, and the default value will be used.
+
+For more information about defining parameters in ConnectorClass, refer to [ConnectorClass Parameters](./connectorclass.mdx#parameters).
+
+**Example**
+
+The following example demonstrates a Connector configured with an `sslVerify` parameter:
+
+```yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: git-gitlab
+spec:
+  connectorClassName: git-example
+  address: "https://private-gitlab.example.com"
+  params:
+    - name: sslVerify
+      value: "false"
+---
+apiVersion: connectors.alauda.io/v1alpha1
+kind: ConnectorClass
+metadata:
+  name: git-example
+spec:
+  # ...
+  params:
+    - name: sslVerify
+      type: string
+      default: "true"
+```
 
 ## Authentication Information
 
