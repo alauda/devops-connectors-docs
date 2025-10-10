@@ -18,6 +18,7 @@ The Connectors system has a modular architecture with the following components:
 - **ConnectorsOCI**: Optional component that adds support for container registries (Harbor, Docker Registry, etc.)
 - **ConnectorsK8S**: Optional component that adds support for Kubernetes clusters
 - **ConnectorsMaven**: Optional component that adds support for Maven registries (e.g., Maven Central, or Maven repositories hosted on Sonatype Nexus).
+- **ConnectorsPypi**: Optional component that adds support for Python package registries (e.g., PyPI, or Python repositories hosted on Sonatype Nexus).
 
 This document provides instructions for installing and configuring the Connectors system.
 
@@ -338,7 +339,7 @@ To add support for integration with Maven registries, install the ConnectorsMave
    kubectl get connectorsmaven -n connectors-system
    ```
 
-3. Wait until the status shows that ConnectorsOCI is ready:
+3. Wait until the status shows that ConnectorsMaven is ready:
 
    ```bash
    kubectl wait --for=condition=Ready connectorsmaven/connectors-maven -n connectors-system --timeout=300s
@@ -348,6 +349,35 @@ To add support for integration with Maven registries, install the ConnectorsMave
 
    ```bash
    kubectl get connectorclass maven
+   ```
+
+### Install ConnectorsPypi (Optional)
+
+To add support for integration with Pypi registries, install the ConnectorsPypi component:
+
+1. Create the ConnectorsPypi custom resource:
+
+   ```bash
+   cat <<EOF | kubectl apply -f -
+   apiVersion: operator.connectors.alauda.io/v1alpha1
+   kind: ConnectorsPypi
+   metadata:
+     name: connectors-pypi
+     namespace: connectors-system
+   spec: {}
+   EOF
+   ```
+
+2. Monitor the deployment progress:
+
+   ```bash
+   kubectl get connectorspypi -n connectors-system
+   ```
+
+3. Verify that the Kubernetes ConnectorClass is ready:
+
+   ```bash
+   kubectl get connectorclass pypi
    ```
 
 ## Uninstall Connectors
@@ -368,6 +398,9 @@ To uninstall the Connectors system, remove components in the reverse order of in
 
    # Delete ConnectorsMaven
    kubectl delete connectorsmaven --all -n connectors-system
+
+   # Delete ConnectorsPypi
+   kubectl delete connectorspypi --all -n connectors-system
    ```
 
 2. Delete the core component:

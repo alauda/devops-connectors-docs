@@ -1,0 +1,65 @@
+---
+weight: 20
+title: Using PyPI Connector in Tekton Task
+---
+
+# Using PyPI Connector in Tekton Task
+
+Using PyPI Connector in Tekton Tasks enables centralized management of tool integration information and secure access to PyPI registry during Tekton Task execution.
+
+## Requirements for Tekton Task
+
+Not all Tekton Tasks can use PyPI Connector.
+
+PyPI Connector essentially injects temporary PyPI credentials through a Connector CSI Driver. It provides a configuration named `pip.conf` and `pypirc` that generates a `pip.conf` and `.pypirc` file with temporary authentication for trust the connector proxy server.
+
+Therefore, Tekton Tasks must meet the following requirements to use PyPI Connector:
+
+**Support mounting a `pip.conf` and `pypirc` file via Workspace**
+
+## Usage Instructions
+
+After confirming that your Tekton Task can use PyPI Connector, you can add PyPI Connector to the TaskRun YAML file:
+
+For example:
+
+```yaml
+apiVersion: tekton.dev/v1
+kind: TaskRun
+metadata:
+  name: pypi-connector-demo
+spec:
+  # .  . .
+  workspaces:
+  - name: pip.conf
+    csi:
+      driver: connectors-csi
+      readOnly: true
+      volumeAttributes:
+        connector.name: pypi-connector
+        connector.namespace: ""
+        configuration.names: "pipconf"
+  - name: pypirc
+    csi:
+      driver: connectors-csi
+      readOnly: true
+      volumeAttributes:
+        connector.name: pypi-connector
+        connector.namespace: ""
+        configuration.names: "pypirc"
+```
+
+After mounting, the configuration needs to be moved to `~/.pip/pip.conf` and `~/.pypirc` to take effect by default.
+
+For workspaces parameters, please refer to [Using Connectors CSI Driver to mount pip.conf and pypirc file](../concepts/pypi_connectorclass.mdx#using-connectors-csi-driver-to-mount-pipconf-file) in PyPI Connector Concepts document.
+
+For more information about Connectors CSI Driver, please refer to [Connectors CSI Configuration](../../connectors/concepts/connectors_csi.mdx).
+
+## Further Reading
+
+- [Using PyPI Connectors as Distribution Management Repository](../quick_start.mdx)
+
+## References
+
+- [Using CSI Volumes in Tekton](https://tekton.dev/docs/pipelines/workspaces/#csi)
+- [Connectors CSI Configuration](../../connectors/concepts/connectors_csi.mdx)

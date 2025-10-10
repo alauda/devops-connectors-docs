@@ -1,0 +1,27 @@
+---
+weight: 10
+---
+
+# Introduction
+
+## What is PyPI Connector
+
+PyPI Connector is a specialized connector component that enables secure and convenient integration with PyPI Registry, allowing users to interact with PyPI Registry secretlessly in clients like `pip`, `twine`.
+
+Once PyPI Connector Component is deployed, users can:
+
+- Create PyPI connectors to integrate with various PyPI Registries (PyPI repository hosted by Nexus, Artifactory, etc.)
+- Perform `pip` and `twine` operations in CI/CD pipelines or kubernetes workloads without directly handling credentials.
+
+## Application Scenarios
+
+The PyPI Connector allows you to perform `pip` and `twine` operations securely by:
+
+- Managing credentials centrally rather than hardcoding them in clients
+- Automatically injecting authentication during the `pip` and `twine` operations
+
+This approach is particularly useful for:
+
+- `CI/CD pipelines` or `kubernetes jobs` requiring access PyPI Registry
+- Teams sharing PyPI Registry access without sharing credentials
+- Environments requiring centralized management of PyPI Registry credentials without distributing credentials to each client

@@ -55,7 +55,7 @@ This section explicitly lists the motivation, goals, and non-goals of this KEP. 
 
 Describe the specific improvements that will be seen by specific user groups if the motivations in this document lead to fixes or features.
 
-Consider the users’:
+Consider the user's:
 - [Roles] - Are they task authors? Catalog task users? Cluster administrators? Etc.
 - Experiences - If the problem is resolved, which workflows or operations will be enhanced?
 

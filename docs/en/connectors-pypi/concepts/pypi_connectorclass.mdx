@@ -1,0 +1,209 @@
+---
+weight: 20
+---
+
+# PyPI Connector
+
+The PyPI connector is a platform-agnostic connector that you can use to connect to any PyPI registry.
+
+You can use the PyPI Connector to securely perform PyPI operations in CICD pipelines, or use it in kubernetes workloads to perform PyPI operations without credentials.
+
+Additionally, you can centralize the management of PyPI access configurations across namespaces, avoiding the need to repeat the PyPI credentials in each namespace.
+
+## Overview
+
+This document covers:
+
+- **Integration Requirements**: Prerequisites for target PyPI registries
+- **Creating PyPI connector**
+- **Advanced Features**: Proxy capabilities and configuration capabilities about PyPI connector
+
+## Integration Requirements
+
+**PyPI Registries Prerequisites**
+
+- The PyPI registry must be able to support [Simple Repository API](https://peps.python.org/pep-0503/)
+
+## Creating a simple PyPI connector
+
+Here's how to create a basic PyPI Connector:
+
+```yaml
+# PyPI Connector
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: pypi-connector
+spec:
+  connectorClassName: pypi
+  address: https://pypi.org
+```
+
+## Fields Reference
+
+**spec.connectorClassName**:
+
+`pypi` (constant), specifies the ConnectorClass name for PyPI integration.
+
+**spec.address**:
+
+Target PyPI registry address, for example: `https://pypi.org`.
+
+**spec.auth(optional)**:
+
+specifies the authentication method of the PyPI registry
+
+- `spec.auth.name`: should be `basicAuth` for PyPI connector.
+
+- `spec.auth.secretRef`: specifies the secret that contains the authentication information of the PyPI registry, the secret should be created in the same namespace as the connector. If your PyPI registry does not require authentication, you can omit this field.
+
+**Optional Metadata fields**:
+
+- `cpaas.io/description`: Description information for the PyPI connector, for example:
+
+  ```yaml
+  apiVersion: connectors.alauda.io/v1alpha1
+  kind: Connector
+  metadata:
+    name: pypi-connector
+    annotations:
+      cpaas.io/description: "Connect to team development PyPI registry"
+  ```
+
+## Capabilities of PyPI Connector
+
+### Authentication
+
+The PyPI connector supports the following authentication types:
+
+- `basicAuth`: Username and password-based authentication, corresponding secret type: `kubernetes.io/basic-auth`
+
+For example:
+
+```yaml
+apiVersion: v1
+stringData:
+  username: your-pypi-registry-username
+  password: your-pypi-registry-password
+kind: Secret
+metadata:
+  name: pypi-secret
+type: kubernetes.io/basic-auth
+```
+
+For comprehensive status information, see [Connector Status Documentation](../../connectors/concepts/connector.mdx#status-information).
+
+### Proxy and pip.conf, .pypirc Configuration
+
+To provide clients with the ability to access PyPI registry without credentials, the PyPI connector provides a proxy server to automatically inject authentication information.
+
+Clients can use this proxy server to access PyPI registry without needing to configure credentials on the client side.
+
+To simplify usage, the PyPI connectorclass provides `pip.conf` and `.pypirc` files that can be mounted into Pods via CSI. In the Pod, when executing PyPI operations, the proxy service can be automatically inject authentication information.
+
+#### Proxy Address
+
+Upon Connector creation, the system automatically provisions a proxy service for the target PyPI registry.
+
+The proxy endpoint is recorded in `status.proxy.httpAddress`:
+
+For example:
+
+```yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: pypi-connector
+spec:
+  # connector spec fields
+status:
+  conditions:
+    # status conditions
+  proxy:
+    httpAddress:
+      url: http://c-pypi-connector.default.svc.cluster.local
+```
+
+#### pip.conf configuration file \{#pipconf-configuration-file}
+
+The PyPI connector provides the following configuration:
+
+**pip.conf**:
+
+- Provides a `pip.conf` configuration file. Combined with the connector-csi-driver, this configuration file will be mounted into the Pod, allowing access to the PyPI registry through the proxy without needing to configure credentials on the client side.
+
+Example of the configuration file generated in the Pod:
+
+  ```ini
+  [global]
+  index-url = http://connectors-pypi-demo-pypi-connector:eyJhbGciOiJEnEZaTQ@c-pypi-connector.connectors-pypi-demo.svc.cluster.local/simple/
+  timeout = 30
+  
+  [install]
+  trusted-host = c-pypi-connector.connectors-pypi-demo.svc.cluster.local
+  ```
+
+#### .pypirc configuration file \{#pypirc-configuration-file}
+
+- Provides a `.pypirc` configuration file. Combined with the connector-csi-driver, this configuration file will be mounted into the Pod, allowing access to the PyPI registry through the proxy without needing to configure credentials on the client side.
+
+  ```ini
+  [distutils]
+  index-servers = connectors-pypi
+  
+  [connectors-pypi]
+  repository = http://c-pypi-connector.connectors-pypi-demo.svc.cluster.local/
+  username = connectors-pypi-demo-pypi-connector
+  password = eyJhbGciOiJEnEZaTQ
+  ```
+
+For detailed proxy mechanics, see [How It Works](../quick_start.mdx#what-happens-under-the-hood) in the Quick Start guide.
+
+
+#### Using Connectors CSI Driver to mount pip.conf and .pypirc file \{#using-connectors-csi-driver-to-mount-pipconf-file}
+
+The PyPI connector provides a `pip.conf` and `.pypirc` file that can be mounted into the Pod via Connector CSI Driver.
+
+For example:
+
+``` yaml
+spec:
+  volumes:
+  - name: pip.conf
+    csi:
+      readOnly: true
+      driver: connectors-csi
+      volumeAttributes:
+        connector.name: "pypi-connector"
+        configuration.names: "pipconf"
+  - name: pypirc
+    csi:
+      readOnly: true
+      driver: connectors-csi
+      volumeAttributes:
+        connector.name: "pypi-connector"
+        configuration.names: "pypirc"
+```
+
+parameter descriptions:
+
+- `csi.readOnly`: Fixed value `true`
+- `csi.driver`: The Connector CSI Driver, fixed as `connectors-csi`.
+- `csi.volumeAttributes`: CSI Volume attributes
+  - `connector.name`: Name of the PyPI Connector
+  - `connector.namespace`: Namespace of the PyPI Connector; if not specified, the Pod's namespace is used
+  - `configuration.names`: Configuration name, provide by the PyPI Connector. As above, `pipconf` and `pypirc` are supported.
+
+For detailed information about how to use the `pip.conf` and `.pypirc` file in the Pod by connectors-csi-driver, please refer to [Using PyPI Connectors in kubernetes jobs](../quick_start.mdx)
+
+## Further Reading
+
+- [Using PyPI Connectors as Distribution Management Repository](../quick_start.mdx)
+- [Using PyPI Connectors in Tekton Pipelines](../how_to/using-in-tekton-task.mdx)
+
+## References
+
+- [Concepts of Connector](../../connectors/concepts/connector.mdx)
+- [Connector Proxy](../../connectors/concepts/connectors_proxy.mdx)
+- [Connector CSI Driver](../../connectors/concepts/connectors_csi.mdx)
+- [Kubernetes CSI Volume](https://kubernetes.io/docs/concepts/storage/volumes/#csi)

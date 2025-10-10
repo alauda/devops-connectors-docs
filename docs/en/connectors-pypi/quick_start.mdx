@@ -1,0 +1,317 @@
+---
+weight: 30
+---
+
+# Quick Start
+
+This document will help you quickly understand how to create a PyPI connector to connect to a PyPI registry and perform `twine` and `pip` operations securely without directly handling credentials.
+
+We will create a PyPI connector, and use it to perform `twine upload` and `pip install` without directly handling credentials in client side.
+
+## Estimated Reading Time
+
+15 minutes
+
+## Prerequisites
+
+- Kubernetes cluster with Connectors system installed (Operator, ConnectorsCore and ConnectorsPyPI components). See the [Installation Guide](../install) for details on installing these components.
+- PyPI registry address and credentials
+- Basic knowledge of Kubernetes and PyPI
+
+## Process Overview
+
+| Step | Operation                                        | Description                                               |
+| ---- | ------------------------------------------------ | --------------------------------------------------------- |
+| 1    | Create Namespace                                 | Set up a dedicated namespace for the demonstration        |
+| 2    | Configure PyPI Registry Credentials & Connector  | Create authentication secret and PyPI connector resource |
+| 3    | Create a PyPI Job for executing  `twine upload`  | Create a job that performs `twine upload` via the connector |
+| 4    | Create a PyPI Job for executing  `pip install`   | Create a job that performs `pip install` via the connector |
+
+
+## Steps to Operate
+
+### Step 1: Create Namespace
+
+Create a dedicated namespace for this demonstration:
+
+```bash
+kubectl create ns connectors-pypi-demo
+```
+
+### Step 2: Create PyPI Registry Credentials and Connector
+
+Create both the Secret containing PyPI registry credentials and the PyPI connector resource. Your PyPI registry should be a repository.
+
+For more detailed information about creating and configuring connectors, please refer to the [Connectors Quick Start Guide](../../connectors/quick_start).
+
+```bash
+cat <<EOF | kubectl apply -n connectors-pypi-demo -f -
+kind: Secret
+apiVersion: v1
+metadata:
+  name: pypi-registry-secret
+type: kubernetes.io/basic-auth
+stringData:
+  username: your-registry-username # Replace with your PyPI registry username
+  password: your-registry-password # Replace with your PyPI registry password
+---
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: pypi-connector
+spec:
+  connectorClassName: pypi
+  address: https://nexus.example.com/repository/pypi # Replace with your PyPI repository address, we will deploy package to this repository.
+  auth:
+    name: basicAuth
+    secretRef:
+      name: pypi-registry-secret
+EOF
+```
+
+Verify that the connector is in "Ready" status:
+
+```bash
+kubectl get connector pypi-connector -n connectors-pypi-demo
+```
+
+The output should show:
+
+```
+NAME              CLASS   ADDRESS                                                    READY   REASON   AGE
+pypi-connector   pypi   https://nexus.example.com/repository/pypi   True             10s
+```
+
+### Step 3: Create a Job to Perform `twine upload`
+
+Create a job that uses the connector to perform PyPI operations:
+
+```bash
+cat <<'EOF' | kubectl apply -n connectors-pypi-demo -f -
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: twine-upload
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: twine
+        image: python:3-bookworm
+        imagePullPolicy: IfNotPresent
+        command:
+        - "sh"
+        - "-c"
+        - |
+          set -ex
+          pip install --upgrade pip build twine
+          git clone https://github.com/pypa/sampleproject.git
+          cd sampleproject
+          python -m build
+          python3 -m twine upload --repository connectors-pypi dist/*
+        volumeMounts:
+        - name: pypirc
+          mountPath: /root/.pypirc
+          subPath: .pypirc
+      volumes:
+      - name: pypirc
+        csi:
+          readOnly: true
+          driver: connectors-csi
+          volumeAttributes:
+            connector.name: "pypi-connector"
+            configuration.names: "pypirc"
+EOF
+```
+
+The output should show:
+```
+...
+Successfully built sampleproject-4.0.0.tar.gz and sampleproject-4.0.0-py3-none-any.whl
++ python3 -m twine upload --repository connectors-pypi dist/sampleproject-4.0.0-py3-none-any.whl dist/sampleproject-4.0.0.tar.gz
+Uploading distributions to 
+http://c-pypi-connector.connectors-pypi-demo.svc.cluster.local/
+Uploading sampleproject-4.0.0-py3-none-any.whl
+100% ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 12.7/12.7 kB • 00:00 • ?
+Uploading sampleproject-4.0.0.tar.gz
+100% ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 13.8/13.8 kB • 00:00 • ?
+```
+
+#### Key settings
+
+**volumes[].volumeAttributes**
+
+- `connector.name`: The name of your pypi connector
+- `configuration.names`: Set to "pypirc", which references a specific configuration template defined in the pypi connectorClass. This template is used to generate the "pypirc" file with the appropriate settings for authentication.
+
+### Step 4: Create a PyPI Job for executing `pip install`
+
+Create a job that uses the connector to perform PyPI operations:
+
+```bash
+cat <<'EOF' | kubectl apply -n connectors-pypi-demo -f -
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pip-install
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: pip
+        image: python:3-bookworm
+        imagePullPolicy: IfNotPresent
+        command:
+        - "sh"
+        - "-c"
+        - |
+          set -ex
+          pip install --upgrade sampleproject --no-deps
+        volumeMounts:
+        - name: pipconf
+          mountPath: /root/.pip/pip.conf
+          subPath: pip.conf
+      volumes:
+      - name: pipconf
+        csi:
+          readOnly: true
+          driver: connectors-csi
+          volumeAttributes:
+            connector.name: "pypi-connector"
+            configuration.names: "pipconf"
+EOF
+```
+
+The output should show:
+```
++ pip install --upgrade sampleproject --no-deps
+Looking in indexes: http://connectors-pypi-demo-pypi-connector:****@c-pypi-connector.connectors-pypi-demo.svc.cluster.local/simple/
+Collecting sampleproject
+  Downloading http://c-pypi-connector.connectors-pypi-demo.svc.cluster.local/packages/sampleproject/4.0.0/sampleproject-4.0.0-py3-none-any.whl (4.7 kB)
+Installing collected packages: sampleproject
+Successfully installed sampleproject-4.0.0
+```
+
+## What happens under the hood \{#what-happens-under-the-hood}
+
+The PyPI connector works by:
+
+1. Creating a proxy service that sits between your PyPI client and the target PyPI registry
+2. Injecting authentication information when requests pass through the proxy
+3. Providing `pip.conf` and `.pypirc` files for client to perform PyPI operations with the proxy
+
+To demonstrate this mechanism, let's inspect the generated `pip.conf` and `.pypirc` file:
+
+```bash
+cat <<EOF | kubectl apply -n connectors-pypi-demo -f -
+apiVersion: v1
+kind: Pod
+metadata:
+  name: inspect-pypi-deploy
+spec:
+  restartPolicy: Never
+  containers:
+  - name: pip
+    image: docker-mirrors.alauda.cn/library/python:3-bookworm # Replace with your image contains python
+    command: ["sleep", "3600"]
+    volumeMounts:
+    - name: pipconf
+      mountPath: /root/.pip/pip.conf
+      subPath: pip.conf
+    - name: pypirc
+      mountPath: /root/.pypirc
+      subPath: .pypirc
+  volumes:
+  - name: pipconf
+    csi:
+      readOnly: true
+      driver: connectors-csi
+      volumeAttributes:
+        connector.name: "pypi-connector"
+        configuration.names: "pipconf"
+  - name: pypirc
+    csi:
+      readOnly: true
+      driver: connectors-csi
+      volumeAttributes:
+        connector.name: "pypi-connector"
+        configuration.names: "pypirc"
+EOF
+```
+
+View the generated files in `/root/.pip/pip.conf` and `/root/.pypirc`:
+
+```bash
+$ kubectl exec -it inspect-pypi-deploy -n connectors-pypi-demo -- ls -l /root/.pip/pip.conf /root/.pypirc
+-r--r--r-- 1 root root 1276 Oct  6 04:07 /root/.pip/pip.conf
+-r--r--r-- 1 root root 1251 Oct  6 04:07 /root/.pypirc
+```
+
+View the generated `pip.conf` and `.pypirc` file:
+
+``` bash
+$ kubectl exec -it inspect-pypi-deploy -n connectors-pypi-demo -- cat /root/.pip/pip.conf
+[global]
+index-url = http://connectors-pypi-demo-pypi-connector:eyJhbGciOiJSUzI1NiIsImtpZCI6IklNVm9ZVWR6Y05PNWotUlRCQWRyTlVPak05WWxTanIwYnNJSjdtRTlHcXMifQ.eyJhdWQiOlsiaHR0cHM6Ly9rdWJlcm5ldGVzLmRlZmF1bHQuc3ZjLmNsdXN0ZXIubG9jYWwiLCJodHRwOi8vYy1weXBpLWNvbm5lY3Rvci5jb25uZWN0b3JzLXB5cGktZGVtby5zdmMuY2x1c3Rlci5sb2NhbCJdLCJleHAiOjE3NTk3MjU0NTIsImlhdCI6MTc1OTcyMzY1MiwiaXNzIjoiaHR0cHM6Ly9rdWJlcm5ldGVzLmRlZmF1bHQuc3ZjLmNsdXN0ZXIubG9jYWwiLCJqdGkiOiI4NjVhZmIwZi0xYTJkLTRiODAtOWY4Mi03YjMxOWUxNzFmYzIiLCJrdWJlcm5ldGVzLmlvIjp7Im5hbWVzcGFjZSI6ImNvbm5lY3RvcnMtcHlwaS1kZW1vIiwic2VydmljZWFjY291bnQiOnsibmFtZSI6ImRlZmF1bHQiLCJ1aWQiOiI4ZjMyMzhjNC0wMTFjLTRkZTktOTcxYS1lYTRkZTQ2NTQyZmEifX0sIm5iZiI6MTc1OTcyMzY1Miwic3ViIjoic3lzdGVtOnNlcnZpY2VhY2NvdW50OmNvbm5lY3RvcnMtcHlwaS1kZW1vOmRlZmF1bHQifQ.BPbpWNz1A4JUjKkQFgeglIoW3YKydMiR_0r2V3R7awSnac6lQiEMrmJQ2MgAKbrzysmi_tfku6bLjk7Jkq_OmPdSwiwFvh6Ixxpe2lk7Ej10hCibxNTrqnsPVV9upS1WyKaci7nwvtV5qH2smjcpNB38sjX-pi5nCblGKXbj4Gt0F11-OVyPOD6FJayhEYmT3bi-GXJGi3da7vYR1v-L3c3JF4RiV4xQ_FpnBgdzD9_C9WZuXAHSp8oXxzGRra7kqhjpCO10GMmExvT9mfKr-z5f1CZdMcbsiGRkxkZ6EH-W8Q4DQ09a3Thnmq_lBd5xriwqldBEN8_1Cnh6A70Wrw@c-pypi-connector.connectors-pypi-demo.svc.cluster.local/simple/
+timeout = 30
+
+[install]
+trusted-host = c-pypi-connector.connectors-pypi-demo.svc.cluster.local
+
+$ kubectl exec -it inspect-pypi-deploy -n connectors-pypi-demo -- cat /root/.pypirc
+[distutils]
+index-servers = connectors-pypi
+
+[connectors-pypi]
+repository = http://c-pypi-connector.connectors-pypi-demo.svc.cluster.local/ # proxy address
+username = connectors-pypi-demo-pypi-connector # The username of pypi proxy
+password = eyJhbGciOiJSUzI1NiIsImtpZCI6IklNVm9ZVWR6Y05PNWotUlRCQWRyTlVPak05WWxTanIwYnNJSjdtRTlHcXMifQ.eyJhdWQiOlsiaHR0cHM6Ly9rdWJlcm5ldGVzLmRlZmF1bHQuc3ZjLmNsdXN0ZXIubG9jYWwiLCJodHRwOi8vYy1weXBpLWNvbm5lY3Rvci5jb25uZWN0b3JzLXB5cGktZGVtby5zdmMuY2x1c3Rlci5sb2NhbCJdLCJleHAiOjE3NTk3MjU0NTIsImlhdCI6MTc1OTcyMzY1MiwiaXNzIjoiaHR0cHM6Ly9rdWJlcm5ldGVzLmRlZmF1bHQuc3ZjLmNsdXN0ZXIubG9jYWwiLCJqdGkiOiIxNmFmM2Q0Yi1hYjUyLTQwNDgtYjAxYS1hMGRmZTM2MDI1NTAiLCJrdWJlcm5ldGVzLmlvIjp7Im5hbWVzcGFjZSI6ImNvbm5lY3RvcnMtcHlwaS1kZW1vIiwic2VydmljZWFjY291bnQiOnsibmFtZSI6ImRlZmF1bHQiLCJ1aWQiOiI4ZjMyMzhjNC0wMTFjLTRkZTktOTcxYS1lYTRkZTQ2NTQyZmEifX0sIm5iZiI6MTc1OTcyMzY1Miwic3ViIjoic3lzdGVtOnNlcnZpY2VhY2NvdW50OmNvbm5lY3RvcnMtcHlwaS1kZW1vOmRlZmF1bHQifQ.U3SpoP9QL1HsxENBcSiC-0vPG2BME6qEzflv6OXSlu1KiU8iGejfcAW-OvTDKwVJq2rwjJf2mQkEIs7aySrJAJ241dAoqEQ68pZ3zpZwcxNquuK7q7jP1PSNnupw4h_T250m5LfUenp3p3bir-TkxZbmATNUCHeVyrKxIJQj8f0UuZZ5CF_gBBUSOU8geI70oTwmfE7cVExd75UttUHWOFkP-wQYFdQG1Mq05DA2xCvPt0gajmOIBLTTjKVahY5v9nBfJsnJHNtRu12xG-dFULpy3BVU0wEkH8pWA6iegXw4xNj2nB6rGK4EIvPrcMZYXX_Fpnigucnw_0wtwE-syg # The token of proxy.
+```
+
+### Authentication Flow
+
+The `inspect-pypi-deploy` pod contains no original cluster tokens. When maven makes HTTPS requests to the maven registry, the proxy server intercepts these requests, injects authentication credentials from the `pypi-connector`, and forwards the authenticated requests to the backend pypi registry server.
+
+### Settings Volume
+
+The `pip.conf` and `.pypirc` file is mounted into the Pod via Connectors CSI Driver.
+
+``` yaml
+  volumes:
+  - name: pipconf
+    csi:
+      readOnly: true
+      driver: connectors-csi
+      volumeAttributes:
+        connector.name: "pypi-connector"
+        configuration.names: "pipconf"
+  - name: pypirc
+    csi:
+      readOnly: true
+      driver: connectors-csi
+      volumeAttributes:
+        connector.name: "pypi-connector"
+        configuration.names: "pypirc"
+```
+
+In the above example, the `pip.conf` and `.pypirc` file is mounted into the Pod via Connectors CSI Driver.
+
+- The `pip.conf` and `.pypirc` file use connector proxy as PyPI registry, when PyPI Client request the address, the proxy will transport the request to the backend pypi registry, and inject the authentication information when requests pass through the proxy.
+
+For volumes parameters, please refer to [Using Connectors CSI Driver to mount pip.conf and .pypirc file](./concepts/pypi_connectorclass.mdx#using-connectors-csi-driver-to-mount-pipconf-file) in PyPI Connector Concepts document.
+
+## Further Reading
+
+After successfully performing mvn deploy operations using the maven connector, you can:
+
+- Learn more about [Concepts of PyPI Connectors](./concepts/pypi_connectorclass.mdx)
+- [Using PyPI Connectors in Tekton Pipelines](./how_to/using-in-tekton-task.mdx)
+
+
+## References
+
+- [PyPI Connector Installation Guide](../install.mdx)
