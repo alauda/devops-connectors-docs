@@ -39,14 +39,6 @@ spec:
         connector.name: maven-connector
         connector.namespace: ""
         configuration.names: "settings"
-  - name: cert
-    csi:
-      driver: connectors-csi
-      readOnly: true
-      volumeAttributes:
-        connector.name: maven-connector
-        connector.namespace: ""
-        configuration.names: "settings"
 ```
 
 For workspaces parameters, please refer to [Using Connectors CSI Driver to mount settings.xml file](../concepts/maven_connectorclass.mdx#using-connectors-csi-driver-to-mount-settingsxml-file) in Maven Connector Concepts document.
