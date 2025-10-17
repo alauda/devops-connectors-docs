@@ -67,7 +67,7 @@ This API is very useful in practical applications, such as:
 
 The implementation of the `Connectors API` is based on the underlying capabilities provided by the `ConnectorClass API`.
 
-# ConnectorClass API
+## ConnectorClass API
 
 `ConnectorClass API` defines the APIs provided by specific types of tools.
 
@@ -78,10 +78,24 @@ Different types of tools can offer various API capabilities, for example:
 
 Developers can define unique API capabilities for each `ConnectorClass`, and these capabilities will ultimately be exposed to clients through the `Connectors API`.
 
-# Connectors CSI Driver
+## Connectors CSI Driver
 
 To facilitate easier utilization of Connectors-Proxy capabilities by K8S workloads, we can use the Connectors CSI Driver.
 
 The Connectors CSI Driver can mount the rendered contents of the configuration file templates maintained within the ConnectorClass into the workload. The configuration file can include information for accessing the `Connectors Proxy`, enabling users to utilize Connectors Proxy capabilities with minimal modifications to their original scripts.
 
 For more information, refer to [connectors csi driver](../concepts/connectors_csi.mdx)
+
+## ResourceInterface
+
+`ResourceInterface` is a standardized abstraction that defines how external resources (like Git repositories, OCI container images, artifact repositories) can be integrated into pipeline workflows.
+
+When building CI/CD pipelines, users traditionally need to manually configure resource URLs, git branch/tag, OCI image tag, artifact repository, and authentication credentials for different external tools. This manual process is complex, error-prone, and makes pipeline configurations tightly coupled to specific tool instances.
+
+ResourceInterface solves this by providing standard resource abstraction like "GitCodeRepository", "OCIArtifact", and "MavenArtifact". Instead of manually entering URLs like `https://github.com/myorg/myapp.git`, users can select a connector, browse resources through the UI, and the system automatically generates the correct configuration and credentials for the pipeline.
+
+This approach provides a consistent, user-friendly experience across different tools while maintaining flexibility to support various implementations.
+
+For more information, refer to [ResourceInterface](../concepts/resource_interface.mdx).
+
+If you want to integrate Connector in your custom Pipeline or Task, please refer to <ExternalSiteLink name="pipelines" href="/pipelines/concepts/integrate_with_connector.html" children="Pipeline Integration" />

@@ -13,6 +13,18 @@ Typically, enterprises need to integrate a variety of tools in development, test
 
 ## Feature Overview
 
+**Built-in tool Connectors**
+
+`Connectors` provide readily available tool access capabilities for tools such as `Git`, `OCI Registry`, and `Kubernetes clusters`. Once `Connectors` are deployed, related tool types can be integrated.
+
+The built-in tool Connectors includes:
+
+- [Git Connector](../connectors-git/intro.mdx)
+- [OCI Registry Connector](../connectors-oci/intro.mdx)
+- [Kubernetes Connector](../connectors-k8s/intro.mdx)
+- [Maven Connector](../connectors-maven/intro.mdx)
+- [PyPI Connector](../connectors-pypi/intro.mdx)
+
 **Unified maintenance and management of tool access information**
 
 Within a cluster, different types of tools that can be accessed as well as the tools that have already been integrated can be maintained uniformly; the addresses of the integrated tools, tool credentials, and configurations required by the client can also be uniformly managed.
@@ -61,10 +73,6 @@ More readings:
 - `Git Server` complying with the [Git Transport Protocol](https://git-scm.com/book/en/v2/Git-on-the-Server-The-Protocols)
 - `OCI Registry` complying with the [OCI Distribution Spec](https://git-scm.com/book/en/v2/Git-on-the-Server-The-Protocols)
 - `K8S Server` complying with [K8S Conformance](https://github.com/cncf/k8s-conformance)
-
-**Out-of-the-box tool access capability**
-
-`Connectors` provide readily available tool access capabilities for tools such as `Git`, `OCI Registry`, and `Kubernetes clusters`. Once `Connectors` are deployed, related tool types can be integrated.
 
 **Flexible tool type expansion capability**
 

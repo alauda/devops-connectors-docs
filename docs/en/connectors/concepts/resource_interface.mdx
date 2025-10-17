@@ -1,0 +1,393 @@
+---
+created: '2025-10-16'
+title: ResourceInterface
+weight: 70
+---
+
+# ResourceInterface
+
+## Overview
+
+`ResourceInterface` is a cluster-level resource that defines standardized abstractions for external resources (like Git repositories, OCI artifacts, Maven artifacts) and how they integrate into pipeline workflows. It serves as a bridge between connectors and pipeline orchestration, enabling seamless resource integration with minimal manual configuration.
+
+The following example defines a `GitCodeRepository` interface that describes Git repository access:
+
+```yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: ResourceInterface
+metadata:
+  name: gitcoderepository
+  labels:
+    resourceinterface.connectors.cpaas.io/category: "GitCodeRepository"
+spec:
+  params:
+  - name: repository
+    type: string
+    description: "Repository name"
+  - name: revision
+    type: string
+    default: "refs/heads/main"
+    description: "Git revision (branch, tag, or commit)"
+  attributes:
+  - name: url
+    type: string
+    expression: "{connector.spec.address + '/' + params.repository}"
+    parameterize:
+      name: git-url
+    dependsOn:
+    - params.repository
+    - connector
+  workspaces:
+  - name: git-basic-auth
+    workspaceMapping:
+      name: git-basic-auth
+    value:
+      csi:
+        driver: connectors-csi
+        readOnly: true
+        volumeAttributes:
+          connector.name: "{connector.metadata.name}"
+          connector.namespace: "{connector.metadata.namespace}"
+          configuration.names: "gitconfig"
+          token.expiration: 30m
+```
+
+ResourceInterface defines the following key aspects for resource integration:
+
+- Input parameters required for resource configuration
+- Output attributes calculated from parameters and connector information
+- Workspace definitions for volumes and credentials
+
+**This document provides [ResourceInterface Data Structure definition](#data-structure) and [Examples](#examples) to help readers understand how to customize ResourceInterface.**
+
+You don't need to understand the details of ResourceInterface unless you want to customize ResourceInterface.
+
+## Problem It Solves
+
+When building CI/CD pipelines, users traditionally face several challenges:
+
+**Manual Resource Entry**: Users cannot easily browse and add external resources like Git repositories, OCI repositories, and other external services. They must manually enter URLs and set up workspaces, which is error-prone and time-consuming.
+
+**Repetitive Execution Configuration**: Every time users run a pipeline, they must manually enter version details like Git revision and target OCI tag, and repeatedly configure workspaces.
+
+**Split Attributes**: Attributes from the same remote resource are often split into different parameters. For example, the `git-clone` task requires separate `url` and `revision` parameters, plus workspace configurations for credentials and source code.
+
+**Complex Workspace Selection**: The pipeline workspace selection process lists all available options but provides little guidance on which connector type is appropriate for each workspace.
+
+ResourceInterface addresses these issues by providing a standardized way to describe and integrate external resources into pipeline workflows, enabling users to browse and select resources through UI interfaces while automatically generating the correct configuration and credentials.
+
+## Data Structure \{#data-structure}
+
+ResourceInterface is a cluster-level k8s resource
+
+- **Kind**: ResourceInterface
+- **API Version**: connectors.alauda.io/v1alpha1
+
+### Human-Readable information \{#human-readable-information}
+
+`ResourceInterface` is a standard k8s resource, it can be annotated with human-readable information using `annotations`.
+
+| Key                     | Position    | Description                                       |
+| ----------------------- | ----------- | ------------------------------------------------- |
+| `cpaas.io/display-name` | annotations | Display name for ResourceInterface, optional. |
+| `cpaas.io/description`  | annotations | Description for ResourceInterface, optional. |
+
+```yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: ResourceInterface
+metadata:
+  name: gitcoderepository
+  annotations:
+    cpaas.io/display-name: "Git Code Repository"
+    cpaas.io/description: "GitCodeRepository is a resource interface for Git code repository"
+```
+
+### Resource Categories \{#categories}
+
+ResourceInterface organizes resources into categories that define common contracts and behaviors. Categories are marked using the label `resourceinterface.connectors.cpaas.io/category`.
+
+```yaml
+metadata:
+  labels:
+    resourceinterface.connectors.cpaas.io/category: "GitCodeRepository"
+```
+
+Multiple ResourceInterfaces can belong to the same category (e.g., `gitcoderepository` and `githubcoderepository` both belong to the `GitCodeRepository` category). Resources in the same category must provide the same standard attributes and workspaces to ensure compatibility.
+
+### Parameters {#parameters}
+
+Parameters define the input data required to configure the resource when integrated into a pipeline. These parameters influence the calculation of output attributes.
+
+Parameters are defined in `spec.params` and follow Tekton parameter types:
+
+- **name**: Parameter name
+- **type**: Supports `string`, `array`, `object` (consistent with Tekton ParamSpec types)
+- **default**: Default parameter value (optional)
+- **description**: Parameter description for UI display (optional)
+
+```yaml
+kind: ResourceInterface
+metadata:
+  name: gitcoderepository
+  labels:
+    resourceinterface.connectors.cpaas.io/category: "GitCodeRepository"
+spec:
+  params:
+  - name: repository
+    type: string
+    description: "Repository name"
+  - name: revision
+    type: string
+    default: "refs/heads/main"
+    description: "Git revision (branch, tag, or commit)"
+```
+
+### Attributes \{#attributes}
+
+Attributes define the output values calculated from input parameters and connector information. They can be consumed by pipeline tasks as parameters and may be elevated to pipeline-level parameters.
+
+Attributes are defined in `spec.attributes`:
+
+- **name**: Attribute name
+- **type**: Value type - supports `string`, `array`
+- **expression**: JavaScript expression for calculating the attribute value
+- **parameterize**: Parameterization configuration
+  - **name**: Default parameter name when parameterized
+  - **disable**: Whether to disable parameterization
+- **dependsOn**: Dependencies on parameters or connector
+
+```yaml
+spec:
+  attributes:
+  - name: url
+    type: string
+    expression: "{connector.spec.address + '/' + params.repository}"
+    parameterize:
+      name: git-url
+    dependsOn:
+    - params.repository
+    - connector
+  - name: artifact-versions
+    type: array
+    expression: "{params.tags.map(tag => connector.spec.registry + '/' + params.repository + ':' + tag)}"
+    dependsOn:
+    - params.repository
+    - params.tags
+    - connector
+```
+
+#### Expression Syntax
+
+Expressions use JavaScript syntax and support:
+
+- **String concatenation**: `params.organization + '/' + params.repository`
+- **Object property access**: `connector.metadata.name`
+- **Array operations**: `params.tags.map(tag => connector.spec.address + ':' + tag)`
+- **Built-in functions**:
+    -  `url(connector.spec.address).host`: get the host of the address
+
+and other JavaScript syntaxes are supported.
+
+**Available Context**:
+
+- `connector`: Current connector information, the structure of connector please refer to [Concept of Connector](./connector.mdx)
+- `params`: Current parameter values
+
+the context datat structure is:
+
+```javascript
+{
+  "params": {
+    "param-name1": "param-value",
+    "param-name2": "param-value"
+  },
+  "connector": {}
+}
+```
+
+**Security**: Frontend executes JavaScript code in a sandbox environment, you just could invoke the limited safe functions.
+
+**Example**:
+
+- `{connector.spec.address + '/' + params.repository}`: get the address of the repository
+- `{url(connector.spec.address).host + '/' + params.repository + ':' + params.tag}`: get the address of the artifact
+- `{params.tags.map(tag => url(connector.spec.address).host + '/' + params.repository + ':' + tag)}`: get the addresses of the artifacts array by iterating the tags array
+
+#### Dependencies
+
+Dependencies specify what parameters or connector information an attribute calculation depends on:
+
+- `params.<param-name>`: Depends on a specific parameter value
+- `connector`: Depends on connector selection
+
+### Workspaces {#workspaces}
+
+Workspaces define volumes and credentials provided by the resource interface. They enable automatic provisioning of required resources for pipeline tasks.
+
+Workspaces are defined in `spec.workspaces`:
+
+- **name**: Workspace name
+- **workspaceMapping.name**: Default workspace name when added to pipeline workspaces
+- **value**: Default workspace value (follows Tekton WorkspaceBinding format), consistent with Tekton WorkspaceBinding types
+
+```yaml
+spec:
+  workspaces:
+  - name: git-source
+    workspaceMapping:
+      name: git-source
+    value:
+      volumeClaimTemplate:
+        spec:
+          accessModes: [ReadWriteMany]
+          resources:
+            requests:
+              storage: 1Gi
+  - name: git-basic-auth
+    workspaceMapping:
+      name: git-basic-auth
+    value:
+      csi:
+        driver: connectors-csi
+        readOnly: true
+        volumeAttributes:
+          connector.name: "{connector.metadata.name}"
+          connector.namespace: "{connector.metadata.namespace}"
+          configuration.names: "gitconfig"
+          token.expiration: 30m
+```
+
+Workspace values support expressions to dynamically reference parameter and connector values using the same syntax as attributes.
+
+## ConnectorClass
+
+ConnectorClasses mark supported ResourceInterfaces through labels `resourceinterface.connectors.cpaas.io/<resource-interface-name>: "true"`, for example:
+
+```yaml
+metadata:
+  labels:
+    resourceinterface.connectors.cpaas.io/gitcoderepository: "true"
+    resourceinterface.connectors.cpaas.io/githubcoderepository: "true"
+```
+
+This enables the system to match compatible connectors with ResourceInterfaces and provide appropriate parameter forms based on ResourceInterface definitions.
+
+More about ConnectorClass please refer to [Concept of ConnectorClass](./connectorclass.mdx)
+
+
+## Examples \{#examples}
+
+**GitCodeRepository ResourceInterface**
+
+```yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: ResourceInterface
+metadata:
+  name: gitcoderepository
+  labels:
+    resourceinterface.connectors.cpaas.io/category: "GitCodeRepository"
+spec:
+  params:
+  - name: repository
+    type: string
+    description: "Repository name"
+  - name: revision
+    type: string
+    default: "refs/heads/main"
+    description: "Git revision"
+  attributes:
+  - name: url
+    type: string
+    expression: "{connector.spec.address + '/' + params.repository}"
+    parameterize:
+      name: git-url
+    dependsOn:
+    - params.repository
+    - connector
+  - name: revision
+    type: string
+    expression: "{params.revision}"
+    parameterize:
+      name: git-revision
+    dependsOn:
+    - params.revision
+  workspaces:
+  - name: git-source
+    workspaceMapping:
+      name: git-source
+    value:
+      volumeClaimTemplate:
+        spec:
+          accessModes: [ReadWriteMany]
+          resources:
+            requests:
+              storage: 200Mi
+  - name: git-basic-auth
+    workspaceMapping:
+      name: git-basic-auth
+    value:
+      csi:
+        driver: connectors-csi
+        readOnly: true
+        volumeAttributes:
+          connector.name: "{connector.metadata.name}"
+          connector.namespace: "{connector.metadata.namespace}"
+          configuration.names: "gitconfig"
+          token.expiration: 30m
+```
+
+**OCIArtifact ResourceInterface**
+
+```yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: ResourceInterface
+metadata:
+  name: ociartifact
+  labels:
+    resourceinterface.connectors.cpaas.io/category: "OCIArtifact"
+spec:
+  params:
+  - name: repository
+    type: string
+    description: "Repository name"
+  - name: tags
+    type: array
+    description: "Image tags"
+  attributes:
+  - name: repository-address
+    type: string
+    expression: "{connector.spec.registry + '/' + params.repository}"
+    dependsOn:
+    - params.repository
+    - connector
+  - name: artifact-versions
+    type: array
+    expression: "{params.tags.map(tag => connector.spec.registry + '/' + params.repository + ':' + tag)}"
+    dependsOn:
+    - params.repository
+    - params.tags
+    - connector
+  workspaces:
+  - name: docker-config
+    workspaceMapping:
+      name: docker-config
+    value:
+      csi:
+        driver: connectors-csi
+        readOnly: true
+        volumeAttributes:
+          connector.name: "{connector.metadata.name}"
+          connector.namespace: "{connector.metadata.namespace}"
+          configuration.names: "config"
+          token.expiration: 60m
+```
+
+## What's Next
+
+- Understand <ExternalSiteLink name="pipelines" href="/pipelines/concepts/integrate_with_connector.html" children="Pipeline Integration" /> When you want to integrate Connector in your custom Pipeline or Task.
+
+## References
+
+- [Concept of Connector](./connector.mdx)
+- [Concept of ConnectorClass](./connectorclass.mdx)
+- <ExternalSiteLink name="pipelines" href="/pipelines/concepts/integrate_with_connector.html" children="Pipeline Integration" />
