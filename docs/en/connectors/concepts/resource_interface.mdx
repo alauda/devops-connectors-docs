@@ -114,7 +114,7 @@ metadata:
 
 Multiple ResourceInterfaces can belong to the same category (e.g., `gitcoderepository` and `githubcoderepository` both belong to the `GitCodeRepository` category). Resources in the same category must provide the same standard attributes and workspaces to ensure compatibility.
 
-### Parameters {#parameters}
+### Parameters \{#parameters}
 
 Parameters define the input data required to configure the resource when integrated into a pipeline. These parameters influence the calculation of output attributes.
 
@@ -124,6 +124,8 @@ Parameters are defined in `spec.params` and follow Tekton parameter types:
 - **type**: Supports `string`, `array`, `object` (consistent with Tekton ParamSpec types)
 - **default**: Default parameter value (optional)
 - **description**: Parameter description for UI display (optional)
+
+for example:
 
 ```yaml
 kind: ResourceInterface
@@ -155,6 +157,8 @@ Attributes are defined in `spec.attributes`:
   - **name**: Default parameter name when parameterized
   - **disable**: Whether to disable parameterization
 - **dependsOn**: Dependencies on parameters or connector
+
+for example:
 
 ```yaml
 spec:
@@ -220,7 +224,7 @@ Dependencies specify what parameters or connector information an attribute calcu
 - `params.<param-name>`: Depends on a specific parameter value
 - `connector`: Depends on connector selection
 
-### Workspaces {#workspaces}
+### Workspaces \{#workspaces}
 
 Workspaces define volumes and credentials provided by the resource interface. They enable automatic provisioning of required resources for pipeline tasks.
 
@@ -229,6 +233,8 @@ Workspaces are defined in `spec.workspaces`:
 - **name**: Workspace name
 - **workspaceMapping.name**: Default workspace name when added to pipeline workspaces
 - **value**: Default workspace value (follows Tekton WorkspaceBinding format), consistent with Tekton WorkspaceBinding types
+
+for example:
 
 ```yaml
 spec:
