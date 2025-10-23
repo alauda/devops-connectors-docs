@@ -67,10 +67,12 @@ The `spec.address` specifies the access address of the OCI Registry, for example
 
 ### Authentication
 
-Supported authentication types for the OCI Connector:
+The OCI Connector supports the following authentication types:
 
 - `tokenAuth`: Token-based authentication (optional)
   - Corresponding credential type: `cpaas.io/distribution-registry-token`, this type of credential is used for the authentication process defined in the [CNCF Distribution Token Authentication Specification](https://distribution.github.io/distribution/spec/auth/token/), and the credential must provide `username` and `password` information.
+
+#### Using Token-based Authentication
 
 For example:
 
@@ -111,6 +113,16 @@ spec:
   auth:
     name: tokenAuth
 ```
+
+#### Token Permissions Required \{#token_permissions_required}
+
+The required permissions for the configured token depend on how you intend to use it in your Pods/Pipelines.
+
+For example:
+- **Image pull operations**: If you only need to pull images using this connector, the token only require read permissions for the target repositories.
+- **Image pull and push operations**: If you need to push images using this connector, the token must have both read and write permissions for the target repositories. In other words, the token should allow you to both pull from and push to the registry.
+
+For security best practices, we recommend creating token with minimal required permissions. When additional privileges are needed, create separate Connectors with more privileged secret and use namespace isolation to control which users can access each Connector.
 
 ## Proxy and Configuration
 

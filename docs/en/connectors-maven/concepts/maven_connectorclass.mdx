@@ -97,6 +97,8 @@ The Maven connector supports the following authentication types:
 
 - `basicAuth`: Username and password-based authentication, corresponding secret type: `kubernetes.io/basic-auth`
 
+#### Using Basic Authentication
+
 For example:
 
 ```yaml
@@ -110,7 +112,47 @@ metadata:
 type: kubernetes.io/basic-auth
 ```
 
+If the secret is not correct, the `status.conditions` field in the maven connector will show the error message.
+
+```yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: maven-connector
+spec: {}
+status:
+  conditions:
+    - type: Ready
+      status: False
+      reason: "xxxxx"
+      message: "xxxx"
+```
+
 For comprehensive status information, see [Connector Status Documentation](../../connectors/concepts/connector.mdx#status-information).
+
+If the Maven registry does not require authentication, you can omit the `secretRef` field:
+
+```yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: maven-connector
+spec:
+  connectorClassName: maven
+  address: https://repo.maven.apache.org/maven2
+  auth:
+    name: basicAuth
+```
+
+#### Credential Permissions Required \{#credential_permissions_required}
+
+The required permissions for the configured credential depend on how you intend to use it in your Pods/Pipelines.
+
+For example:
+- **Package operations**: If you only need to download dependencies using `mvn package` or `mvn install`, the credential only require read permissions for the target Maven repository.
+- **Package and Deploy operations**: If you need to publish artifacts using `mvn deploy`, the credentials must have both read and write permissions for the target repository.
+
+For security best practices, we recommend creating credentials with minimal required permissions. When additional privileges are needed, create separate Connectors with more privileged secret and use namespace isolation to control which users can access each Connector.
 
 ### Proxy and settings.xml Configuration
 

@@ -78,6 +78,8 @@ The PyPI connector supports the following authentication types:
 
 - `basicAuth`: Username and password-based authentication, corresponding secret type: `kubernetes.io/basic-auth`
 
+#### Using Basic Authentication
+
 For example:
 
 ```yaml
@@ -91,7 +93,47 @@ metadata:
 type: kubernetes.io/basic-auth
 ```
 
+If the secret is not correct, the `status.conditions` field in the PyPI connector will show the error message.
+
+```yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: pypi-connector
+spec: {}
+status:
+  conditions:
+    - type: Ready
+      status: False
+      reason: "xxxxx"
+      message: "xxxx"
+```
+
 For comprehensive status information, see [Connector Status Documentation](../../connectors/concepts/connector.mdx#status-information).
+
+If the PyPI registry does not require authentication, you can omit the `secretRef` field:
+
+```yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: pypi-connector
+spec:
+  connectorClassName: pypi
+  address: https://pypi.org
+  auth:
+    name: basicAuth
+```
+
+#### Credential Permissions Required \{#credential_permissions_required}
+
+The required permissions for the configured credential depend on how you intend to use it in your Pods/Pipelines.
+
+For example:
+- **Package installation**: If you only need to install packages using `pip install`, the credentials only require read permissions for the target PyPI registry.
+- **Package upload**: If you need to upload packages using `twine upload` or similar tools, the credentials must have both read and write permissions for the target registry.
+
+For security best practices, we recommend creating credentials with minimal required permissions. When additional privileges are needed, create separate Connectors with more privileged secret and use namespace isolation to control which users can access each Connector.
 
 ### Proxy and pip.conf, .pypirc Configuration
 

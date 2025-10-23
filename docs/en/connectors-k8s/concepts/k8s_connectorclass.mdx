@@ -66,11 +66,13 @@ It also supports url with path, for example: `https://192.168.1.100:6443/kuberne
 
 **spec.auth**:
 
-specifies the authentication method of the kubernetes cluster
+specifies the authentication method of the kubernetes cluster.
 
 - `spec.auth.name`: should be `bearerTokenAuth` for kubernetes connector.
 
 - `spec.auth.secretRef`: specifies the secret that contains the authentication information of the kubernetes cluster, the secret should be created in the same namespace as the connector.
+
+For more information about authentication, see [Authentication](#authentication).
 
 **Optional Metadata fields**:
 
@@ -87,13 +89,13 @@ specifies the authentication method of the kubernetes cluster
 
 ## Capabilities of Kubernetes Connector
 
-### Authentication
+### Authentication \{#authentication}
 
 The Kubernetes connector supports the following authentication types:
 
 - `bearerTokenAuth`: Bearer token-based authentication, corresponding secret type: `connectors.cpaas.io/bearer-token`
 
-For example:
+#### Using Bearer Token-based Authentication
 
 ```yaml
 apiVersion: v1
@@ -122,6 +124,24 @@ status:
 ```
 
 For comprehensive status information, see [Connector Status Documentation](../../connectors/concepts/connector.mdx#status-information).
+
+#### Token Permissions Required \{#token_permissions_required}
+
+The required permissions for the configured token depend on how you intend to use it in your Pods/Pipelines.
+
+For example:
+- If you need to create workloads (Deployments, Jobs, etc.) using this connector, the token must have `create` permissions for the corresponding resources in the target cluster.
+- If you only need to read cluster information, the token only requires `get` and `list` permissions for the relevant resources.
+
+For security best practices, we recommend creating tokens with minimal required permissions. When additional privileges are needed, create separate Connectors with more privileged tokens and use namespace isolation to control which users can access each Connector.
+
+#### Token Generation \{#token-generation}
+
+Bearer tokens are typically generated from ServiceAccounts in the target Kubernetes cluster. You can create a ServiceAccount with appropriate RBAC permissions and use its token. For detailed information about ServiceAccount tokens and RBAC configuration, see the [Kubernetes Authentication documentation](https://kubernetes.io/docs/reference/access-authn-authz/authentication/#service-account-tokens).
+
+:::info
+If you are using an API endpoint provided by the <ExternalSiteLink name="acp" href="/" children="Alauda Container Platform" /> to access your cluster (e.g., https://platform.example.com/kubernetes/global), you must configure an ACP platform token instead of a token generated directly from the Kubernetes cluster. For information about platform tokens, see the <ExternalSiteLink name="acp" href="/apis/overview/intro.html" children="Alauda Container Platform API" /> documentation.
+:::
 
 ### Proxy and Kubeconfig Configuration
 

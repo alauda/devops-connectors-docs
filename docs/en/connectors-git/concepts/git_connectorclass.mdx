@@ -69,9 +69,11 @@ metadata:
 
 ### Authentication
 
-The Git connectorclass supports the following authentication types:
+The Git connector supports the following authentication types:
 
-- `basicAuth`: Username and password-based authentication (optional), corresponding credential type: `kubernetes.io/basic-auth`
+- `basicAuth`: Username and password-based authentication (optional), corresponding secret type: `kubernetes.io/basic-auth`
+
+#### Using Basic Authentication
 
 For example:
 
@@ -102,7 +104,9 @@ metadata:
 type: kubernetes.io/basic-auth
 ```
 
-If the Git server does not require authentication, you can omit the authentication information.
+**Note**: The `password` field is not restricted to actual user passwords. You can use other types of credentials such as Personal Access Tokens (PAT) or API keys, as long as they meet the permission requirements outlined in the [Secret Permissions Required](#secret_permissions_required) section.
+
+If the Git server does not require authentication, you can omit the `secretRef` field:
 
 ```yaml
 apiVersion: connectors.alauda.io/v1alpha1
@@ -116,7 +120,17 @@ spec:
     name: basicAuth
 ```
 
-### Authentication Parameters
+#### Credential Permissions Required
+
+The required permissions for the configured credential depend on how you intend to use it in your Pods/Pipelines. Additionally, the credential must have clone permissions for the authentication repository specified in the [Authentication Parameters](#authentication_parameters) section.
+
+For example:
+- If you need to perform both clone and push operations in pipelines using this connector, the credential must have both clone and push permissions for the target repository. In other words, the credential should allow you to both clone from and push to the repository.
+- If you only need to clone repositories in pipelines, the credential only requires clone permissions for the target repository.
+
+For security best practices, we recommend creating credential with minimal required permissions. When privileges are needed, create separate Connectors with more privileged secret and use namespace isolation to control which users can access each Connector.
+
+### Authentication Parameters \{#authentication_parameters}
 
 To check whether the credentials are valid, you need to specify a Git repository path. The connector will use the credentials to access that repository at runtime to determine the validity of the credentials.
 
