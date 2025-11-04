@@ -18,8 +18,8 @@ The Connectors system has a modular architecture with the following components:
 - **ConnectorsOCI**: Optional component that adds support for container registries (Harbor, Docker Registry, etc.)
 - **ConnectorsK8S**: Optional component that adds support for Kubernetes clusters
 - **ConnectorsMaven**: Optional component that adds support for Maven registries (e.g., Maven Central, or Maven repositories hosted on Sonatype Nexus).
-- **ConnectorsPypi**: Optional component that adds support for Python package registries (e.g., PyPI, or Python repositories hosted on Sonatype Nexus).
-
+- **ConnectorsPyPI**: Optional component that adds support for Python package registries (e.g., PyPI, or Python repositories hosted on Sonatype Nexus).
+- **ConnectorsNPM**: Optional component that adds support for Node.js package registries (e.g., npm, or Node.js repositories hosted on Sonatype Nexus).
 This document provides instructions for installing and configuring the Connectors system.
 
 ### Prerequisites
@@ -351,16 +351,16 @@ To add support for integration with Maven registries, install the ConnectorsMave
    kubectl get connectorclass maven
    ```
 
-### Install ConnectorsPypi (Optional)
+### Install ConnectorsPyPI (Optional)
 
-To add support for integration with Pypi registries, install the ConnectorsPypi component:
+To add support for integration with PyPI registries, install the ConnectorsPyPI component:
 
-1. Create the ConnectorsPypi custom resource:
+1. Create the ConnectorsPyPI custom resource:
 
    ```bash
    cat <<EOF | kubectl apply -f -
    apiVersion: operator.connectors.alauda.io/v1alpha1
-   kind: ConnectorsPypi
+   kind: ConnectorsPyPI
    metadata:
      name: connectors-pypi
      namespace: connectors-system
@@ -378,6 +378,35 @@ To add support for integration with Pypi registries, install the ConnectorsPypi 
 
    ```bash
    kubectl get connectorclass pypi
+   ```
+
+### Install ConnectorsNPM (Optional)
+
+To add support for integration with NPM registries, install the ConnectorsNPM component:
+
+1. Create the ConnectorsNPM custom resource:
+
+   ```bash
+   cat <<EOF | kubectl apply -f -
+   apiVersion: operator.connectors.alauda.io/v1alpha1
+   kind: ConnectorsNPM
+   metadata:
+     name: connectors-npm
+     namespace: connectors-system
+   spec: {}
+   EOF
+   ```
+
+2. Monitor the deployment progress:
+
+   ```bash
+   kubectl get connectorsnpm -n connectors-system
+   ```
+
+3. Verify that the Kubernetes ConnectorClass is ready:
+
+   ```bash
+   kubectl get connectorclass npm
    ```
 
 ## Uninstall Connectors
@@ -399,8 +428,11 @@ To uninstall the Connectors system, remove components in the reverse order of in
    # Delete ConnectorsMaven
    kubectl delete connectorsmaven --all -n connectors-system
 
-   # Delete ConnectorsPypi
+   # Delete ConnectorsPyPI
    kubectl delete connectorspypi --all -n connectors-system
+
+   # Delete ConnectorsNPM
+   kubectl delete connectorsnpm --all -n connectors-system
    ```
 
 2. Delete the core component:

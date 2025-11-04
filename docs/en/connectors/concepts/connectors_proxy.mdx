@@ -28,6 +28,12 @@ Operates as a standard HTTP proxy using `http_proxy` and `https_proxy` environme
 2. Injects tool credentials specified in the Connector into the request if current request path is pointing to the target tool specified by the Connector
 3. Forwards the authenticated request to the target tool
 
+:::danger
+
+Connectors Proxy does not support the `CONNECT` method for `HTTP tunneling`. Clients must send HTTP requests directly to the proxy server.
+
+:::
+
 ### Reverse Proxy
 
 Clients access tools by connecting directly to the Connector Proxy Address instead of the original tool URL. The proxy:

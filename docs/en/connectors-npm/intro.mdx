@@ -1,0 +1,27 @@
+---
+weight: 10
+---
+
+# Introduction
+
+## What is NPM Connector
+
+NPM Connector is a specialized connector component that enables secure and convenient integration with NPM Registry, allowing users to interact with NPM Registry without handling credentials in clients like `npm`.
+
+Once NPM Connector Component is deployed, users can:
+
+- Create NPM connectors to integrate with various NPM Registries (NPM repository hosted by Nexus, Artifactory, etc.)
+- Perform `npm` operations in CI/CD pipelines or Kubernetes workloads without directly handling credentials.
+
+## Application Scenarios
+
+The NPM Connector allows you to perform `npm` operations securely by:
+
+- Managing credentials centrally rather than hardcoding them in clients
+- Automatically injecting authentication during the `npm` operations
+
+This approach is particularly useful for:
+
+- `CI/CD pipelines` or `kubernetes jobs` requiring access to NPM Registry
+- Teams sharing NPM Registry access without sharing credentials
+- Environments requiring centralized management of NPM Registry credentials without distributing credentials to each client

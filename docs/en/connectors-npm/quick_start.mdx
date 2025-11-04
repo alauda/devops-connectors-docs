@@ -1,0 +1,368 @@
+---
+weight: 30
+---
+
+# Quick Start
+
+This document will help you quickly understand how to create a NPM connector to connect to a NPM registry and perform download/publish operations securely without directly handling credentials.
+
+We will create a NPM connector, and use it to perform `npm install` and `npm publish` without directly handling credentials in client side.
+
+## Estimated Reading Time
+
+15 minutes
+
+## Prerequisites
+
+- Kubernetes cluster with Connectors system installed (Operator, ConnectorsCore and ConnectorsNPM components). See the [Installation Guide](../install) for details on installing these components.
+- NPM registry address and credentials
+- Basic knowledge of Kubernetes and NPM
+- The NPM registry should be able to publish packages and download packages.
+
+## Process Overview
+
+| Step | Operation                                        | Description                                               |
+| ---- | ------------------------------------------------ | --------------------------------------------------------- |
+| 1    | Create Namespace                                 | Set up a dedicated namespace for the demonstration        |
+| 2    | Configure NPM Registry Credentials & Connector  | Create authentication secret and NPM connector resource |
+| 3    | Create a NPM Job for executing  `npm install`  | Create a job that performs `npm install` via the connector |
+| 4    | Create a NPM Job for executing  `npm publish`   | Create a job that performs `npm publish` via the connector |
+
+
+## Steps to Operate
+
+### Step 1: Create Namespace
+
+Create a dedicated namespace for this demonstration:
+
+```bash
+kubectl create ns connectors-npm-demo
+```
+
+### Step 2: Create NPM Registry Credentials and Connector
+
+Create both the Secret containing NPM registry credentials and the NPM connector resource. Your NPM registry should be a repository.
+
+For more detailed information about creating and configuring connectors, please refer to the [Connectors Quick Start Guide](../../connectors/quick_start).
+
+```bash
+cat <<EOF | kubectl apply -n connectors-npm-demo -f -
+kind: Secret
+apiVersion: v1
+metadata:
+  name: npm-registry-secret
+type: kubernetes.io/basic-auth
+stringData:
+  username: your-registry-username # Replace with your NPM registry username
+  password: your-registry-password # Replace with your NPM registry password
+---
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: npm-connector
+spec:
+  connectorClassName: npm
+  address: https://nexus.example.com/repository/npm # Replace with your NPM repository address, we will deploy package to this repository.
+  auth:
+    name: basicAuth
+    secretRef:
+      name: npm-registry-secret
+EOF
+```
+
+Verify that the connector is in "Ready" status:
+
+```bash
+kubectl get connector npm-connector -n connectors-npm-demo
+```
+
+The output should show:
+
+```
+NAME              CLASS   ADDRESS                                                    READY   REASON   AGE
+npm-connector   npm   https://nexus.example.com/repository/npm   True             10s
+```
+
+### Step 3: Create a Job to Perform `npm install`
+
+Create a job that uses the connector to perform NPM operations:
+
+```bash
+cat <<'EOF' | kubectl apply -n connectors-npm-demo -f -
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: npm-install
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: npm-demo
+        image: node:latest
+        imagePullPolicy: IfNotPresent
+        command:
+        - "sh"
+        - "-c"
+        - |
+          set -ex
+          git clone --depth 1 https://github.com/kycheng/demo-npm-publish-slack-notifier.git npmdemo
+          cd npmdemo
+          npm install --verbose
+        volumeMounts:
+        - name: npmrc
+          mountPath: /root/.npmrc
+          subPath: .npmrc
+      volumes:
+      - name: npmrc
+        csi:
+          readOnly: true
+          driver: connectors-csi
+          volumeAttributes:
+            connector.name: "npm-connector"
+            configuration.names: "npmrc"
+EOF
+```
+
+The output should show:
+```
++ npm install --verbose
+npm verbose cli /usr/local/bin/node /usr/local/bin/npm
+npm info using npm@11.6.2
+npm info using node@v22.21.0
+npm verbose title npm install
+...
+npm http fetch GET 200 https://nexus.example.com/repository/npm/@slack/webhook/-/webhook-5.0.3.tgz 14142ms (cache miss)
+npm http fetch GET 200 https://nexus.example.com/repository/npm/@types/node/-/node-14.14.2.tgz 14682ms (cache miss)
+npm info run dtrace-provider@0.8.8 install node_modules/dtrace-provider node-gyp rebuild || node suppress-error.js
+npm info run dtrace-provider@0.8.8 install { code: 0, signal: null }
+
+added 87 packages in 1m
+npm verbose cwd /npmdemo/standalone/npmdemo
+npm verbose os Linux 3.10.0-1160.el7.x86_64
+npm verbose node v22.21.0
+npm verbose npm  v11.6.2
+npm verbose exit 0
+npm info ok
+```
+
+Key settings:
+
+**volumes[].volumeAttributes**
+
+- `connector.name`: The name of your npm connector
+- `configuration.names`: Set to "npmrc", which references a specific configuration template defined in the npm connectorClass. This template is used to generate the "npmrc" file with the appropriate settings for authentication.
+
+### Step 4: Create a NPM Job for executing `npm publish`
+
+Create a job that uses the connector to perform NPM operations:
+
+```bash
+cat <<'EOF' | kubectl apply -n connectors-npm-demo -f -
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: npm-publish
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: npm-publish
+        image: node:latest
+        imagePullPolicy: IfNotPresent
+        command:
+        - "sh"
+        - "-c"
+        - |
+          set -ex
+          git clone --depth 1 https://github.com/kycheng/demo-npm-publish-slack-notifier.git npmdemo
+          cd npmdemo
+          npm publish --verbose
+        volumeMounts:
+        - name: npmrc
+          mountPath: /root/.npmrc
+          subPath: .npmrc
+      volumes:
+      - name: npmrc
+        csi:
+          readOnly: true
+          driver: connectors-csi
+          volumeAttributes:
+            connector.name: "npm-connector"
+            configuration.names: "npmrc"
+EOF
+```
+
+The output should show:
+```
++ npm publish --verbose
+npm verbose cli /usr/local/bin/node /usr/local/bin/npm
+npm info using npm@10.9.4
+npm info using node@v22.21.0
+npm verbose title npm publish
+...
+npm notice
+npm notice Publishing to https://nexus.example.com/repository/npm with tag latest and default access
+npm http fetch PUT 200 https://nexus.example.com/repository/npm/npm-slack-notifier 659ms
++ npm-slack-notifier@0.1.0
+npm verbose cwd /npmdemo
+npm verbose os Linux 3.10.0-1160.el7.x86_64
+npm verbose node v22.21.0
+npm verbose npm  v10.9.4
+npm verbose exit 0
+npm info ok
+```
+
+## What happens under the hood \{#what-happens-under-the-hood}
+
+The NPM connector works by:
+
+1. Creating a proxy service that sits between your NPM client and the target NPM registry
+2. Injecting authentication information when requests pass through the proxy
+3. Providing `.npmrc` file for client to perform NPM operations with the proxy
+
+To demonstrate this mechanism, let's inspect the generated `.npmrc` file:
+
+```bash
+cat <<EOF | kubectl apply -n connectors-npm-demo -f -
+apiVersion: v1
+kind: Pod
+metadata:
+  name: inspect-npm-deploy
+spec:
+  restartPolicy: Never
+  containers:
+  - name: npm-demo
+    image: node:lts-bookworm # Replace with your image contains node
+    command: ["sleep", "3600"]
+    volumeMounts:
+    - name: npmrc
+      mountPath: /root/.npmrc
+      subPath: .npmrc
+    - name: yarnrc
+      mountPath: /root/.yarnrc.yml
+      subPath: .yarnrc.yml
+    - name: yarnrc
+      mountPath: /root/ca.cert
+      subPath: ca.cert
+  volumes:
+    - name: npmrc
+      csi:
+        readOnly: true
+        driver: connectors-csi
+        volumeAttributes:
+          connector.name: "npm-connector"
+          configuration.names: "npmrc"
+    - name: yarnrc
+      csi:
+        readOnly: true
+        driver: connectors-csi
+        volumeAttributes:
+          connector.name: "npm-connector"
+          configuration.names: "yarnrc"
+EOF
+```
+
+View the generated files in `/root/.npmrc` and `/root/.yarnrc.yml`:
+
+```bash
+$ kubectl exec -it inspect-npm-deploy -n connectors-npm-demo -- ls -l /root/.npmrc
+-r--r--r-- 1 root root 1276 Oct  6 04:07 /root/.npmrc
+-r--r--r-- 1 root root 1276 Oct  6 04:07 /root/.yarnrc.yml
+-r--r--r-- 1 root root 1276 Oct  6 04:07 /root/ca.cert
+```
+
+View the generated `.npmrc` and `.yarnrc.yml` files:
+
+``` bash
+$ kubectl exec -it inspect-npm-deploy -n connectors-npm-demo -- cat /root/.npmrc
+# NPM Registry Configuration
+registry=https://nexus.example.com/repository/npm
+
+# Configure authentication for private registry access
+//nexus.example.com/repository/npm/:_auth=fAd326jYkI123456789xxx
+
+# Set the connector proxy URL for npm registry access
+https-proxy=http://connectors-npm-demo%2Fnpm-connector:fAd326jYkI123456789xxx@c-npm-connector.connectors-npm-demo.svc.cluster.local/
+proxy=http://connectors-npm-demo%2Fnpm-connector:fAd326jYkI123456789xxx@c-npm-connector.connectors-npm-demo.svc.cluster.local/
+
+# Disable strict SSL verification for internal registries
+strict-ssl=false
+
+# Disable npm audit to avoid security warnings during CI/CD
+audit=false
+
+# Disable funding messages to reduce output noise
+fund=false
+
+$ kubectl exec -it inspect-npm-deploy -n connectors-npm-demo -- cat /root/.yarnrc.yml
+# Set the NPM registry server URL for package resolution
+npmRegistryServer: "https://nexus.example.com/repository/npm"
+
+# Authentication token for registry access
+# This token is automatically generated by the connector
+npmAuthIdent: "fAd326jYkI123456789xxx"
+
+# Set the connector proxy URL for npm registry access
+httpsProxy: http://connectors-npm-demo%2Fnpm-connector:fAd326jYkI123456789xxx@c-npm-connector.connectors-npm-demo.svc.cluster.local/
+httpProxy: http://connectors-npm-demo%2Fnpm-connector:fAd326jYkI123456789xxx@c-npm-connector.connectors-npm-demo.svc.cluster.local/
+
+# Always authenticate to the registry
+# This is required for the connector to work correctly, if the npmAlwaysAuth is not set to true, the metadata request will not be authenticated.
+npmAlwaysAuth: true
+
+unsafeHttpWhitelist:
+- nexus.example.com
+
+# Disable strict SSL verification for internal registries
+enableStrictSsl: false
+
+# Set the registry URL for package publishing
+# Ensures packages are published to the correct registry
+npmPublishRegistry: "https://nexus.example.com/repository/npm"
+```
+
+### Authentication Flow
+
+The `inspect-npm-deploy` pod contains no original cluster tokens. When npm makes HTTPS requests to the npm registry, the proxy server intercepts these requests, injects authentication credentials from the `npm-connector`, and forwards the authenticated requests to the backend npm registry server.
+
+### Settings Volume
+
+The `.npmrc` and `.yarnrc` files are mounted into the Pod via Connectors CSI Driver.
+
+``` yaml
+  volumes:
+  - name: npmrc
+    csi:
+      readOnly: true
+      driver: connectors-csi
+      volumeAttributes:
+        connector.name: "npm-connector"
+        configuration.names: "npmrc"
+  - name: yarnrc
+    csi:
+      readOnly: true
+      driver: connectors-csi
+      volumeAttributes:
+        connector.name: "npm-connector"
+        configuration.names: "yarnrc"
+```
+
+In the above example, the `.npmrc` and `.yarnrc` files are mounted into the Pod via Connectors CSI Driver.
+
+- The `.npmrc` and `.yarnrc` files use connector proxy as NPM registry, when NPM/Yarn  Client request the address, the proxy will transport the request to the backend npm registry, and inject the authentication information when requests pass through the proxy.
+
+For volumes parameters, please refer to [Using Connectors CSI Driver to mount .npmrc and .yarnrc file](./concepts/npm_connectorclass.mdx#using-connectors-csi-driver-to-mount-npmrc-and-yarnrc-yml-file) in NPM Connector Concepts document.
+
+## Further Reading
+
+After successfully performing npm install and npm publish operations using the npm connector, you can:
+
+- Learn more about [Concepts of NPM Connectors](./concepts/npm_connectorclass.mdx)
+
+## References
+
+- [NPM Connector Installation Guide](../install.mdx)

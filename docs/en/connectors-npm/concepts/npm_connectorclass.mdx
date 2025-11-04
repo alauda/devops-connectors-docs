@@ -1,0 +1,281 @@
+---
+weight: 20
+---
+
+# NPM Connector
+
+The NPM connector is a platform-agnostic connector that you can use to connect to any NPM registry.
+
+You can use the NPM Connector to securely perform NPM operations in CICD pipelines, or use it in kubernetes workloads to perform NPM operations without credentials.
+
+Additionally, you can centralize the management of NPM access configurations across namespaces, avoiding the need to repeat the NPM credentials in each namespace.
+
+## Overview
+
+This document covers:
+
+- **Integration Requirements**: Prerequisites for target NPM registries
+- **Creating NPM connector**
+- **Advanced Features**: Proxy capabilities and configuration capabilities about NPM connector
+
+## Integration Requirements
+
+**NPM Registries Prerequisites**
+
+- The NPM registry must be able to support [NPM Registry API](https://github.com/npm/registry/blob/main/docs/REGISTRY-API.md)
+
+## Creating a simple NPM connector
+
+Here's how to create a basic NPM Connector:
+
+```yaml
+# NPM Connector
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: npm-connector
+spec:
+  connectorClassName: npm
+  address: https://registry.npmjs.org
+```
+
+## Fields Reference
+
+**spec.connectorClassName**:
+
+`npm` (constant), specifies the ConnectorClass name for NPM integration.
+
+**spec.address**:
+
+Target NPM registry address, for example: `https://registry.npmjs.org`.
+
+When using Nexus as the npm registry, you need to configure the repository address, for example: `https://nexus.example.com/repository/npm-public`.
+
+**spec.auth(optional)**:
+
+specifies the authentication method of the NPM registry
+
+- `spec.auth.name`: should be `basicAuth` for NPM connector.
+
+- `spec.auth.secretRef`: specifies the secret that contains the authentication information of the NPM registry, the secret should be created in the same namespace as the connector. If your NPM registry does not require authentication, you can omit this field.
+
+**Optional Metadata fields**:
+
+- `cpaas.io/description`: Description information for the NPM connector, for example:
+
+  ```yaml
+  apiVersion: connectors.alauda.io/v1alpha1
+  kind: Connector
+  metadata:
+    name: npm-connector
+    annotations:
+      cpaas.io/description: "Connect to team development NPM registry"
+  ```
+
+## Capabilities of NPM Connector
+
+### Authentication
+
+The NPM connector supports the following authentication types:
+
+- `basicAuth`: Username and password-based authentication, corresponding secret type: `kubernetes.io/basic-auth`
+
+For example:
+
+```yaml
+apiVersion: v1
+stringData:
+  username: your-npm-registry-username
+  password: your-npm-registry-password
+kind: Secret
+metadata:
+  name: npm-secret
+type: kubernetes.io/basic-auth
+```
+
+For comprehensive status information, see [Connector Status Documentation](../../connectors/concepts/connector.mdx#status-information).
+
+If the NPM registry does not require authentication, you can omit the `secretRef` field:
+
+```yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: npm-connector
+spec:
+  connectorClassName: npm
+  address: https://registry.npmjs.org
+  auth:
+    name: basicAuth
+```
+
+#### Credential Permissions Required \{#credential_permissions_required}
+
+The required permissions for the configured credential depend on how you intend to use it in your Pods/Pipelines.
+
+For example:
+- **Package operations**: If you only need to download dependencies using `npm install`, the credential only require read permissions for the target NPM repository.
+- **Package and Deploy operations**: If you need to publish artifacts using `npm publish`, the credentials must have both read and write permissions for the target repository.
+
+For security best practices, we recommend creating credentials with minimal required permissions. When additional privileges are needed, create separate Connectors with more privileged secret and use namespace isolation to control which users can access each Connector.
+
+### NPM Connector Proxy and Configuration with npmrc and yarnrc.yml files
+
+To provide clients with the ability to access NPM registry without credentials, the NPM connector provides a proxy server to automatically inject authentication information.
+
+Clients can use this proxy server to access NPM registry without needing to configure credentials on the client side.
+
+To simplify usage, the NPM connectorclass provides `.npmrc` and `.yarnrc.yml` files that can be mounted into Pods via CSI. In the Pod, when executing NPM operations, the proxy service can automatically inject authentication information.
+
+:::warning
+The `.yarnrc.yml` file is only supported in the Yarn 2.x version.
+:::
+
+#### Proxy Address
+
+Upon Connector creation, the system automatically provisions a proxy service for the target NPM registry.
+
+The proxy endpoint is recorded in `status.proxy.httpAddress`:
+
+For example:
+
+```yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: npm-connector
+spec:
+  # connector spec fields
+status:
+  conditions:
+    # status conditions
+  proxy:
+    httpAddress:
+      url: http://c-npm-connector.default.svc.cluster.local
+```
+
+#### .npmrc configuration file \{#npmrc-configuration-file}
+
+The NPM connector provides the following configuration:
+
+**.npmrc**:
+
+- Provides a `.npmrc` configuration file. Combined with the connector-csi-driver, this configuration file will be mounted into the Pod, allowing access to the NPM registry through the proxy without needing to configure credentials on the client side.
+
+Example of the configuration file generated in the Pod:
+
+  ```yaml
+  # NPM Registry Configuration
+  registry=http://npm-registry.example.com/
+  
+   # The authentication token is fake, because the connector will not use it, it will be used for proxy requests.
+  //npm-registry.example.com/:_auth=fAd326jYkI123456789xxx
+
+  # Set the connector proxy URL for npm registry access
+  https-proxy=http://connector-ns%2Fconnector-name:fAd326jYkI123456789xxx@c-npm-connector.default.svc.cluster.local/
+  proxy=http://connector-ns%2Fconnector-name:fAd326jYkI123456789xxx@c-npm-connector.default.svc.cluster.local/
+
+  # Disable strict SSL verification for internal registries
+  strict-ssl=false
+  
+  # Disable npm audit to avoid security warnings during CI/CD
+  audit=false
+  
+  # Disable funding messages to reduce output noise
+  fund=false
+  ```
+
+#### .yarnrc.yml configuration file \{#yarnrc-yml-configuration-file}
+
+- Provides a `.yarnrc.yml` configuration file. Combined with the connector-csi-driver, this configuration file will be mounted into the Pod, allowing access to the NPM registry through the proxy without needing to configure credentials on the client side.
+
+  ```ini
+  # Set the NPM registry server URL for package resolution
+  npmRegistryServer: "http://npm-registry.example.com/"
+  
+  # The authentication token is fake, because the connector will not use it, it will be used for proxy requests.
+  npmAuthIdent: "fAd326jYkI123456789xxx"
+
+  # Always authenticate to the registry
+  # This is required for the connector to work correctly, if the npmAlwaysAuth is not set to true, the metadata request will not be authenticated.
+  npmAlwaysAuth: true
+
+  # The unsafeHttpWhitelist is used to whitelist the host for proxy requests.
+  unsafeHttpWhitelist:
+  - npm-registry.example.com
+
+  # authentication for proxy requests
+  httpProxy: "http://connector-ns%2Fconnector-name:fAd326jYkI123456789xxx@c-npm-connector.default.svc.cluster.local/"
+  httpsProxy: "http://connector-ns%2Fconnector-name:fAd326jYkI123456789xxx@c-npm-connector.default.svc.cluster.local/"
+  
+  # Disable strict SSL verification for internal registries
+  enableStrictSsl: false
+  
+  # Set the registry URL for package publishing
+  # Ensures packages are published to the correct registry
+  npmPublishRegistry: "http://npm-registry.example.com/"
+  ```
+
+For detailed proxy mechanics, see [How It Works](../quick_start.mdx#what-happens-under-the-hood) in the Quick Start guide.
+
+:::warning
+
+When using yarn with `HTTPS` registry, you need to configure yarn with the Connector Proxy certificate trust through environment variables, otherwise certificate errors will occur.
+
+The certificate configuration for yarn is as follows:
+
+```sh
+export NODE_EXTRA_CA_CERTS=/opt/yarn/ca.cert # replace with the actual path where ca.cert is mounted in the Pod
+```
+:::
+
+#### ca.cert file
+
+The NPM connector also provides a `ca.cert` file containing the Connector Proxy's CA certificate. This file can be mounted into the Pod via Connector CSI Driver to establish TLS trust when accessing the proxy over HTTPS.
+#### Using Connectors CSI Driver to mount .npmrc and .yarnrc.yml file \{#using-connectors-csi-driver-to-mount-npmrc-and-yarnrc-yml-file}
+
+The NPM connector provides a `.npmrc`, `.yarnrc.yml` and `ca.cert` file that can be mounted into the Pod via Connector CSI Driver.
+
+For example:
+
+``` yaml
+spec:
+
+  volumes:
+  - name: npmrc
+    csi:
+      readOnly: true
+      driver: connectors-csi
+      volumeAttributes:
+        connector.name: "npm-connector"
+        configuration.names: "npmrc"
+  - name: yarnrc
+    csi:
+      readOnly: true
+      driver: connectors-csi
+      volumeAttributes:
+        connector.name: "npm-connector"
+        configuration.names: "yarnrc"
+```
+
+parameter descriptions:
+
+- `csi.readOnly`: Fixed value `true`
+- `csi.driver`: The Connector CSI Driver, fixed as `connectors-csi`.
+- `csi.volumeAttributes`: CSI Volume attributes
+  - `connector.name`: Name of the NPM Connector
+  - `connector.namespace`: Namespace of the NPM Connector; if not specified, the Pod's namespace is used
+  - `configuration.names`: Configuration name, provided by the NPM Connector. As above, `npmrc` and `yarnrc` are supported.
+
+For detailed information about how to use the `.npmrc` and `.yarnrc.yml` file in the Pod by connectors-csi-driver, please refer to [Using NPM Connectors in kubernetes jobs](../quick_start.mdx)
+
+## Further Reading
+
+- [Using NPM Connectors as Distribution Management Repository](../quick_start.mdx)
+
+## References
+
+- [Concepts of Connector](../../connectors/concepts/connector.mdx)
+- [Connector Proxy](../../connectors/concepts/connectors_proxy.mdx)
+- [Connector CSI Driver](../../connectors/concepts/connectors_csi.mdx)
+- [Kubernetes CSI Volume](https://kubernetes.io/docs/concepts/storage/volumes/#csi)
