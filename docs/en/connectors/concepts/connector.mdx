@@ -241,11 +241,35 @@ status:
       url: http://c-harbor.default.svc.cluster.local/namespaces/default/connectors/harbor
 ```
 
-
-
 ## Status Information
 
-The status information of the Connector is recorded in the `status` field, containing the following content:
+The status information of the Connector is recorded in the `status` field, containing proxy address, API address, and conditions:
+
+- `status.conditions`: Conditions of the Connector.
+- `status.proxy`: Proxy address of the Connector.
+- `status.api`: API address of the Connector.
+
+**Proxy Address**
+
+The `proxy` field contains the proxy address of the Connector.
+
+- `status.proxy.httpAddress.url`: The HTTP address of the proxy for the current Connector.
+
+You can use this address with existing tool clients to access the tool in a secretless manner within the cluster. For more information, refer to [Connector Proxy](#connector_proxy).
+
+If the ConnectorClass has no proxy capability, the `status.proxy` field will be empty.
+
+**API Address**
+
+The `api` field contains the API address of the Connector.
+
+- `status.api.path`: The API relative path for the current Connector (relative to the cluster ingress access entrypoint).
+
+You can use this path outside the cluster to access the tool's original API through the current Connector. For more information, refer to [Connector API](./connector_api.mdx).
+
+**Conditions**
+
+The `conditions` type includes:
 
 - `ConnectorClassReady`: Indicates whether the connector type is correct.
 - `SecretReady`: Indicates whether the authentication information is correctly configured.
@@ -325,8 +349,6 @@ status:
     status: "True"
     message: ""
 ```
-
-For more information on conditions, please refer to `Connector Conditions`.
 
 ## Examples
 

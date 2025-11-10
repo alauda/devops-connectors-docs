@@ -524,11 +524,15 @@ For more Rego language details, refer to:
 
 ## ConnectorClass API \{#connectorclass_api}
 
-Provides a RESTful API for the current ConnectorClass, allowing clients to easily access resources within the tools when using Connectors.
+The ConnectorClass API allows developers to extend API capabilities for a ConnectorClass through an additional HTTP API service. This provides a RESTful API for the ConnectorClass, enabling clients to easily access resources within the tools when using Connectors.
 
-If there is no need to provide API capabilities for the tool, `spec.api` can be left undefined.
+If there is no need to provide custom API capabilities for the tool, `spec.api` can be left undefined.
 
-The ConnectorClass API needs to be configured in the `spec.api` field, for example:
+### Configuring API Address
+
+The ConnectorClass API is configured in the `spec.api` field. You can specify the API service in three ways:
+
+**1. Through a Kubernetes Service reference:**
 
 ```yaml
 spec:
@@ -539,7 +543,9 @@ spec:
       namespace: default
 ```
 
-You can specify the API's Service information through `spec.api.ref`. If the API address of the ConnectorClass has a fixed prefix, it can be specified using `spec.api.uri`. For example:
+**2. Through a Service reference with a URI path prefix:**
+
+If the API address has a fixed path prefix, you can specify it using `spec.api.uri`:
 
 ```yaml
 spec:
@@ -551,7 +557,9 @@ spec:
     uri: /api
 ```
 
-Additionally, you can use `spec.api.uri` to specify the absolute path of the API. For example:
+**3. Through an absolute URI:**
+
+You can also use `spec.api.uri` to specify the absolute path of the API:
 
 ```yaml
 spec:
@@ -559,36 +567,9 @@ spec:
     uri: https://git.example.com/api
 ```
 
-Regardless of the form, the final resolved API address will be stored in `status.api.address.url`. For example:
+### API Address Resolution \{#connectorclass_api_address}
 
-Specifying the connectorclass API through service:
-
-```yaml
-spec:
-  api:
-    ref:
-      kind: Service
-      name: git
-      namespace: default
-status:
-  api:
-    address:
-      url: https://git.default.svc
-```
-
-Specifying the connectorclass API through uri:
-
-```yaml
-spec:
-  api:
-    uri: https://git.default.svc/api
-status:
-  api:
-    address:
-      url: https://git.default.svc/api
-```
-
-Specifying the connectorclass API through svc while using `spec.api.uri` to specify the API path:
+Regardless of the configuration method used, the final resolved API address will be stored in `status.api.address.url`. For example:
 
 ```yaml
 spec:
@@ -597,17 +578,67 @@ spec:
       kind: Service
       name: git
       namespace: default
-    uri: /api
+    uri: /prefix
 status:
   api:
     address:
-      url: https://git.default.svc/api
+      url: https://git.default.svc/prefix
 ```
 
 For more information, refer to:
 
-- [connector-api](./connector_api.mdx)
-- [connectorclass-api definition specification](./connectorclass_api_spec.mdx)
+- [Connector API](./connector_api.mdx)
+- [ConnectorClass API Definition Specification](./connectorclass_api_spec.mdx)
+
+### OpenAPI Description \{#api_openapi}
+
+The OpenAPI description is an optional configuration that serves two main purposes:
+
+- Mark whether the API is a custom API or uses the Connector Proxy to access the tool's original API
+- Provide API definitions to support API references in client dynamic forms
+
+You can define the OpenAPI description using `spec.api.openapi`. The structure follows the OpenAPI 3.0 specification. For example:
+
+```yaml
+spec:
+  api:
+    openapi:
+      openapi: "3.0.1"
+      info:
+        title: Git API
+        version: "1.0.0"
+```
+
+You can define the `x-provider-type` extension field in the API paths to mark whether the API is a custom API or uses the Proxy to access the tool's original API. Valid values are `api` or `proxy`.
+
+The `x-provider-type` extension is defined as: `api.openapi.paths[<path>].<verb>[x-provider-type]`
+
+Example:
+
+```yaml
+spec:
+  api:
+    openapi:
+      openapi: "3.0.1"
+      info:
+        title: Gitlab API
+        version: "1.0.0"
+      paths:
+        /git/api:
+          get:
+            summary: Get Git API
+            x-provider-type: api  # Use custom API
+        /api/v4/projects:
+          get:
+            summary: Get Gitlab Projects API
+            x-provider-type: proxy  # Use Proxy to access the tool's original API
+```
+
+::: info
+When clients request the [Connector API](./connector_api.mdx), the Connectors system determines whether to use the custom API or directly use the [Connectors Proxy](./connectors_proxy.mdx) to access the tool's original API based on the `x-provider-type` value in the ConnectorClass corresponding to the current Connector. When this information is not provided, or when no API path is matched, the system defaults to using the [Connectors Proxy](./connectors_proxy.mdx) to access the tool's original API.
+:::
+
+When you need to reference the API in dynamic forms, additional configuration is required in `spec.api.openapi`. For more details, refer to [Using Connectors API in Dynamic Forms](./connector_api.mdx#dynamic-form-using-connectors-api).
 
 ## Configuration Capabilities \{#configuration-capabilities}
 
@@ -644,13 +675,13 @@ More examples of using the configuration, refer to the [connectors csi driver](.
 
 For example:
 
-| Key                              | Description                                                             |
-| -------------------------------- | ----------------------------------------------------------------------- |
-| `ui.cpaas.io/icon`               | The icon for ConnectorClass, optional. Format: `data:image/svg+xml;base64,PD94bWwgdmVyc2...` |
-| `cpaas.io/display-name`          | The display name for ConnectorClass, optional.                                                |
-| `cpaas.io/description`           | The description for ConnectorClass, optional.                                                  |
-| `connectors.cpaas.io/readme`    | Usage instructions for ConnectorClass, optional. Typically used for custom scenarios when `docs-link` cannot be provided. Supports Markdown format.    |
-| `connectors.cpaas.io/docs-link` | Documentation link for ConnectorClass, optional. Relative or absolute path.                                    |
+| Key                             | Description                                                                                                                                         |
+| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ui.cpaas.io/icon`              | The icon for ConnectorClass, optional. Format: `data:image/svg+xml;base64,PD94bWwgdmVyc2...`                                                        |
+| `cpaas.io/display-name`         | The display name for ConnectorClass, optional.                                                                                                      |
+| `cpaas.io/description`          | The description for ConnectorClass, optional.                                                                                                       |
+| `connectors.cpaas.io/readme`    | Usage instructions for ConnectorClass, optional. Typically used for custom scenarios when `docs-link` cannot be provided. Supports Markdown format. |
+| `connectors.cpaas.io/docs-link` | Documentation link for ConnectorClass, optional. Relative or absolute path.                                                                         |
 
 For example:
 
@@ -731,12 +762,12 @@ The `Ready Condition` is used to mark the status of the current ConnectorClass. 
 
 Indicates the status information of the API service configured for the ConnectorClass. The API service is configured through [ConnectorClass's spec.api](#connectorclass_api).
 
-| Status  | Reason | Description                                 |
-| ------- | ------ | ------------------------------------------- |
-| True    | NonAPI | `spec.api` not configured, the current ConnectorClass has no API capability |
-| True    |        | `spec.api` defined, API service is normal                    |
-| False   |        | `spec.api` defined, API capability is abnormal or detection itself is abnormal          |
-| Unknown |        | API capability detection in progress                                   |
+| Status  | Reason | Description                                                                    |
+| ------- | ------ | ------------------------------------------------------------------------------ |
+| True    | NonAPI | `spec.api` not configured, the current ConnectorClass has no API capability    |
+| True    |        | `spec.api` defined, API service is normal                                      |
+| False   |        | `spec.api` defined, API capability is abnormal or detection itself is abnormal |
+| Unknown |        | API capability detection in progress                                           |
 
 Note:
 
@@ -747,12 +778,12 @@ Note:
 
 Indicates the status information of the Proxy service configured for the ConnectorClass. The Proxy service is configured through [ConnectorClass's spec.proxy](#connectorclass_proxy).
 
-| Status  | Reason   | Description                                     |
-| ------- | -------- | ----------------------------------------------- |
-| True    | NonProxy | `spec.proxy` not configured, the current ConnectorClass has no Proxy capability |
-| True    |          | `spec.proxy` defined, Proxy service is normal                    |
-| False   |          | `spec.proxy` defined, Proxy capability is abnormal or detection itself is abnormal          |
-| Unknown |          | Proxy capability detection in progress                                     |
+| Status  | Reason   | Description                                                                        |
+| ------- | -------- | ---------------------------------------------------------------------------------- |
+| True    | NonProxy | `spec.proxy` not configured, the current ConnectorClass has no Proxy capability    |
+| True    |          | `spec.proxy` defined, Proxy service is normal                                      |
+| False   |          | `spec.proxy` defined, Proxy capability is abnormal or detection itself is abnormal |
+| Unknown |          | Proxy capability detection in progress                                             |
 
 ## Compatibility
 

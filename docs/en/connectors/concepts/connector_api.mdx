@@ -2,62 +2,105 @@
 created: '2024-12-01'
 title: Connector API
 weight: 50
-sourceSHA: 787a9663c2b07bba63b2648088abf865fb2f475cfe27d1f24fd23a68b9cca2fd
 ---
 
 # Connector API
 
 ## Overview
 
-After integrating access tools within the cluster, a RESTful API can be provided for the current ConnectorClass to conveniently acquire resources within the tool. These APIs will be uniformly exposed through the Connector API, allowing users to obtain resources from the tool pointed to by the current Connector.
+After integrating tools within the cluster, a RESTful API can be provided for the current Connector to conveniently acquire resources from the tool. These APIs are uniformly exposed through the Connector API, allowing users to obtain resources from the tool pointed to by the current Connector.
 
-The Connectors system provides a complete set of extension mechanisms, making it easier for developers to extend the API capabilities of ConnectorClass.
+The Connectors system supports two ways to access tool resources through the API:
 
-The Connectors API offers a unified request entry point. When a client initiates a resource request for the tool pointed to by a specific Connector, the system will forward the request to the corresponding API address of the ConnectorClass, which in turn will forward the request to the tool's API address to retrieve resources within the tool.
+- **Original Tool API**: Access the tool's original API through the Proxy Service
+- **Custom API**: Use a custom API provided for the ConnectorClass
 
-For example:
+When using the Connectors API, clients do not need to manage the tool's original authentication credentials. They only need to have permissions to access the Connector. The permissions for API requests to the tool are determined by the permissions of the credentials (Secret) configured in the Connector.
 
-- Retrieve the Reference list of a specific repository under the Git Connector.
-- Retrieve the Tag list of a specific artifact repository under the OIC Connector.
+## Connector API Address and Authentication
 
-## API Definition
+### API Address
 
-**API Address**
+The Connector API address consists of three parts:
 
-`/connectors/v1alpha1/namespaces/{namespace}/connectors/{name}/resources/{resource-name}`
+- Platform API or cluster ingress access entry point
+- Connector API relative path
+- Requested tool's original API path or custom API path
 
-- `namespace`: The namespace where the current Connector resides.
-- `name`: The name of the current Connector.
-- `resource-name`: The name of the resource being requested, which can be understood by consulting the documentation of the corresponding ConnectorClass.
+After creating a Connector in the cluster, the Connector automatically records the current Connector's API path in `<connector>.status.api.path`. Note that this path is a relative path to the cluster access entry point.
 
-**Authentication and Authorization**
+The final Connector API address is: `{platform_api_address}/{<connector>.status.api.path}/{api-path}`
 
-Authentication complies with Kubernetes authentication standards, completed through Kubernetes' authentication and authorization mechanisms. The requesting user must have read permissions for the corresponding `connector`.
+::: info
+In Alauda Container Platform, the API access entry point is typically `{platform_address}/clusters-rewrite/{cluster_name}`.
+:::
+
+### Authentication and Authorization
+
+Authentication complies with Kubernetes authentication standards and is completed through Kubernetes' authentication and authorization mechanisms. The requesting user must have read permissions for the corresponding `Connector`. Currently, only Bearer Token authentication is supported.
 
 When making the final request to the tool, the Secret information specified by the Connector will be used for authentication.
 
-**Query Parameters**
+For more information about Kubernetes API authentication, refer to the [Kubernetes Authentication documentation](https://kubernetes.io/docs/reference/access-authn-authz/authentication).
 
-Determined by the specific ConnectorClass API.
+## Accessing Original Tool API
 
-**Pagination Information**
+When your ConnectorClass provides Proxy Service capabilities, you can directly access the tool's original API through the Connector API.
 
-Indicated by query parameters.
+For example, if the tool's original API address is `/api/v4/projects`, you can access it through the Connector API. Assuming you have a Connector named `gitlab-connector` in the `default` namespace, and the Connector's API path is `/connectors/v1alpha1/default/gitlab-connector/path`, the request would be:
 
-| Parameter Name     | Type  | Required | Description  |
-| ------------------ | ----- | -------- | ------------ |
-| page               | int   | false    | Page number   |
-| itemsPerPage      | int   | false    | Number of items per page |
+```bash
+K8S_TOKEN=xxxx
 
-**Response Information**
+curl -H "Authorization: Bearer ${K8S_TOKEN}" "https://platform.example.com/connectors/v1alpha1/default/gitlab-connector/path/api/v4/projects"
+```
 
-When returning a list, the structure will be as follows:
+The Proxy Service capabilities can be configured through the `ConnectorClass` specification. For configuration details, refer to [ConnectorClass Proxy](./connectorclass.mdx#connectorclass_proxy). For a deeper understanding of the `Connectors Proxy` concept, refer to [Connectors Proxy](./connectors_proxy.mdx).
 
-| Field Name         | Type       | Required | Description                                |
-| -------------------| ---------- | -------- | ------------------------------------------ |
-| listMeta           | ListMeta  | true     | Metadata of the list                       |
+## Custom API
+
+When the tool's original API cannot meet your requirements or the ConnectorClass does not provide Proxy Service capabilities, you can provide a custom API service for the current ConnectorClass to meet your needs.
+
+The custom API service can be configured through the `spec.api` field of the ConnectorClass, allowing the Connectors system to discover and use it. For configuration details, refer to [ConnectorClass API](./connectorclass.mdx#connectorclass_api).
+
+Additionally, to enable the system to identify that the API is a custom API, you need to configure the OpenAPI description through the `spec.api.openapi` field.
+
+### API Definition
+
+#### API Path
+
+The API path provided by the custom API can be freely defined in the extended API service. The recommended format is `/<connectorclass-name>/xxx`. 
+
+Combined with the API address and authentication described above, here is a request example. Assuming you have a Connector named `git-connector` in the `default` namespace, and the custom API path is `/git/gitrefs`, the request would be:
+
+```bash
+K8S_TOKEN=xxxx
+
+curl -H "Authorization: Bearer ${K8S_TOKEN}" "https://platform.example.com/connectors/v1alpha1/default/git-connector/git/gitrefs"
+```
+
+#### Query Parameters
+
+Query parameters are determined by the specific [ConnectorClass API Specification](./connectorclass_api_spec.mdx).
+
+#### Pagination
+
+Pagination information is indicated by query parameters:
+
+| Parameter Name | Type | Required | Description                |
+| -------------- | ---- | -------- | -------------------------- |
+| page           | int  | false    | Page number                |
+| itemsPerPage   | int  | false    | Number of items per page    |
+
+#### Response Format
+
+When returning a list, the response structure is as follows:
+
+| Field Name         | Type      | Required | Description                                                                 |
+| ------------------ | --------- | -------- | --------------------------------------------------------------------------- |
+| listMeta           | ListMeta  | true     | Metadata of the list                                                        |
 | listMeta.totalItems| int       | true     | Total number of requested resources, usable by the client to analyze pagination information |
-| items              | \[]       | true     | Data items in the list; the data structure is determined by the ConnectorClass API |
+| items              | []        | true     | Data items in the list; the data structure is determined by the ConnectorClass API |
 
 ```json
 {
@@ -88,8 +131,50 @@ For example:
 
 Field definitions and enumeration values are consistent with [k8s status](https://pkg.go.dev/k8s.io/apimachinery@v0.31.3/pkg/apis/meta/v1#Status).
 
-## ConnectorClass API Extension Specification
+### OpenAPI Description
+
+In addition to providing a custom API service, you need to configure the OpenAPI description information in the `spec.api.openapi` field of the ConnectorClass to enable the system to identify that the API is a custom API.
+
+Example:
+
+```yaml
+kind: ConnectorClass
+metadata:
+  name: gitlab
+spec:
+  api:
+    ref:  # Reference to the custom API service
+      name: connectors-gitlab-api
+      namespace: connectors-system
+    openapi:
+      openapi: "3.0.1"
+      info:
+        title: GitLab Custom API
+        version: "1.0.0"
+      paths:
+        /gitlab/custom-api:  # Custom API defined in the connectors-gitlab-api service
+          get:
+            x-provider-type: api  # Indicates this API is a custom API
+            summary: Request custom API
+            responses:
+              "200":
+                description: Custom API response
+```
+
+The system will automatically forward the custom API to the [ConnectorClass API Address](./connectorclass.mdx#connectorclass_api_address) based on the `spec.api.openapi` description.
+
+For configuration details about `spec.api.openapi`, refer to [ConnectorClass OpenAPI Description](./connectorclass.mdx#api_openapi). For more usage examples, refer to [Using Connectors API in Dynamic Forms](#dynamic-form-using-connectors-api).
+
+### ConnectorClass API Extension Specification
 
 Developers can extend the API capabilities for ConnectorClass to provide users with richer resource retrieval capabilities.
 
 Refer to the [ConnectorClass API Extension Specification](./connectorclass_api_spec.mdx).
+
+## Using Connectors API in Dynamic Forms \{#dynamic-form-using-connectors-api}
+
+The Connector API can be provided to UI clients, especially for dynamic form scenarios where UI clients can flexibly configure the API requests to be called.
+
+To enable this, you need to configure the OpenAPI description information through the `spec.api.openapi` field of the ConnectorClass, which works together with the dynamic form DSL to implement frontend dynamic form rendering.
+
+The dynamic form description is typically provided in the [Resource Interface](./resource_interface.mdx). For more details, refer to [Resource Interface](./resource_interface.mdx).

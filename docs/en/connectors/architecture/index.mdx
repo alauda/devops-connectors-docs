@@ -60,10 +60,16 @@ More information: [Connectors Proxy](../concepts/connectors_proxy.mdx)
 
 Developers can conveniently access resources within tools via the `Connectors API` without needing to concern themselves with specific tool addresses and authentication details.
 
+The system supports two ways to access tool resources through the API:
+
+- **Original Tool API**: When the ConnectorClass provides Proxy Service capabilities, clients can directly access the tool's original API through the Connector API. The system automatically forwards requests to the tool's Proxy Service, completes authentication injection, and returns the original data from the tool.
+- **Custom API**: Use custom APIs provided for the ConnectorClass, which offer extended capabilities beyond the tool's original API.
+
 This API is very useful in practical applications, such as:
 
 - Retrieving the list of tags for container images when creating applications
 - Getting the list of branches (References) for a code repository during a Git Clone operation
+- Accessing tool-specific APIs directly when the ConnectorClass supports Proxy Service
 
 The implementation of the `Connectors API` is based on the underlying capabilities provided by the `ConnectorClass API`.
 
