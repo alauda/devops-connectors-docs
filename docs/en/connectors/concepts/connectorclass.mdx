@@ -357,7 +357,7 @@ The above YAML demonstrates basic authentication validation:
 - `path`: Uses the `repository` value from the Connector's `auth.params`, constructing the path as `/<repository>/info/refs?service=git-upload-pack`
 - `Authorization`: When the Connector is configured with a Secret, the `username` and `password` fields are Base64-encoded and included in the Basic authentication header.
 
-### Rego-based Authentication Logic Configuration
+### Rego-based Authentication Logic Configuration \{#rego-based-authentication-logic-configuration}
 
 When tool connectors require more complex authentication logic, you can use Rego-based authentication logic configuration.
 
@@ -713,10 +713,78 @@ spec:
       kind: Service
       name: proxy
       namespace: default
-    uri: https://proxy.example.com
+    # uri: https://proxy.example.com
 ```
 
 The Connector will use the proxy address to proxy the request to the ConnectorClass. [More information](./connectors_proxy.mdx)
+
+### Using Rego to extract token from request \{#using-rego-to-extract-token-from-request}
+
+When using the built-in reverse proxy, you can configure Rego rules using `spec.proxy.authExtractor` to extract tokens from client requests, enabling the built-in reverse proxy to validate client authentication using the extracted token.
+
+For example:
+
+```yaml
+spec:
+  proxy:
+    authExtractor:
+      rego: |
+        package proxy
+        auth = {
+          "token": input.headers["Private-Token"][0]
+        }
+```
+
+Rego rules must follow these requirements:
+
+- Rules must be defined in the `proxy` package
+- Use the `auth` variable to return the token, where the token is a string type, for example: `auth = { "token": "abcd1234" }`
+- If the token cannot be extracted, return an empty string, for example: `auth = { "token": "" }`
+
+The following variables are available in Rego:
+
+| key     | type                | description                                                        | Example                     |
+| ------- | ------------------- | ------------------------------------------------------------------ | --------------------------- |
+| headers | map[string][]string | Headers of the request sent to the built-in reverse proxy          | input.headers["X-Token"][0] |
+| body    | object              | Body of the request sent to the built-in reverse proxy             | input.body.token            |
+| query   | map[string][]string | Query parameters of the request sent to the built-in reverse proxy | input.query["token"][0]     |
+| method  | string              | HTTP method of the request sent to the built-in reverse proxy      | input.method                |
+| path    | string              | Path of the request sent to the built-in reverse proxy             | input.path                  |
+
+**Notes**:
+
+- Header keys in `headers` use Canonical MIME Header Key format (capitalized first letter)
+- When implementing Rego rules, ensure robust logic. For example, return an empty string when `input.headers` is null or empty.
+
+**Example**
+
+``` yaml
+spec:
+  proxy:
+    authExtractor:
+      rego: |
+        package proxy
+
+        default auth = {
+          "token": ""
+        }
+
+        auth = {
+          "token": input.headers["Private-Token"][0]
+        } if {
+          input.headers != null
+          input.headers["Private-Token"] != null
+          count(input.headers["Private-Token"]) > 0
+        }
+```
+
+This example demonstrates robust token extraction by:
+- Defining a default rule that returns an empty token string
+- Checking that headers exist and are not null before accessing them
+- Verifying that the specific header key exists and has at least one value
+
+For more advanced Rego rules, see the [Rego Policy Language](https://www.openpolicyagent.org/docs/latest/policy-language) documentation.
+For more information about using the built-in reverse proxy, see [Connectors Proxy](./connectors_proxy.mdx).
 
 ### Resolver Type
 

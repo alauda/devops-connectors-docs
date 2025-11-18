@@ -31,14 +31,13 @@ For example, a `Harbor ConnectorClass` can be defined to support integration wit
 
 ## Connectors Proxy
 
-`ConnectorsProxy` is a core component that provides secure, secretless access to integrated tools within Kubernetes clusters. It acts as a proxy server, handling authentication injection and request routing to target tool.
+`Connectors Proxy` is a core capability of the Connectors system that provides secure, secretless access to integrated tools. It typically operates as an HTTP service that can function as either a forward proxy or a reverse proxy for client applications.
 
-`ConnectorsProxy` enables clients to access tool resources without direct credential handling. This approach delivers significant security benefits:
+When clients access tool resources through `Connectors Proxy`, the proxy automatically injects the necessary authentication credentials into requests, enabling seamless access without requiring clients to handle credentials directly. This approach delivers a significant security benefit:
 
-- **Secretless Access**: Eliminates the need to distribute tool credentials directly to clients by using short-lived tokens issued by ServiceAccount. This prevents credential exposure in clients like logs or environment variables.
-- **Centralized Credential Management**: All tool credentials are managed centrally by connectors, and no need to distribute credentials to each client.
+- **Secretless Access**: Eliminates the need to distribute tool credentials directly to clients by using short-lived tokens issued by Kubernetes. This prevents credential exposure in client environments such as logs or environment variables.
 
-The platform supports both built-in and custom proxy implementations to accommodate diverse tool authentication requirements.
+To accommodate diverse tool authentication requirements, the platform supports both built-in and custom proxy implementations. Each `ConnectorClass` can provide its own proxy service, offering flexibility to meet specific tool authentication needs.
 
 ### Built-in Connectors Proxy
 

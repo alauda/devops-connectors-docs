@@ -7,14 +7,13 @@ sourceSHA: a3690e0a66ff0d323093db716163521315b340274eb2dbec21ada430d120870d
 
 # ConnectorsProxy
 
-`ConnectorsProxy` is a core component that provides secure, secretless access to integrated tools within Kubernetes clusters. It acts as a proxy server, handling authentication injection and request routing to target tool.
+`Connectors Proxy` is a core capability of the Connectors system that provides secure, secretless access to integrated tools. It typically operates as an HTTP service that can function as either a forward proxy or a reverse proxy for client applications.
 
-`ConnectorsProxy` enables clients to access tool resources without direct credential handling. This approach delivers significant security benefits:
+When clients access tool resources through `Connectors Proxy`, the proxy automatically injects the necessary authentication credentials into requests, enabling seamless access without requiring clients to handle credentials directly. This approach delivers a significant security benefit:
 
-- **Secretless Access**: Eliminates the need to distribute tool credentials directly to clients by using short-lived tokens issued by ServiceAccount. This prevents credential exposure in clients like logs or environment variables.
-- **Centralized Credential Management**: All tool credentials are managed centrally by connectors, and no need to distribute credentials to each client.
+- **Secretless Access**: Eliminates the need to distribute tool credentials directly to clients by using short-lived tokens issued by Kubernetes. This prevents credential exposure in client environments such as logs or environment variables.
 
-The platform supports both built-in and custom proxy implementations to accommodate diverse tool authentication requirements.
+To accommodate diverse tool authentication requirements, the platform supports both built-in and custom proxy implementations. Each `ConnectorClass` can provide its own proxy service, offering flexibility to meet specific tool authentication needs.
 
 ## Built-in Connectors Proxy
 
@@ -34,7 +33,7 @@ Connectors Proxy does not support the `CONNECT` method for `HTTP tunneling`. Cli
 
 :::
 
-### Reverse Proxy
+### Reverse Proxy \{#reverse-proxy}
 
 Clients access tools by connecting directly to the Connector Proxy Address instead of the original tool URL. The proxy:
 
@@ -190,6 +189,33 @@ Example:
 curl -H "Authorization: Bearer sa-token-xxxxxxx" "http://c-github.default.svc.cluster.local/"
 ```
 
+#### Custom Rego-based Authentication \{#custom-rego-based-authentication}
+
+When using the built-in HTTP reverse proxy with tools that use non-standard authentication methods, clients may be unable to provide tokens using standard Basic Auth or Bearer Token methods. Instead, they must use the tool's original credential format.
+
+To support these custom authentication formats, you can use Rego rules to customize token extraction from client requests. This allows the built-in HTTP reverse proxy to extract and validate tokens regardless of how they are provided by the client.
+
+For example:
+
+```yaml
+spec:
+  proxy:
+    authExtractor:
+      rego: |
+        package proxy
+        auth = {
+          "token": input.headers["Private-Token"][0]
+        }
+```
+
+This configuration extracts the token from the `Private-Token` header in client requests, which the proxy then uses to validate client authentication.
+
+This approach provides significant flexibility for non-standard HTTP authentication mechanisms. Client CLIs can provide Kubernetes tokens using the tool's original credential format, and the proxy extracts the token through Rego rules to complete authentication validation.
+
+For more detailed configuration on using Rego rules to extract tokens, see [ConnectorClass](./connectorclass.mdx#using-rego-to-extract-token-from-request).
+
+For more about injecting authentication credentials into backend request, see [Injecting Authentication Credentials into Backend Request when using built-in Reverse Proxy](#injecting-authentication-when-using-built-in-reverse-proxy).
+
 ##### Connector Identification
 
 The connector can be identified through different proxy address formats:
@@ -214,6 +240,50 @@ curl -u ":sa-token-xxxxxxx" \
 ```
 
 The proxy will validate the authentication token and automatically inject the `default/github` connector's authentication credentials when forwarding requests to GitHub services.
+
+### Injecting Authentication Credentials into Backend Request when using built-in Reverse Proxy \{#injecting-authentication-when-using-built-in-reverse-proxy}
+
+After the built-in reverse proxy validates the client request, it injects authentication credentials into the backend request based on the credential type configured in the Connector. The following injection methods are supported:
+
+- **Basic Auth**
+- **Bearer Token**
+- **Custom Rego**
+
+#### Basic Auth
+
+When a Connector is configured with the secret type `kubernetes.io/basic-auth`, the proxy injects the credentials into the backend request headers using Basic Authentication.
+
+#### Bearer Token
+
+When a Connector is configured with the secret type `connectors.cpaas.io/bearer-token`, the proxy injects the credentials into the backend request headers using Bearer Token authentication.
+
+#### Custom Rego
+
+In addition to the standard Basic Auth and Bearer Token methods, you can use Rego rules to define custom authentication injection logic. For example:
+
+```yaml
+spec:
+  auth:
+    types:
+    - name: rego-auth
+      secretType: Opaque
+      generator:
+        rego: |
+          package proxy
+          auth = {
+            "position": "header",
+            "auth": {
+              "Private-Token": input.token
+            }
+          }
+```
+This configuration injects the token value from the connector's secret data into the `Private-Token` header of backend requests.
+
+For more detailed configuration, see [ConnectorClass](./connectorclass.mdx#rego-based-authentication-logic-configuration).
+
+When using custom Rego authentication, you typically need to configure `spec.proxy.authExtractor` to extract tokens from client requests, enabling the built-in HTTP reverse proxy to validate client authentication.
+Simultaneously, use `spec.auth.types[].generator.rego` to inject authentication credentials into backend requests.
+This combination enables support for custom authentication mechanisms when using the built-in HTTP reverse proxy.
 
 ## References
 

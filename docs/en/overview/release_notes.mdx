@@ -37,6 +37,9 @@ The following table shows the compatibility and support matrix between the Alaud
   - [NPM Connector Quick Start](../connectors-npm/quick_start.mdx)
 - Support accessing tool's original API through the Connector API when the ConnectorClass provides Proxy Service capabilities. The system now supports two ways to access tool resources: using the tool's original API via Proxy Service, or using custom APIs provided for the ConnectorClass. For more details, see
   * [Connector API](../connectors/concepts/connector_api.mdx)
+- Support using Rego rules to extract tokens from client requests when using the built-in HTTP reverse proxy. Combined with the existing ability to inject authentication credentials into backend requests through Rego rules, you can now extend the built-in reverse proxy's capabilities to support tools with non-standard HTTP authentication mechanisms.
+  - For token extraction configuration, see [Custom Rego-based Authentication](../connectors/concepts/connectors_proxy.mdx#custom-rego-based-authentication).
+  - For authentication injection configuration, see [Injecting Authentication Credentials into Backend Request when using built-in Reverse Proxy](../connectors/concepts/connectors_proxy.mdx#injecting-authentication-when-using-built-in-reverse-proxy).
 
 ### Breaking Changes
 
