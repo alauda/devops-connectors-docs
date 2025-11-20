@@ -71,6 +71,24 @@ specifies the authentication method of the NPM registry
     annotations:
       cpaas.io/description: "Connect to team development NPM registry"
   ```
+**spec.params(optional)**:
+
+NMP Connector support parameters, which is used to control the behavior of connector configuration.
+
+- `spec.params[].name`: The parameter name, which must match a parameter name defined in the corresponding `ConnectorClass`.
+- `spec.params[].value`: The parameter value. The value type must match the parameter type defined in the `ConnectorClass`.
+
+supported parameters:
+- `strict-ssl`: whether to write .npmrc/.yarnrc.yml file with `strict-ssl` parameter for the NPM registry. default value is `true`. supports `true` and `false`.
+
+For example:
+
+```yaml
+spec:
+  params:
+    - name: strict-ssl
+      value: "false"
+```
 
 ## Capabilities of NPM Connector
 
@@ -174,9 +192,6 @@ Example of the configuration file generated in the Pod:
   # Set the connector proxy URL for npm registry access
   https-proxy=http://connector-ns%2Fconnector-name:fAd326jYkI123456789xxx@c-npm-connector.default.svc.cluster.local/
   proxy=http://connector-ns%2Fconnector-name:fAd326jYkI123456789xxx@c-npm-connector.default.svc.cluster.local/
-
-  # Disable strict SSL verification for internal registries
-  strict-ssl=false
   
   # Disable npm audit to avoid security warnings during CI/CD
   audit=false
@@ -207,9 +222,6 @@ Example of the configuration file generated in the Pod:
   # authentication for proxy requests
   httpProxy: "http://connector-ns%2Fconnector-name:fAd326jYkI123456789xxx@c-npm-connector.default.svc.cluster.local/"
   httpsProxy: "http://connector-ns%2Fconnector-name:fAd326jYkI123456789xxx@c-npm-connector.default.svc.cluster.local/"
-  
-  # Disable strict SSL verification for internal registries
-  enableStrictSsl: false
   
   # Set the registry URL for package publishing
   # Ensures packages are published to the correct registry

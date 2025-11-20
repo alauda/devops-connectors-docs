@@ -160,6 +160,8 @@ spec:
 - Proxy 通过 Rego 规则，提取 PRIVATE-TOKEN header 提取 SA Token， 校验权限。
 - Proxy 请求 Backend 注入认证信息时，根据提供的 rego 规则， 注入认证信息。
 
+例如:
+
 ``` yaml
 kind: ConnectorClass
 metadata:

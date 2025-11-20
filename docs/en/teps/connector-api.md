@@ -46,6 +46,8 @@ query: search 支持
 - label: $.[*].fullpath
 - value: $.[*].fullpath
 
+例如:
+
 ``` json
 [
   {
@@ -116,6 +118,8 @@ query: search 支持
 - label: $.[*].name_with_namespace
 - value: $.[*].path_with_namespace
 
+例如:
+
 ```json
 [
   {
@@ -173,6 +177,8 @@ query: search 支持
 - label: $.[*].name
 - value: $.[*].name
 
+例如:
+
 ``` json
 [
   {
@@ -224,6 +230,8 @@ query: search 支持
 
 - label: $.[*].iid + $.[*].title
 - value: refs/merge-requests/$.[*].iid/merge
+
+例如:
 
 ``` json
 [
@@ -317,6 +325,8 @@ query: search 支持
 path: $
 - label: item.name
 - value: "refs/tags/" + item.name
+
+例如:
 
 ``` json
 [
@@ -937,6 +947,7 @@ ui.katanomi.dev/descriptors: |
 
 1.gitlab 的搜索 api 是通过 query 传递 search 参数实现，
 
+例如:
 ```yaml
 search.name: search
 search.location: query
@@ -945,6 +956,8 @@ search.expression: "${context.value}"
 
 2. harbor 的搜索 api 通过 query传递 q 参数实现。q 的值为 key=~value 的形式。
 
+例如:
+
 ```yaml
 search.name: q
 search.location: query
@@ -952,6 +965,8 @@ search.expression: "name=~${context.value}"
 ```
 
 3. git 的 gitrefs 是全量返回，api 不支持搜索
+
+例如:
 
 ```yaml
 search.disable: true
@@ -1144,6 +1159,8 @@ UI 侧使用动态表单加载的 Connector API 服务， 需要平台部署 Con
 - 使用 AIT 提供的 `/clusters-rewrite/<cluster-name>/<ingress-path>/` 来访问业务集群 API
 - Connector-API 在集群部署时，增加 ingress `/connectors` 配置
 - 动态表单支持指定 API Prefix
+
+例如:
 
 ``` yaml
 - api:openapi:url:prefix: /clusters-rewrite/${context.cluster-name}/connectors/

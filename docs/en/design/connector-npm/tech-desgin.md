@@ -5,7 +5,7 @@ NPM Connector 是用于连接 NPM Registry 的 Connector。
 用户可以使用 NPM Connector 进行 NPM 操作，例如安装依赖、发布包等。
 
 
-### ConnectorClass
+## ConnectorClass
  
 NPM ConnectorClass 包含以下几个部分：
 
@@ -17,6 +17,8 @@ NPM ConnectorClass 包含以下几个部分：
 - 认证类型: basicAuth, 认证配置可选
 - 验证探测：采用端点：/
 - 存活探针：采用根路径：/
+
+例如:
 
 ```yaml
 apiVersion: connectors.alauda.io/v1alpha1
@@ -122,7 +124,7 @@ spec:
       namespace: connectors-system
 ```
 
-### 使用connector挂载
+## 使用connector挂载
 
 使用时，用户需提前创建 Connector，使用 CSI 的方式挂载到 connector，挂载完成后会在pod 中写入两个文件：
 

@@ -18,7 +18,7 @@ Feature Requirements: [GitLab Connector Feature Requirements](./feature.md)
 
 ### 配置
 
-##### glab CLI 介绍
+#### glab CLI 介绍
 
 GitLab CLI 是 GitLab 官方提供的 CLI 工具，通过 CLI 可以完成 GitLab 的资源管理，例如：
 
@@ -41,6 +41,8 @@ glab mr note -m "needs to do X before it can be merged" branch-foo
 - 支持配置 CA 证书路径和跳过 TLS 验证
 - 支持配置多个 Gitlab 实例地址和认证信息
 - 不支持在配置文件中指定正向代理地址
+
+例如:
 
 ``` yaml
 # What protocol to use when performing Git operations. Supported values: ssh, https.
@@ -185,6 +187,8 @@ spec:
 - 客户端按照原始凭据配置方式，将 `K8S Token` 作为 `Private-Token` 提供给 glab cli。
 - Proxy Service 从 `Private-Token` Header 中提取 `Private Token`，进行权限校验。
 - Proxy Service 请求 Backend 注入认证信息时，使用 Connector 配置的 Secret，将 data["token"] 作为 `Private-Token`, 转发到 GitLab。
+
+例如:
 
 ``` yaml
 spec:
