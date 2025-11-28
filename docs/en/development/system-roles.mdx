@@ -1,0 +1,106 @@
+# System Roles
+
+## Overview
+
+The Connectors Operator implements a plugin-based RBAC system that provides granular permission control for connector resources. System roles are distributed as ClusterRoles that automatically aggregate into the platform's default roles, enabling seamless integration with the existing permission model.
+
+## Architecture
+
+### Role Distribution
+
+All role permissions are defined as `ClusterRoles` within the operator and are:
+- Located in the `/config/roles` folder
+- Automatically included in the operator bundle via kustomization
+- Aggregated into system-wide roles using label-based selectors
+
+### Bundle Generation
+
+The roles are integrated into the final deployment manifests through:
+1. Kustomization configuration in `/config/manifests/kustomization.yaml`
+2. Reference to `../roles` resources
+3. Automatic generation in the final `bundle.yaml` during build
+
+## Available Roles
+
+The operator provides role definitions for the following resources across different scopes:
+
+### ConnectorClasses
+- **Scope**: Business Namespace
+- **Admin Role**: `cpaas:connectors-connectorclasses:business-ns:admin`
+  - Full permissions on `connectorclasses` resources
+  - Aggregates to: cluster-admin, platform-admin, business-ns scope
+- **View Role**: `cpaas:connectors-connectorclasses:business-ns:view`
+  - Read-only permissions (get, list, watch)
+  - Aggregates to: namespace-admin, namespace-developer, platform-auditor, project-admin, business-ns scope
+
+### Connectors (Cluster Scope)
+- **Scope**: Cluster-wide
+- **Admin Role**: `cpaas:connectors-cluster:cluster:admin`
+  - Full permissions on cluster-scoped `connectors` resources
+  - Aggregates to: cluster-admin, platform-admin
+- **View Role**: `cpaas:connectors-cluster:cluster:view`
+  - Read-only permissions
+  - Aggregates to: namespace-admin, namespace-developer, platform-auditor, project-admin
+
+### Connectors (Namespace Scope)
+- **Scope**: Business Namespace
+- **Admin Role**: `cpaas:connectors-namespaced:business-ns:admin`
+  - Full permissions on namespaced `connectors` resources
+  - Aggregates to: cluster-admin, namespace-admin, platform-admin, project-admin, business-ns scope
+- **View Role**: `cpaas:connectors-namespaced:business-ns:view`
+  - Read-only permissions
+  - Aggregates to: namespace-developer, platform-auditor, business-ns scope
+
+### Connectors (Project Scope)
+- **Scope**: Project Namespace
+- **Admin Role**: `cpaas:connectors-project:project-ns:admin`
+  - Full permissions on project-scoped `connectors` resources
+  - Aggregates to: cluster-admin, platform-admin, project-admin, project-ns scope
+- **View Role**: `cpaas:connectors-project:project-ns:view`
+  - Read-only permissions
+  - Aggregates to: namespace-admin, namespace-developer, platform-auditor, project-ns scope
+
+### ResourceInterfaces
+- **Scope**: Business Namespace
+- **Admin Role**: `cpaas:connectors-resourceinterfaces:business-ns:admin`
+  - Full permissions on `resourceinterfaces` resources
+  - Aggregates to: cluster-admin, platform-admin, business-ns scope
+- **View Role**: `cpaas:connectors-resourceinterfaces:business-ns:view`
+  - Read-only permissions
+  - Aggregates to: namespace-admin, namespace-developer, platform-auditor, project-admin, business-ns scope
+
+## Role Aggregation
+
+Roles use Kubernetes RBAC aggregation through labels:
+- `rbac.cpaas.io/aggregate-to-*`: Controls which platform roles inherit these permissions
+- `rbac.cpaas.io/aggregate-to-scope-*`: Defines the resource scope (cluster, business-ns, project-ns)
+
+This allows automatic permission inheritance without manual role binding updates.
+
+## Migration
+
+The roles in the `/config/roles` folder were migrated from the legacy permission system using:
+
+### Tools
+1. **permission-migrator**: [GitLab Repository](https://gitlab-ce.alauda.cn/devops/tech-research/permission-migrator)
+2. **Migration Guide**: [Documentation](https://gitlab-ce.alauda.cn/devops/tech-research/permission-migrator/-/blob/main/docs/MIGRATE.md#%E6%96%B0%E6%97%A7%E8%BD%AC%E6%8D%A2%E8%A7%84%E5%88%99)
+
+### Migration Process
+The migration ensured:
+- Backward compatibility with existing role assignments
+- Proper scope separation (cluster, namespace, project)
+- Correct aggregation labels for platform integration
+- Standardized naming conventions following the pattern: `cpaas:<resource>:<scope>:<permission-level>`
+
+## Usage
+
+When the operator is installed, these ClusterRoles are automatically created and begin aggregating into the appropriate system roles. Users assigned to platform roles (e.g., `platform-admin`, `namespace-developer`) will automatically receive the corresponding connector permissions.
+
+### Example
+A user with the `namespace-developer` role will automatically gain view permissions for:
+- ConnectorClasses
+- Connectors (in their namespace)
+- ResourceInterfaces
+
+No additional role bindings are required.
+
