@@ -33,6 +33,8 @@ The following table shows the compatibility and support matrix between the Alaud
   * [ResourceInterface](../connectors/concepts/resource_interface.mdx)
   * <ExternalSiteLink name="pipelines" href="/pipelines/concepts/integrate_with_connector.html" children="Pipeline Integration" />
 - Add docs to explain credential permissions required for each connector. more details: [Credential Permissions Required](../connectors-git/concepts/git_connectorclass.mdx#credential_permissions_required)
+- Support integration with GitLab Server by using GitLab Connector. more details:
+  - [GitLab Connector Quick Start](../connectors-gitlab/quick_start.mdx)
 - Support integration with NPM Registries by using NPM Connector. more details:
   - [NPM Connector Quick Start](../connectors-npm/quick_start.mdx)
 - Support accessing tool's original API through the Connector API when the ConnectorClass provides Proxy Service capabilities. The system now supports two ways to access tool resources: using the tool's original API via Proxy Service, or using custom APIs provided for the ConnectorClass. For more details, see
@@ -40,10 +42,11 @@ The following table shows the compatibility and support matrix between the Alaud
 - Support using Rego rules to extract tokens from client requests when using the built-in HTTP reverse proxy. Combined with the existing ability to inject authentication credentials into backend requests through Rego rules, you can now extend the built-in reverse proxy's capabilities to support tools with non-standard HTTP authentication mechanisms.
   - For token extraction configuration, see [Custom Rego-based Authentication](../connectors/concepts/connectors_proxy.mdx#custom-rego-based-authentication).
   - For authentication injection configuration, see [Injecting Authentication Credentials into Backend Request when using built-in Reverse Proxy](../connectors/concepts/connectors_proxy.mdx#injecting-authentication-when-using-built-in-reverse-proxy).
+- Support using request variables in `spec.auth.types[].generator.rego` to inject authentication credentials into backend requests. more details: [Variables Available in Rego](../connectors/concepts/connectorclass.mdx#variables-available-in-rego).
 
 ### Breaking Changes
 
-No breaking changes.
+- Remove the `input.xxx` variable from `spec.auth.types[].generator.rego`. Use `input.data.xxx` instead.
 
 ### Fixed Issues
 

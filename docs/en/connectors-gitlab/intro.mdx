@@ -1,0 +1,26 @@
+---
+weight: 10
+---
+
+# Introduction
+
+## ConnectorsGitLab
+
+**What is ConnectorsGitLab**
+
+ConnectorsGitLab is a specialized connector component that enables secure and convenient integration with GitLab servers. It extends the Connectors system with GitLab-specific capabilities, allowing users to use CLI tools (Git CLI, GitLab CLI, and custom CLI tools) to interact with GitLab without directly handling credentials.
+
+**Feature Overview**
+
+ConnectorsGitLab provides several key capabilities:
+
+- Secure access to GitLab servers through credential abstraction using Private Access Tokens (PAT)
+- Automatic credential injection for GitLab operations via CSI volumes
+
+**Application Scenarios**
+
+- Using Git CLI to securely clone private GitLab repositories in CI/CD pipelines
+- Using GitLab CLI (glab) to interact with GitLab for merge request management, issue tracking, and API operations
+- Using custom CLI tools (like reviewdog) to interact with GitLab for automated code review on merge requests
+- Using CLI tools in container workloads to interact with GitLab without credential configuration
+- Centralized management of GitLab access across multiple teams and projects

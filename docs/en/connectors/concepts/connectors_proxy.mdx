@@ -204,7 +204,7 @@ spec:
       rego: |
         package proxy
         auth = {
-          "token": input.headers["Private-Token"][0]
+          "token": input.request.headers["Private-Token"][0]
         }
 ```
 
@@ -273,7 +273,7 @@ spec:
           auth = {
             "position": "header",
             "auth": {
-              "Private-Token": input.token
+              "Private-Token": input.data.token
             }
           }
 ```

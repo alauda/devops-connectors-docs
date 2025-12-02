@@ -1,0 +1,245 @@
+---
+weight: 30
+---
+
+# Quick Start
+
+This document will help you quickly understand how to create a GitLab Connector and use it for securely cloning repositories and performing GitLab operations without directly handling credentials.
+
+## Estimated Reading Time
+
+15 minutes
+
+## Prerequisites
+
+- Kubernetes cluster with Connectors system installed (ConnectorsCore and ConnectorsGitLab components). See the [Installation Guide](../install) for details on installing these components.
+- kubectl configured to communicate with your cluster
+- GitLab repository with valid Private Access Token (PAT)
+- Basic knowledge of Kubernetes resources
+
+## Process Overview
+
+| No. | Operation Step | Description |
+|-----|----------------|-------------|
+| 1 | Create Namespace | Create a dedicated namespace for the demonstration |
+| 2 | Create GitLab Credentials and Connector | Set up the credentials and connector for GitLab access |
+| 3 | Create a Clone Job | Deploy a job that uses the connector to clone a repository |
+| 4 | Verify Operation | Check that the repository was successfully cloned |
+
+## Steps to Operate
+
+### Step 1: Create Namespace
+
+Create a dedicated namespace for this demonstration:
+
+```bash
+kubectl create ns gitlab-connector-demo
+```
+
+### Step 2: Create GitLab Credentials and Connector
+
+Create both the Secret containing GitLab Private Access Token and the GitLab Connector resource. For more detailed information about creating and configuring connectors, please refer to the [Connectors Quick Start Guide](../../connectors/quick_start).
+
+```bash
+cat <<EOF | kubectl apply -f -
+kind: Secret
+apiVersion: v1
+metadata:
+  name: gitlab-secret
+  namespace: gitlab-connector-demo
+type: connectors.cpaas.io/gitlab-pat-auth
+stringData:
+  token: glpat-xxxxxxxxxxxxxxxxxxxx  # Replace with your GitLab Private Access Token
+---
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: gitlab-connector
+  namespace: gitlab-connector-demo
+spec:
+  connectorClassName: gitlab
+  address: https://gitlab.com  # Replace with your GitLab server address
+  auth:
+    name: patAuth
+    secretRef:
+      name: gitlab-secret
+EOF
+```
+
+**Important Notes:**
+- The secret type must be `connectors.cpaas.io/gitlab-pat-auth`
+- For GitLab.com, use `https://gitlab.com` as the address
+- For self-hosted GitLab, use your GitLab server URL (e.g., `https://gitlab.example.com`)
+- The `address` should be the GitLab server URL for repository cloning, not the API address
+
+Verify that the connector is in "Ready" status:
+
+```bash
+kubectl get connector gitlab-connector -n gitlab-connector-demo
+```
+
+The output should show:
+
+```
+NAME               CLASS    ADDRESS              READY   AGE
+gitlab-connector   gitlab   https://gitlab.com   True    1m
+```
+
+### Step 3: Create a Clone Job
+
+Create a job that uses the connector to clone a GitLab repository using Git CLI:
+
+```bash
+cat <<EOF | kubectl apply -f -
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: gitlab-git-clone
+  namespace: gitlab-connector-demo
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: git
+        image: bitnami/git
+        imagePullPolicy: IfNotPresent
+        command:
+        - "sh"
+        args:
+        - "-c"
+        - |
+          set -ex
+          cp /opt/git/.gitconfig /root/
+          chmod 644 /root/.gitconfig
+
+          git clone --progress https://<your-gitlab-server>/<your-group>/<your-repo>.git /tmp/demo
+          echo "git clone done"
+        volumeMounts:
+        - name: gitconfig
+          mountPath: /opt/git
+      volumes:
+      - name: gitconfig
+        csi:
+          readOnly: true
+          driver: connectors-csi
+          volumeAttributes:
+            connector.name: "gitlab-connector"
+            configuration.names: "gitconfig"
+EOF
+```
+
+**Replace** `https://<your-gitlab-server>/<your-group>/<your-repo>.git` with your actual GitLab repository URL.
+
+**Key parameters:**
+- `connector.name`: The name of your GitLab connector
+- `configuration.names`: Set to "gitconfig" to mount the Git configuration file
+- `mountPath`: Mount the configuration to `/opt/git` and copy to `/root/` for Git to use
+
+### Step 4: Verify Operation
+
+Check the job's logs to confirm the repository was successfully cloned:
+
+```bash
+kubectl logs -f job/gitlab-git-clone -n gitlab-connector-demo
+```
+
+You should see the Git clone operation completing successfully without any authentication errors. The output should include:
+
+```
++ git clone --progress https://<your-gitlab-server>/<your-group>/<your-repo>.git /tmp/demo
+Cloning into '/tmp/demo'...
+remote: Enumerating objects: 123, done.
+remote: Counting objects: 100% (123/123), done.
+remote: Compressing objects: 100% (89/89), done.
+remote: Total 123 (delta 34), reused 123 (delta 34), pack-reused 0
+Receiving objects: 100% (123/123), 45.67 KiB | 1.23 MiB/s, done.
+Resolving deltas: 100% (34/34), done.
++ echo 'git clone done'
+git clone done
+```
+
+## How It Works
+
+The GitLab Connector works by:
+
+1. Replacing the original GitLab repository URL with a proxy service URL
+2. Injecting authentication information (K8S API Token) into requests to the proxy service
+3. The proxy service adding the necessary credentials (Secret of the Connector) when forwarding requests to the GitLab server
+4. For Git operations, the `.gitconfig` file contains URL rewriting rules and authentication headers
+
+To examine the generated configuration:
+
+```bash
+cat <<EOF | kubectl apply -f -
+apiVersion: v1
+kind: Pod
+metadata:
+  name: inspect-gitlab-config
+  namespace: gitlab-connector-demo
+spec:
+  restartPolicy: Never
+  containers:
+  - name: inspect
+    image: bitnami/git
+    command: ["sleep", "3600"]
+    volumeMounts:
+    - name: gitconfig
+      mountPath: /opt/gitlab
+  volumes:
+  - name: gitconfig
+    csi:
+      readOnly: true
+      driver: connectors-csi
+      volumeAttributes:
+        connector.name: "gitlab-connector"
+        configuration.names: "gitconfig"
+EOF
+```
+
+View the generated Git configuration:
+
+```bash
+kubectl exec -it inspect-gitlab-config -n gitlab-connector-demo -- cat /opt/gitlab/.gitconfig
+```
+
+Example output:
+
+```
+[http]
+    extraHeader = Authorization: Basic OmV5Smhixxxxxxxxx==
+[url "http://c-gitlab-connector.gitlab-connector-demo.svc"]
+    insteadOf = https://gitlab.com
+```
+
+This configuration:
+- Adds an Authorization header with the encoded K8S API Token
+- Rewrites the GitLab URL to use the proxy service
+
+## Troubleshooting
+
+If your clone operation fails, check the following:
+
+1. **Connector Status**: Ensure the connector is in "Ready" state:
+   ```bash
+   kubectl describe connector gitlab-connector -n gitlab-connector-demo
+   ```
+
+2. **Private Access Token**: Verify your GitLab PAT has the necessary permissions:
+   - `read_repository` scope is required for cloning
+
+3. **Job Configuration**:
+   - Ensure the volume mount path is correct
+   - Verify the repository URL matches your GitLab repository
+   - Check that the `.gitconfig` file is properly copied to `/root/`
+
+4. **Network Connectivity**: Ensure your cluster can reach the GitLab server
+
+## Next Steps
+
+After successfully cloning your first repository using the GitLab Connector, you can:
+
+- Learn how to use GitLab CLI (glab) with the connector to interact with GitLab in the [Using GitLab CLI Guide](./how_to/using-glab-cli.mdx)
+- Using custom CLI tools like reviewdog to interact with GitLab in the [Using Reviewdog CLI Tools Guide](./how_to/using-reviewdog-cli.mdx)
+- Integrate this approach into your CI/CD pipelines in the [CI/CD Integration Guide](./how_to/using-in-cicd.mdx)
+- Explore the [GitLab ConnectorClass Concepts](./concepts/gitlab_connectorclass.mdx) for advanced configuration options

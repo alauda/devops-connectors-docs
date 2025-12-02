@@ -58,7 +58,7 @@ EOF
 
 ### 3. Create a Pod Using the CSI Driver
 
-Now, we can create a Pod to mount the configuration from the ConnectorClass:
+Create a Pod that mounts the configuration:
 
 ```shell
 cat << EOF | kubectl create -f -
@@ -73,9 +73,7 @@ spec:
   - name: web
     image: bitnami/git:2.47.1
     imagePullPolicy: IfNotPresent
-    command:
-    - "sleep"
-    args: [ "3600" ]
+    command: ["sleep", "3600"]
     volumeMounts:
     - name: git-config
       mountPath: /tmp/config
@@ -91,80 +89,102 @@ spec:
 EOF
 ```
 
-Once the Pod is running, you can check the contents of the mounted configuration file with the following command:
+Verify the mounted files:
 
 ```shell
+# List all mounted files (including built-in configurations)
+kubectl exec -ti csi-demo -- ls -l /tmp/config
+
+# View the custom configuration from ConnectorClass
 kubectl exec -ti csi-demo -- cat /tmp/config/.gitconfig
 ```
 
-## Configuration Description
+## Built-in Configurations \{#built-in-configurations}
 
-### CSI Volume Configuration Parameters
+The CSI Driver automatically provides built-in configuration files that are always mounted into Pods.
 
-| Parameter Name | Required | Description                 |
-| -------------- | -------- | --------------------------- |
-| readOnly       | Yes      | Must be set to true         |
-| driver         | Yes      | Fixed value: connectors-csi |
+**Available Files**
 
-### volumeAttributes Parameters
+| File Name                        | Description                                                                 |
+| -------------------------------- | --------------------------------------------------------------------------- |
+| `context.token`                 | Authentication token for the proxy service                                  |
+| `connector.status.proxyAddress` | Proxy address (see [connectors-proxy](./connectors_proxy.mdx))             |
+| `http.proxy`                     | Forward proxy URL with authentication for HTTP                              |
+| `https.proxy`                    | Forward proxy URL with authentication for HTTPS                             |
+| `context.proxy.caCert`           | CA certificate for the connectors proxy                                     |
 
-| Parameter Name      | Required | Description                                                     |
-| ------------------- | -------- | --------------------------------------------------------------- |
-| connector.name      | Yes      | The name of the Connector                                       |
-| connector.namespace | No       | The namespace of the Connector, defaults to the Pod's namespace |
-| configuration.names | Yes      | A comma-separated list of configuration names to mount          |
-| token.expiration    | No       | The expiration time of the token, defaults to 30m               |
+**Usage Examples**
 
-### Configuration Name Description
+Forward proxy (if supported by your CLI and ConnectorClass):
 
-The `configuration.names` parameter must correspond to the configuration names defined in the ConnectorClass. For example:
+```bash
+export http_proxy=$(cat /{mount-path}/http.proxy)
+export https_proxy=$(cat /{mount-path}/https.proxy)
 
-```yaml
-kind: ConnectorClass
-apiVersion: connectors.alauda.io/v1alpha1
-spec:
-  configurations:
-  - name: config1
-    data:
-      key1.txt: value1
-      key2.txt: value2
-  - name: config2
-    data:
-      file1.txt: file-value1
-      file2.txt: file-value2
+# Your CLI command
 ```
 
-Mounting a single configuration:
+Reverse proxy (if supported by your ConnectorClass):
 
-```yaml
-kind: Pod
-apiVersion: v1
-spec:
-  volumes:
-  - name: config
-    csi:
-      driver: connectors-csi
-      volumeAttributes:
-        configuration.names: "config1"  # Will mount key1.txt and key2.txt
+```bash
+export TOKEN=$(cat /{mount-path}/context.token)
+export SERVER=$(cat /{mount-path}/connector.status.proxyAddress)
+
+# Your CLI command
+{cli} --server $SERVER --token $TOKEN
 ```
 
-Mounting multiple configurations:
+## CSI Volume Parameters
+
+**Volume Parameters**
+
+| Parameter  | Required | Description                 |
+| ---------- | -------- | --------------------------- |
+| readOnly   | Yes      | Must be `true`              |
+| driver     | Yes      | Must be `connectors-csi`    |
+
+**Volume Attributes**
+
+| Parameter           | Required | Description                                              |
+| ------------------- | -------- | -------------------------------------------------------- |
+| connector.name      | Yes      | Connector name                                           |
+| connector.namespace | No       | Connector namespace (defaults to Pod's namespace)        |
+| configuration.names | No       | Comma-separated configuration names (e.g., `config1,config2`), the configuration names are the names of the configurations in the ConnectorClass |
+| token.expiration    | No       | Token expiration time (default: `30m`)                   |
+
+**Examples**
+
+Mount a single configuration:
 
 ```yaml
-kind: Pod
-apiVersion: v1
-spec:
-  volumes:
-  - name: config
-    csi:
-      driver: connectors-csi
-      volumeAttributes:
-        configuration.names: "config1,config2"  # Will mount all configuration files
+volumes:
+- name: config
+  csi:
+    driver: connectors-csi
+    readOnly: true
+    volumeAttributes:
+      connector.name: "my-connector"
+      configuration.names: "config1"
 ```
 
-Note: If there are files with the same name in multiple configurations, the latter configuration will overwrite the former.
+Mount multiple configurations:
 
-## Configuration File Rendering
+```yaml
+volumes:
+- name: config
+  csi:
+    driver: connectors-csi
+    readOnly: true
+    volumeAttributes:
+      connector.name: "my-connector"
+      configuration.names: "config1,config2"
+```
+
+**Notes:**
+- If `configuration.names` is omitted, only built-in configurations are mounted
+- When multiple configurations contain files with the same name, later configurations overwrite earlier ones
+
+## Configuration File Rendering \{#configuration-file-rendering}
 
 The CSI Driver performs variable rendering when mounting configuration files, using [Go template](https://pkg.go.dev/text/template) syntax.
 

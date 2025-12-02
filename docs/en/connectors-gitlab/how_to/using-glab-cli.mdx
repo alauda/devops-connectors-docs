@@ -1,0 +1,293 @@
+---
+weight: 10
+---
+
+# Using GitLab CLI (glab) with GitLab Connector
+
+This guide demonstrates how to use the GitLab CLI (glab) with the GitLab Connector to perform advanced GitLab operations without manually configuring credentials.
+
+## Overview
+
+The GitLab CLI (glab) is an official command-line tool for GitLab that allows you to interact with GitLab API to manage merge requests, issues, pipelines, and more. The GitLab Connector provides automatic configuration for glab, making it easy to use in containerized environments without manually handling credentials.
+
+## Prerequisites
+
+- A GitLab Connector configured with a Private Access Token that has `api` scope
+- Basic understanding of GitLab CLI commands
+- kubectl access to your Kubernetes cluster
+
+## What You'll Learn
+
+- How to mount GitLab CLI configuration using the connector
+- How to use glab commands for common GitLab operations
+- How to combine Git and glab operations in the same Pod
+
+## Step 1: Create a GitLab Connector
+
+First, ensure you have a GitLab Connector with appropriate permissions:
+
+```bash
+cat <<EOF | kubectl apply -f -
+apiVersion: v1
+kind: Secret
+metadata:
+  name: gitlab-secret
+  namespace: gitlab-connector-demo
+type: connectors.cpaas.io/gitlab-pat-auth
+stringData:
+  token: glpat-xxxxxxxxxxxxxxxxxxxx  # Token must have 'api' scope
+---
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: gitlab-connector
+  namespace: gitlab-connector-demo
+spec:
+  connectorClassName: gitlab
+  address: https://gitlab.com
+  auth:
+    name: patAuth
+    secretRef:
+      name: gitlab-secret
+EOF
+```
+
+**Replacements:**
+- `glpat-xxxxxxxxxxxxxxxxxxxx`: Replace with your actual GitLab Private Access Token (must have `api` scope)
+- `https://gitlab.com`: Replace with your GitLab server address (use `https://gitlab.com` for GitLab.com or your self-hosted GitLab URL)
+
+Verify that the connector is in "Ready" status:
+
+```bash
+kubectl get connector gitlab-connector -n gitlab-connector-demo
+```
+
+## Step 2: Use glab for API Operations
+
+Create a Pod that uses glab to interact with GitLab API:
+
+```bash
+cat <<EOF | kubectl apply -f -
+apiVersion: v1
+kind: Pod
+metadata:
+  name: glab-api-demo
+  namespace: gitlab-connector-demo
+spec:
+  restartPolicy: Never
+  containers:
+  - name: gitlab-cli
+    image: gitlab/glab:v1.74.0
+    command:
+    - "sh"
+    - "-c"
+    - |
+      set -ex
+      
+      # Setup glab configuration
+      mkdir -p ~/.config/glab-cli
+      cp /opt/gitlab/config.yml ~/.config/glab-cli/
+      chmod 600 ~/.config/glab-cli/config.yml
+      
+      # List projects
+      echo "Listing projects..."
+      glab api projects
+      
+      # Get current user info
+      echo "Getting user info..."
+      glab api user
+      
+      echo "glab api operations completed"
+    volumeMounts:
+    - name: gitlab-config
+      mountPath: /opt/gitlab
+  volumes:
+  - name: gitlab-config
+    csi:
+      driver: connectors-csi
+      readOnly: true
+      volumeAttributes:
+        connector.name: "gitlab-connector"
+        configuration.names: "gitlabconfig"
+EOF
+```
+
+**Check the logs:**
+
+```bash
+kubectl logs -f glab-api-demo -n gitlab-connector-demo
+```
+
+You should see output showing the list of projects and user information.
+
+## Step 3: Clone Repositories with glab
+
+Use glab to clone repositories:
+
+```bash
+cat <<EOF | kubectl apply -f -
+apiVersion: v1
+kind: Pod
+metadata:
+  name: glab-clone-demo
+  namespace: gitlab-connector-demo
+spec:
+  restartPolicy: Never
+  containers:
+  - name: gitlab-cli
+    image: gitlab/glab:v1.74.0
+    command:
+    - "sh"
+    - "-c"
+    - |
+      set -ex
+      
+      # Setup glab and git configuration
+      mkdir -p ~/.config/glab-cli
+      cp /opt/gitlab/config.yml ~/.config/glab-cli/
+      chmod 600 ~/.config/glab-cli/config.yml
+      
+      cp /opt/gitlab/.gitconfig ~/
+      chmod 644 ~/.gitconfig
+      
+      # Clone repository using glab
+      glab repo clone <your-group>/<your-repo> /tmp/repo
+      echo "Repository cloned successfully"
+      
+      # List repository contents
+      ls -la /tmp/repo
+    volumeMounts:
+    - name: gitlab-config
+      mountPath: /opt/gitlab
+  volumes:
+  - name: gitlab-config
+    csi:
+      driver: connectors-csi
+      readOnly: true
+      volumeAttributes:
+        connector.name: "gitlab-connector"
+        configuration.names: "gitlabconfig,gitconfig"
+EOF
+```
+
+**Replacements:**
+- `<your-group>/<your-repo>`: Replace with your actual GitLab repository path (e.g., `gitlab-org/gitlab`)
+
+**Important:** When cloning repositories with glab, you must mount both `gitlabconfig` and `gitconfig` configurations.
+
+**Check the logs:**
+
+```bash
+kubectl logs -f glab-clone-demo -n gitlab-connector-demo
+```
+you will see the output of the repository cloned successfully:
+
+```bash
++ glab repo clone <your-group>/<your-repo> /tmp/repo
+Cloning into '/tmp/repo'...
+remote: Enumerating objects: 123, done.
+remote: Counting objects: 100% (123/123), done.
+remote: Compressing objects: 100% (89/89), done.
+remote: Total 123 (delta 34), reused 123 (delta 34), pack-reused 0
+Receiving objects: 100% (123/123), 45.67 KiB | 1.23 MiB/s, done.
+Resolving deltas: 100% (34/34), done.
++ echo 'Repository cloned successfully'
+Repository cloned successfully
+```
+
+## Step 4: Manage Merge Requests
+
+Use glab to work with merge requests:
+
+```yaml
+cat <<EOF | kubectl apply -f -
+apiVersion: v1
+kind: Pod
+metadata:
+  name: glab-mr-demo
+  namespace: gitlab-connector-demo
+spec:
+  restartPolicy: Never
+  containers:
+  - name: gitlab-cli
+    image: gitlab/glab:v1.74.0
+    command:
+    - "sh"
+    - "-c"
+    - |
+      set -ex
+      
+      # Setup configurations
+      mkdir -p ~/.config/glab-cli
+      cp /opt/gitlab/config.yml ~/.config/glab-cli/
+      chmod 600 ~/.config/glab-cli/config.yml
+      
+      cp /opt/gitlab/.gitconfig ~/
+      chmod 644 ~/.gitconfig
+      
+      # Clone repository
+      glab repo clone <your-group>/<your-repo> /tmp/repo
+      cd /tmp/repo
+      
+      # List merge requests
+      echo "Listing merge requests..."
+      glab mr list
+      
+      # View a specific merge request
+      echo "Viewing merge request #1..."
+      glab mr view <mr-number>
+    volumeMounts:
+    - name: gitlab-config
+      mountPath: /opt/gitlab
+  volumes:
+  - name: gitlab-config
+    csi:
+      driver: connectors-csi
+      readOnly: true
+      volumeAttributes:
+        connector.name: "gitlab-connector"
+        configuration.names: "gitlabconfig,gitconfig"
+EOF
+```
+
+**Replacements:**
+- `<your-group>/<your-repo>`: Replace with your actual GitLab repository path (e.g., `gitlab-org/gitlab`)
+- `<mr-number>`: Replace with the merge request number you want to view or close (e.g., `1`, `42`)
+
+**Important:** When using glab commands that interact with a repository (like `glab mr list` in a repository directory), you must mount both `gitlabconfig` and `gitconfig` configurations.
+
+**Check the logs:**
+
+```bash
+kubectl logs -f glab-mr-demo -n gitlab-connector-demo
+```
+you will see the output of the merge request list and the merge request details:
+
+```bash
++ glab mr list
+Listing merge requests...
+Showing 8 open merge requests on <your-group>/<your-repo>. (Page 1)
+
+!8     <your-group>/<your-repo>!14    change at: 1764221453   (master) ← (dev-1764221453)
+...
+
+Viewing merge request #1...
++ echo 'Viewing merge request #1...'
++ glab mr view 8
+title:  Feat/support build xiaokk
+state:  open
+author: kkxiao
+labels:
+assignees:
+reviewers:
+comments:       0
+number: 8
+url:    https://<your-gitlab-server>/<your-group>/<your-repo>/-/merge_requests/8
+--
+```
+
+## Next Steps
+
+- Learn how to use custom CLI tools like reviewdog to interact with GitLab: [Using Reviewdog](./using-reviewdog-cli.mdx)
+- Learn how to use GitLab Connector in CI/CD pipelines: [Using GitLab Connector in CI/CD Pipelines](./using-in-cicd.mdx)
+- Read concepts of GitLab ConnectorClass: [GitLab ConnectorClass Concepts](../concepts/gitlab_connectorclass.mdx)

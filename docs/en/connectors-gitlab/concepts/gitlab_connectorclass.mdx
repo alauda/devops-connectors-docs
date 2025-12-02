@@ -1,0 +1,325 @@
+---
+weight: 20
+---
+
+# GitLab Connector
+
+The GitLab connector is a specialized connector that you can use to connect to GitLab Server (both GitLab.com and self-hosted instances).
+
+You can use the GitLab Connector to securely clone private repositories in CI/CD pipelines, use GitLab CLI (glab) for advanced operations, or use custom CLI tools in containerized workloads to interact with GitLab without directly handling credentials.
+
+Additionally, you can centralize the management of GitLab access configurations across namespaces, avoiding the need to repeat the configuration of GitLab credentials in each namespace.
+
+**Notes**:
+
+- The GitLab connector supports both GitLab.com and self-hosted GitLab instances.
+- The GitLab connector supports using CLI tools (Git CLI, GitLab CLI, and custom CLI tools) to interact with GitLab.
+
+This document will describe:
+
+- Requirements for GitLab servers
+- How to create a GitLab connector based on the GitLab connectorclass
+- Proxy and configuration capabilities of the GitLab connector
+
+## Requirements for GitLab Servers and GitLab CLI (glab)
+
+The GitLab server to be accessed must meet the following conditions:
+
+1. It must support HTTP/HTTPS transport protocols and is only compatible with the Git "smart HTTP" protocol mode. This mode is the standard implementation for modern Git servers, supporting efficient data transfer and authentication mechanisms.
+
+2. For GitLab API operations when using GitLab CLI (glab), the GitLab server must meet the version requirements of glab CLI. More details: [GitLab CLI (glab) Version Requirements](https://gitlab.com/gitlab-org/cli#requirements)
+
+## Creating a GitLab Connector Based on the GitLab ConnectorClass
+
+### Quick Start
+
+```yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: gitlab-demo
+spec:
+  connectorClassName: gitlab
+  address: https://gitlab.com
+  auth:
+    name: patAuth
+    secretRef:
+      name: gitlab-secret
+```
+
+### spec.connectorClassName
+
+Constant value `gitlab`.
+
+### Description
+
+You can add description information for the GitLab connector through the `annotations` field.
+
+- `cpaas.io/description`: Description information for the GitLab connector.
+
+For example:
+
+```yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: gitlab-demo
+  annotations:
+    cpaas.io/description: "Connect to GitLab for accessing team repositories"
+```
+
+### Address
+
+`spec.address` specifies the access address of the GitLab server.
+
+**Important**: This address is used for repository cloning, not the API address of the GitLab server. When using GitLab CLI (glab), the connector will automatically construct the API address by appending `/api/v4` to this address.
+
+**Examples**:
+- For GitLab.com: `https://gitlab.com`
+- For self-hosted instances: `https://gitlab.example.com`
+
+### Authentication
+
+The GitLab connector supports the following authentication types:
+
+- `patAuth`: Private Access Token authentication (optional), corresponding secret type: `connectors.cpaas.io/gitlab-pat-auth`
+
+#### Using Private Access Token Authentication
+
+Private Access Token (PAT) is the recommended authentication method for GitLab. It provides fine-grained access control and can be easily revoked without changing passwords.
+
+For example:
+
+```yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: gitlab-demo
+spec:
+  connectorClassName: gitlab
+  address: https://gitlab.com
+  auth:
+    name: patAuth
+    secretRef:
+      name: gitlab-secret
+```
+
+You need to create a `Secret` in the same namespace, for example:
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: gitlab-secret
+type: connectors.cpaas.io/gitlab-pat-auth
+stringData:
+  token: glpat-xxxxxxxxxxxxxxxxxxxx  # Your GitLab Private Access Token
+```
+
+**Note**: The secret type must be `connectors.cpaas.io/gitlab-pat-auth`.
+
+#### Creating a GitLab Private Access Token
+
+For detailed instructions on how to create a Personal Access Token in GitLab, please refer to the official documentation: `{your-gitlab-server}/help/user/profile/personal_access_tokens.md#create-a-personal-access-token`
+
+**Required Token Scopes:**
+
+When creating the token, select the following scopes based on your needs:
+- `read_repository`: Required for cloning repositories
+- `write_repository`: Required for pushing changes if you want to push changes to the repository
+- `api`: Required for GitLab API operations, e.g. list projects, list branches, list merge requests, etc.
+
+**Security Best Practices:**
+
+For security best practices, we recommend creating tokens with minimal required permissions. When additional privileges are needed, create separate Connectors with more privileged tokens and use namespace isolation to control which users can access each Connector.
+
+#### Using Without Authentication
+
+If the GitLab server does not require authentication (for public repositories), you can omit the `secretRef` field:
+
+```yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: gitlab-demo
+spec:
+  connectorClassName: gitlab
+  address: https://gitlab.com
+  auth:
+    name: patAuth
+```
+
+## Proxy and Configuration
+
+To enable clients to access GitLab servers without directly handling credentials, the GitLab ConnectorClass provides a proxy server that automatically injects authentication information.
+
+Clients with access to the connector can use this proxy server to access GitLab servers without needing to configure credentials on the client side.
+
+To simplify usage, the GitLab ConnectorClass provides configuration files that can be mounted into Pods via CSI Driver. When executing Git CLI, GitLab CLI (glab), or custom CLI operations in the Pod, these configurations automatically route requests through the proxy service.
+
+### Proxy Address
+
+When creating a GitLab connector, the system will automatically create a Service for proxying access to the GitLab repository.
+
+The system will record the proxy address in the `status.proxy.httpAddress` field.
+
+For example:
+
+```yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: gitlab-demo
+spec:
+  # . . .
+status:
+  conditions:
+  # . . .
+  proxy:
+    httpAddress:
+      url: http://c-gitlab-demo.default.svc.cluster.local
+```
+
+### Configuration
+
+The GitLab connector provides the following configurations:
+
+- `gitconfig`: Git configuration file for Git CLI operations
+- `gitlabconfig`: Configuration file for GitLab CLI (glab) operations
+
+The connector also inherits the system built-in configurations from connectors-csi. For more details, see: [Connectors System Built-in Configurations](../../connectors/concepts/connectors_csi.mdx#built-in-configurations)
+
+#### gitconfig
+
+Git configuration file for Git CLI operations.
+
+- Provides a `.gitconfig` file in which the GitLab server address is rewritten to use the proxy address
+- When combined with the connectors-csi-driver, this file is mounted into the Pod
+- Enables access to the GitLab server through the proxy without needing to configure credentials on the client side
+
+Example of the `.gitconfig` file generated in the Pod:
+
+```ini
+[http]
+    extraHeader = Authorization: Basic OmV5Smhixxxxxxxxx==
+[url "http://c-gitlab-demo.default.svc"]
+    insteadOf = https://gitlab.com
+```
+
+**How it works:**
+1. The `[http]` section adds an Authorization header with a Kubernetes API server token (a temporary token used for requests to the GitLab connector proxy service)
+2. The `[url]` section rewrites the GitLab server address to use the proxy service
+3. When Git CLI performs operations, it automatically uses these settings
+
+**Usage:**
+
+To use the `gitconfig` configuration in your Pod:
+
+1. Mount the configuration using CSI driver with `configuration.names: "gitconfig"`
+2. Copy the `.gitconfig` file to the user's home directory (typically `/root/`)
+3. Set `.gitconfig` file permissions to `644`
+4. Git CLI will automatically use this configuration for all operations
+
+**Example CSI volume configuration:**
+
+```yaml
+volumes:
+- name: gitconfig
+  csi:
+    readOnly: true
+    driver: connectors-csi
+    volumeAttributes:
+      connector.name: "gitlab-demo"
+      configuration.names: "gitconfig"
+```
+
+For complete usage examples, see: [Quick Start Guide](../quick_start.mdx)
+
+#### gitlabconfig
+
+Configuration file for GitLab CLI (glab) operations.
+
+- Provides a `config.yml` configuration file for GitLab CLI (glab)
+- Contains GitLab server information, authentication token, and API endpoints
+- Enables glab commands to work without manual configuration
+
+Example of the configuration file generated in the Pod:
+
+```yaml
+git_protocol: http
+host: c-gitlab-demo.default.svc.cluster.local
+no_prompt: true
+telemetry: false
+hosts:
+  c-gitlab-demo.default.svc.cluster.local:
+    token: k8s-api-token-xxxxxxxx
+    container_registry_domains: c-gitlab-demo.default.svc.cluster.local,c-gitlab-demo.default.svc.cluster.local:443,registry.c-gitlab-demo.default.svc.cluster.local
+    api_host: c-gitlab-demo.default.svc.cluster.local
+    git_protocol: http
+    api_protocol: http
+    user: any-user
+```
+
+**How it works:**
+
+1. The configuration directs glab to use the proxy service
+2. The token is provided by the Kubernetes API server (a temporary token used for requests to the GitLab connector proxy service)
+3. Both HTTP and API protocols are configured to use the proxy, which injects authentication information into backend requests
+
+**Usage:**
+
+To use the `gitlabconfig` configuration in your Pod:
+
+1. Mount the configuration using CSI driver with `configuration.names: "gitlabconfig"`
+2. Copy the `config.yml` file to `~/.config/glab-cli/`
+3. Set file permissions to `600` for security
+4. GitLab CLI (glab) will automatically use this configuration for all operations
+
+**Example CSI volume configuration:**
+
+```yaml
+volumes:
+- name: gitlab-config
+  csi:
+    driver: connectors-csi
+    readOnly: true
+    volumeAttributes:
+      connector.name: "gitlab-demo"
+      configuration.names: "gitlabconfig"
+```
+
+For complete usage examples with glab commands, see: [Using GitLab CLI (glab)](../how_to/using-glab-cli.mdx)
+
+#### Using Multiple Configurations Together
+
+You can mount multiple configurations in the same Pod by separating them with commas in the `configuration.names` field:
+
+```yaml
+volumeAttributes:
+  connector.name: "gitlab-demo"
+  configuration.names: "gitlabconfig,gitconfig"
+```
+
+This enables you to use both Git CLI and GitLab CLI (glab) operations in the same Pod. For practical examples, see:
+- [Using GitLab CLI (glab)](../how_to/using-glab-cli.mdx) - Clone Repositories with glab
+
+### Using system built-in configurations
+
+When mounting the gitlab connector, the following built-in configuration files are available:
+
+- `context.token`: The Private Access Token for GitLab authentication
+- `connector.status.proxyAddress`: The proxy service address
+
+These files are useful for custom integrations or CLI tools that need direct access to the authentication token or proxy address.
+
+For a complete example of using built-in configurations, see: [Using Reviewdog with GitLab Connector](../how_to/using-reviewdog-cli.mdx)
+
+More details about system built-in configurations, see: [Connectors-CSI Built-in Configurations](../../connectors/concepts/connectors_csi.mdx#built-in-configurations)
+
+## Further Reading
+
+- [Quick Start Guide](../quick_start.mdx) - Get started with GitLab Connector
+- [Using GitLab CLI (glab)](../how_to/using-glab-cli.mdx) - Learn how to use glab with the connector
+- [Using Reviewdog](../how_to/using-reviewdog-cli.mdx) - Learn how to use custom CLI tools like reviewdog to interact with GitLab
+- [CI/CD Integration](../how_to/using-in-cicd.mdx) - Use in CI/CD pipelines
+

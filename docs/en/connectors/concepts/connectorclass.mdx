@@ -382,7 +382,7 @@ spec:
           auth = {
             "position": "header",
             "auth": {
-              "Authorization": concat(" ", ["Bearer", input.token])
+              "Authorization": concat(" ", ["Bearer", input.data.token])
             }
           }
 ```
@@ -394,6 +394,18 @@ The Rego policy must follow these rules:
   - position: Where to inject authentication, such as "header", "query", or "body"
   - contentType: Content type for body injection (optional, used with "body" position)
   - auth: Map of authentication key-value pairs
+
+#### Variables Available in Rego \{#variables-available-in-rego}
+
+| Variable                | Type                  | Description                               |
+| ----------------------- | --------------------- | ----------------------------------------- |
+| `input.data`            | `map[string]string`   | Secret data used for Connector            |
+| `input.request.headers` | `map[string][]string` | Request headers sent to the backend tool  |
+| `input.request.body`    | `object`              | Request body sent to the backend tool     |
+| `input.request.query`   | `map[string][]string`   | Query parameters sent to the backend tool |
+| `input.request.method`  | `string`              | HTTP method sent to the backend tool      |
+| `input.request.path`    | `string`              | Request path sent to the backend tool     |
+| `input.request.host`    | `string`              | Request host sent to the backend tool     |
 
 #### Example Rego Policies
 
@@ -411,7 +423,7 @@ spec:
           auth = {
             "position": "header",
             "auth": {
-              "Authorization": concat(" ", ["Basic", base64.encode(concat(":", [input.username, input.password]))])
+              "Authorization": concat(" ", ["Basic", base64.encode(concat(":", [input.data.username, input.data.password]))])
             }
           }
 ```
@@ -430,7 +442,7 @@ spec:
           auth = {
             "position": "query",
             "auth": {
-              "api_key": input.apikey
+              "api_key": input.data.apikey
             }
           }
 ```
@@ -450,9 +462,9 @@ spec:
             "position": "body",
             "contentType": "application/json",
             "auth": {
-              "username": input.username,
-              "password": input.password,
-              "client_id": input.client_id
+              "username": input.data.username,
+              "password": input.data.password,
+              "client_id": input.data.client_id
             }
           }
 ```
@@ -477,7 +489,7 @@ spec:
           auth = {
             "position": "header",
             "auth": {
-              "X-API-Key": input.apikey
+              "X-API-Key": input.data.apikey
             }
           }
 
@@ -485,10 +497,10 @@ spec:
           auth = {
             "position": "header",
             "auth": {
-              "Authorization": concat(" ", ["Bearer", input.oauth_token])
+              "Authorization": concat(" ", ["Bearer", input.data.oauth_token])
             }
           } {
-            input.oauth_token != ""
+            input.data.oauth_token != ""
           }
 ```
 
@@ -513,7 +525,7 @@ spec:
             "position": "header",
             "auth": {
               "X-Timestamp": sprintf("%d", [current_time]),
-              "X-Signature": hmac.sha256(input.api_secret, sprintf("%d", [current_time]))
+              "X-Signature": hmac.sha256(input.data.api_secret, sprintf("%d", [current_time]))
             }
           }
 ```
@@ -642,11 +654,16 @@ When you need to reference the API in dynamic forms, additional configuration is
 
 ## Configuration Capabilities \{#configuration-capabilities}
 
-Configuration capabilities are used to define the configuration information for this type of tool. This configuration information can be mounted into Pods in conjunction with [connectors-csi-driver](./connectors_csi.mdx).
+Configuration capabilities define the configuration files that a ConnectorClass provides to clients. These files can be mounted into Pods using the [Connectors-CSI Driver](./connectors_csi.mdx).
 
-If the client does not need to rely on configuration information when accessing the tool, `spec.configurations` can be left undefined.
+### Configuration Types
 
-Configuration information is specified through `spec.configurations`. For example:
+- **Custom Configurations**: Defined in `spec.configurations`
+- **Built-in Configurations**: Automatically provided by Connectors-CSI Driver (see: [Built-in Configurations](./connectors_csi.mdx#built-in-configurations))
+
+### Custom Configurations
+
+Configurations are specified through `spec.configurations`:
 
 ```yaml
 kind: ConnectorClass
@@ -654,20 +671,18 @@ metadata:
   name: git
 spec:
   configurations:
-  - name: config
+  - name: gitconfig
     data:
       .gitconfig: |
-        this is git config
+        [http]
+            extraHeader = Authorization: Basic {{ .context.token | b64enc }}
+        [url "{{ .connector.status.proxyAddress }}"]
+            insteadOf = {{ .connector.spec.address }}
 ```
 
-Typically, we can specify a certain type of configuration information for a class of tools to facilitate configuration during use. For example:
+For more details, see: [Configuration File Rendering](./connectors_csi.mdx#configuration-file-rendering)
 
-- For `git` type tools, provide configuration for `.gitconfig`
-- For `oci registry` type tools, provide configuration for `config.json`
-
-The configuration content supports the use of variables, which can be dynamically rendered during mounting.
-
-More examples of using the configuration, refer to the [connectors csi driver](./connectors_csi.mdx#configuration-examples) documentation.
+**Note:** `spec.configurations` is optional. When undefined, only built-in configurations are available.
 
 ## Metadata Information for Readability Display \{#metadata}
 
@@ -702,7 +717,7 @@ metadata:
 
 ## ConnectorClass Proxy \{#connectorclass_proxy}
 
-The ConnectorClass Proxy is used to configure the proxy address for the ConnectorClass. 
+The ConnectorClass Proxy is used to configure the proxy address for the ConnectorClass.
 
 The ConnectorClass Proxy is configured through `spec.proxy`. For example:
 
@@ -731,7 +746,7 @@ spec:
       rego: |
         package proxy
         auth = {
-          "token": input.headers["Private-Token"][0]
+          "token": input.request.headers["Private-Token"][0]
         }
 ```
 
@@ -743,18 +758,19 @@ Rego rules must follow these requirements:
 
 The following variables are available in Rego:
 
-| key     | type                | description                                                        | Example                     |
-| ------- | ------------------- | ------------------------------------------------------------------ | --------------------------- |
-| headers | map[string][]string | Headers of the request sent to the built-in reverse proxy          | input.headers["X-Token"][0] |
-| body    | object              | Body of the request sent to the built-in reverse proxy             | input.body.token            |
-| query   | map[string][]string | Query parameters of the request sent to the built-in reverse proxy | input.query["token"][0]     |
-| method  | string              | HTTP method of the request sent to the built-in reverse proxy      | input.method                |
-| path    | string              | Path of the request sent to the built-in reverse proxy             | input.path                  |
+| key             | type                | description                                                        | Example                             |
+| --------------- | ------------------- | ------------------------------------------------------------------ | ----------------------------------- |
+| request.headers | map[string][]string | Headers of the request sent to the built-in reverse proxy          | input.request.headers["X-Token"][0] |
+| request.body    | object              | Body of the request sent to the built-in reverse proxy             | input.request.body.token            |
+| request.query   | map[string][]string | Query parameters of the request sent to the built-in reverse proxy | input.request.query["token"][0]     |
+| request.method  | string              | HTTP method of the request sent to the built-in reverse proxy      | input.request.method                |
+| request.path    | string              | Path of the request sent to the built-in reverse proxy             | input.request.path                  |
+| request.host    | string              | Host of the request sent to the built-in reverse proxy             | input.request.host                  |
 
 **Notes**:
 
 - Header keys in `headers` use Canonical MIME Header Key format (capitalized first letter)
-- When implementing Rego rules, ensure robust logic. For example, return an empty string when `input.headers` is null or empty.
+- When implementing Rego rules, ensure robust logic. For example, return an empty string when `input.request.headers` is null or empty.
 
 **Example**
 
@@ -770,11 +786,11 @@ spec:
         }
 
         auth = {
-          "token": input.headers["Private-Token"][0]
+          "token": input.request.headers["Private-Token"][0]
         } if {
-          input.headers != null
-          input.headers["Private-Token"] != null
-          count(input.headers["Private-Token"]) > 0
+          input.request.headers != null
+          input.request.headers["Private-Token"] != null
+          count(input.request.headers["Private-Token"]) > 0
         }
 ```
 
@@ -788,7 +804,7 @@ For more information about using the built-in reverse proxy, see [Connectors Pro
 
 ### Resolver Type
 
-The proxy address of the ConnectorClass will be resolved according to the specified `resolver` type. 
+The proxy address of the ConnectorClass will be resolved according to the specified `resolver` type.
 
 The `resolver` type is configured through annotations `connectors.cpaas.io/proxy-resolver`. For example:
 
@@ -803,7 +819,7 @@ metadata:
 
 This field is a convention between ConnectorClass-Proxy and Connector. Optional.
 
-Supported values: `host`, `path`. Default is `host`. 
+Supported values: `host`, `path`. Default is `host`.
 
 - `host` format: `http://{.ConnectorClass.Status.ProxyAddress.URL}`
 - `path` format: `http://{.ConnectorClass.Status.ProxyAddress.URL}/namespaces/{namespace}/connectors/{connector-name}`

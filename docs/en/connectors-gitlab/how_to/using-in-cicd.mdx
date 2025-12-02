@@ -1,0 +1,127 @@
+---
+weight: 30
+title: Using GitLab Connector in Tekton Task
+---
+
+# Using GitLab Connector in Tekton Task
+
+Using GitLab Connector in Tekton Tasks enables centralized management of GitLab credentials and secure access to GitLab repositories during Tekton Task execution.
+
+## Requirements for Tekton Task \{#requirements-for-tekton-task}
+
+Not all Tekton Tasks can use GitLab Connector.
+
+GitLab Connector injects temporary credentials through a CSI Driver. It provides configurations that generate configuration files with temporary authentication and URL rewriting settings:
+
+- **gitconfig**: Provides a `.gitconfig` file for Git CLI operations
+- **gitlabconfig**: Provides a `config.yml` file for GitLab CLI (glab) operations
+
+Example of generated `.gitconfig`:
+
+```ini
+[http]
+    extraHeader = Authorization: Basic OmV5Smhixxxxxxxxx==
+[url "http://c-gitlab-connector.gitlab-demo.svc"]
+    insteadOf = https://gitlab.com
+```
+
+Example of generated `config.yml`:
+```yaml
+git_protocol: http
+host: c-gitlab-connector.gitlab-demo.svc
+no_prompt: true
+telemetry: false
+hosts:
+  c-gitlab-connector.gitlab-demo.svc:
+    token: k8s-api-token-xxxxxxxx
+```
+
+Therefore, Tekton Tasks must meet the following requirements to use GitLab Connector:
+
+**For Git CLI operations:**
+- Support mounting a `.gitconfig` file via Workspace
+
+**For GitLab CLI (glab) operations:**
+- Support mounting `config.yml` file via Workspace
+- Support mounting `.gitconfig` file via Workspace (required when using glab to clone repositories or interact with repository directories)
+
+## Usage Instructions
+
+### Using GitConfig for Git CLI Operations
+
+When using Git CLI in Tekton Tasks, mount the `gitconfig` configuration:
+
+```yaml
+apiVersion: tekton.dev/v1
+kind: TaskRun
+metadata:
+  name: git-demo
+spec:
+  # . . .
+  workspaces:
+  - name: git-auth
+    csi:
+      driver: connectors-csi
+      readOnly: true
+      volumeAttributes:
+        connector.name: gitlab-connector
+        configuration.names: "gitconfig"
+```
+
+**Parameter descriptions:**
+
+- `name`: The Workspace name defined in the Task
+- `csi`:
+  - `driver`: Fixed value `connectors-csi`
+  - `readOnly`: Fixed value `true`
+  - `volumeAttributes`: CSI Volume attributes
+    - `connector.name`: Name of the GitLab Connector
+    - `connector.namespace`: (Optional) Namespace of the GitLab Connector; if not specified, uses the TaskRun's namespace
+    - `configuration.names`: Configuration name (`gitconfig` for Git CLI operations)
+
+### Using GitLabConfig for GitLab CLI Operations
+
+When using GitLab CLI (glab) in Tekton Tasks, mount both `gitlabconfig` and `gitconfig`:
+
+```yaml
+apiVersion: tekton.dev/v1
+kind: TaskRun
+metadata:
+  name: glab-demo
+spec:
+  # . . .
+  workspaces:
+  - name: gitlab-auth
+    csi:
+      driver: connectors-csi
+      readOnly: true
+      volumeAttributes:
+        connector.name: gitlab-connector
+        connector.namespace: ""
+        configuration.names: "gitlabconfig,gitconfig"
+```
+
+**The Task should:**
+
+1. Copy configuration files to the appropriate locations:
+   - `.gitconfig` → `~/.gitconfig`
+   - `config.yml` → `~/.config/glab-cli/config.yml`
+
+2. Set correct file permissions:
+   - `~/.gitconfig` → `644`
+   - `~/.config/glab-cli/config.yml` → `600`
+
+### Using Custom CLI Tools with GitLab Connector
+
+When using custom CLI tools (like reviewdog) with GitLab Connector, you can use the built-in configuration files to access the GitLab API through the proxy service.
+
+For more details, see: [Connectors CSI Built-in Configurations](../../connectors/concepts/connectors_csi.mdx#built-in-configurations)
+
+or refer to [Using Reviewdog with GitLab Connector](./using-reviewdog-cli.mdx) for more details.
+
+## Further Reading
+
+- [Using GitLab CLI with GitLab Connector](./using-glab-cli.mdx) - Learn how to use glab commands with the connector
+- [Using Reviewdog with GitLab Connector](./using-reviewdog-cli.mdx) - Learn how to use custom CLI tools with the connector
+- [Connectors CSI Built-in Configurations](../../connectors/concepts/connectors_csi.mdx#built-in-configurations) - Learn about built-in configuration files
+- [Using CSI Volumes in Tekton](https://tekton.dev/docs/pipelines/workspaces/#csi) - Tekton CSI workspace documentation

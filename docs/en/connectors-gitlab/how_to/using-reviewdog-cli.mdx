@@ -1,0 +1,267 @@
+---
+weight: 20
+---
+
+# Using Reviewdog with GitLab Connector
+
+This guide demonstrates how to use custom CLI tools like reviewdog to interact with GitLab for automated code review on merge requests.
+
+## Overview
+
+Reviewdog is an automated code review tool that can post review comments to various platforms, including GitLab. When combined with the GitLab Connector, you can run automated code reviews in your CI/CD pipelines without manually managing GitLab credentials.
+
+## Prerequisites
+
+- A GitLab Connector configured with a Private Access Token that has `api` scope
+- A GitLab repository with an existing merge request
+- kubectl access to your Kubernetes cluster
+- Basic understanding of reviewdog and linting tools
+
+## What You'll Learn
+
+- How to use GitLab Connector's built-in configurations to access GitLab API
+- How to configure reviewdog to post automated code review comments on merge requests
+
+## Workflow Overview
+
+The typical workflow for using reviewdog with GitLab Connector:
+
+1. Clone the repository and checkout the merge request branch using GitLab CLI (glab)
+2. Run linting/analysis tools on the code
+3. Use reviewdog to post findings as comments on the merge request via GitLab API
+
+## Step 1: Create a GitLab Connector
+
+Ensure you have a GitLab Connector with appropriate permissions:
+
+```bash
+cat <<EOF | kubectl apply -f -
+apiVersion: v1
+kind: Secret
+metadata:
+  name: gitlab-secret
+  namespace: gitlab-connector-demo
+type: connectors.cpaas.io/gitlab-pat-auth
+stringData:
+  token: glpat-xxxxxxxxxxxxxxxxxxxx  # Token must have 'api' scope
+---
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: gitlab-connector
+  namespace: gitlab-connector-demo
+spec:
+  connectorClassName: gitlab
+  address: https://gitlab.com
+  auth:
+    name: patAuth
+    secretRef:
+      name: gitlab-secret
+EOF
+```
+
+**Replacements:**
+- `glpat-xxxxxxxxxxxxxxxxxxxx`: Replace with your actual GitLab Private Access Token (must have `api` scope)
+- `https://gitlab.com`: Replace with your GitLab server address (use `https://gitlab.com` for GitLab.com or your self-hosted GitLab URL)
+
+## Step 2: Use Reviewdog to Post Review Comments
+
+Here's a complete example that clones a repository, checks out a merge request branch, and runs reviewdog:
+
+```bash
+cat << 'EOF' | kubectl apply -f -
+apiVersion: v1
+kind: Pod
+metadata:
+  name: reviewdog-demo
+  namespace: gitlab-connector-demo
+spec:
+  restartPolicy: Never
+  initContainers:
+  # Clone repository and checkout merge request branch
+  - name: checkout-mr
+    image: gitlab/glab:v1.74.0
+    command: ["sh"]
+    args:
+    - "-c"
+    - |
+      set -ex
+      
+      # Setup glab configuration
+      mkdir -p ~/.config/glab-cli
+      cp /opt/gitlab/config/config.yml ~/.config/glab-cli/
+      chmod 600 ~/.config/glab-cli/config.yml
+      
+      cp /opt/gitlab/config/.gitconfig ~/
+      chmod 644 ~/.gitconfig
+      
+      # Clone repository and checkout merge request branch
+      cd /data
+      glab repo clone <your-group>/<your-repo> ./repo
+      cd /data/repo
+      git checkout <mr-source-branch-name>
+    volumeMounts:
+    - name: gitlab-config
+      mountPath: /opt/gitlab/config
+    - name: data
+      mountPath: /data
+  containers:
+  # Run reviewdog to post review comments
+  - name: reviewdog
+    image: reviewdog/action-golangci-lint:v1
+    command: ["sh"]
+    args:
+    - "-c"
+    - |
+      set -ex
+      cd /data/repo
+      
+      # Read GitLab credentials from connector built-in configurations
+      GITLAB_TOKEN=$(cat /opt/gitlab/config/context.token)
+      GITLAB_SERVER=$(cat /opt/gitlab/config/connector.status.proxyAddress)
+      
+      # Configure reviewdog environment variables
+      export REVIEWDOG_GITLAB_API_TOKEN=${GITLAB_TOKEN}
+      export GITLAB_API=${GITLAB_SERVER}/api/v4
+      export CI_PULL_REQUEST=<merge-request-id>
+      export CI_REPO_OWNER=<your-group>
+      export CI_REPO_NAME=<your-repo>
+      export CI_COMMIT=$(git rev-parse HEAD)
+      
+      # Run reviewdog (example with fake comment)
+      echo "example.go:1:1: This is a review comment from reviewdog" | \
+        reviewdog -f=golint -reporter=gitlab-mr-commit -fail-on-error=false
+      
+      echo "Reviewdog completed"
+    volumeMounts:
+    - name: gitlab-config
+      mountPath: /opt/gitlab/config
+    - name: data
+      mountPath: /data
+  volumes:
+  - name: data
+    emptyDir: {}
+  - name: gitlab-config
+    csi:
+      driver: connectors-csi
+      readOnly: true
+      volumeAttributes:
+        connector.name: "gitlab-connector"
+        configuration.names: "gitlabconfig,gitconfig"
+EOF
+```
+
+**Replacements:**
+- `<your-group>/<your-repo>`: Replace with your GitLab repository path (e.g., `gitlab-org/gitlab`)
+- `<merge-request-id>`: Replace with the merge request ID (e.g., `123`)
+- `<mr-source-branch-name>`: Replace with the merge request source branch name (e.g., `feature-branch`)
+- `<your-group>`: Replace with your GitLab group/user name
+- `<your-repo>`: Replace with your repository name
+- `echo "example.go:1:1: This is a review comment from reviewdog"`: Replace with actual linting tool output (ensure the file exists in the merge request and the line number is valid).
+
+## Step 3: Verify the Results
+
+After applying the Pod, verify that reviewdog successfully posted comments to the merge request.
+
+**Check Pod logs:**
+
+```bash
+# check the logs of the checkout-mr container
+kubectl logs reviewdog-demo -n gitlab-connector-demo -c checkout-mr
+```
+
+you can see the output of the repository cloned successfully and checked out the merge request branch successfully:
+```bash
+Cloning into './repo'...
+remote: Enumerating objects: 123, done.
+remote: Counting objects: 100% (123/123), done.
+remote: Compressing objects: 100% (89/89), done.
+remote: Total 123 (delta 34), reused 123 (delta 34), pack-reused 0
+Receiving objects: 100% (123/123), 45.67 KiB | 1.23 MiB/s, done.
+Resolving deltas: 100% (34/34), done.
++ echo 'Repository cloned successfully'
+Repository cloned successfully
++ cd /data/repo
++ git checkout dev-1764221453
+branch 'dev-1764221453' set up to track 'origin/dev-1764221453'.
+Switched to a new branch 'dev-1764221453'
+```
+
+``` bash
+# check the logs of the reviewdog container
+kubectl logs reviewdog-demo -n gitlab-connector-demo -c reviewdog
+```
+
+You can see the output of the reviewdog completed successfully:
+
+```
++ git rev-parse HEAD
++ export 'CI_COMMIT=7681622c06bb5e298ee5da6a710a177f7d4f2af6'
++ echo 'README.md:3:1: This is a review comment from reviewdog'
++ reviewdog '-f=golint' '-reporter=gitlab-mr-commit' '-fail-on-error=false'
+Reviewdog completed
++ echo 'Reviewdog completed'
+```
+
+**Verify in GitLab UI:**
+
+Open the merge request in GitLab and check the **Changes** tab. The review comment should appear on the specified file and line number.
+
+**If comments don't appear, check:**
+- Pod logs for errors: `kubectl logs reviewdog-demo -c reviewdog -n gitlab-demo`
+- The file name and line number in the comment exist in the merge request
+- The merge request ID is correct
+- The Private Access Token has `api` scope
+- The connector is in "Ready" status: `kubectl get connector gitlab-connector -n gitlab-connector-demo`
+
+## Understanding the Configuration
+
+### Reviewdog Environment Variables
+
+The following environment variables are required for reviewdog to interact with GitLab:
+
+| Variable | Description | Source |
+|----------|-------------|--------|
+| `REVIEWDOG_GITLAB_API_TOKEN` | GitLab API authentication token | From `context.token` file |
+| `GITLAB_API` | GitLab API endpoint | From `connector.status.proxyAddress` + `/api/v4` |
+| `CI_PULL_REQUEST` | Merge request ID | User provided |
+| `CI_REPO_OWNER` | Repository owner/group | User provided |
+| `CI_REPO_NAME` | Repository name | User provided |
+| `CI_COMMIT` | Commit SHA to review | From `git rev-parse HEAD` |
+
+More about it, please refer to the [Reviewdog Documentation](https://github.com/reviewdog/reviewdog)
+
+### Connector Built-in Configurations
+
+The GitLab Connector provides the following built-in configuration files:
+
+- `context.token`: Kubernetes API token for accessing the connector proxy service
+- `connector.status.proxyAddress`: The connector proxy service address
+
+For more details, see: [Connectors-CSI Built-in Configurations](../../connectors/concepts/connectors_csi.mdx#built-in-configurations)
+
+## Using with Real Linting Tools
+
+The example above uses a fake comment for demonstration. In production, use actual linting tools:
+
+**Example with golangci-lint:**
+
+```bash
+golangci-lint run --out-format=line-number ./... | \
+  reviewdog -f=golangci-lint -reporter=gitlab-mr-commit -fail-on-error=false
+```
+
+**Example with eslint:**
+
+```bash
+eslint . --format=stylish | \
+  reviewdog -f=eslint -reporter=gitlab-mr-commit -fail-on-error=false
+```
+
+For more reviewdog integrations, see: [Reviewdog Documentation](https://github.com/reviewdog/reviewdog)
+
+## Next Steps
+
+- Learn how to use GitLab CLI with the connector: [Using GitLab CLI](./using-glab-cli.mdx)
+- Learn how to use GitLab Connector in CI/CD pipelines: [Using GitLab Connector in CI/CD Pipelines](./using-in-cicd.mdx)
+- Read concepts of GitLab ConnectorClass: [GitLab ConnectorClass Concepts](../concepts/gitlab_connectorclass.mdx)
