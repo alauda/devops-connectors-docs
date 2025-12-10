@@ -32,6 +32,17 @@ Before installing, ensure you have:
 - Admin permissions on the cluster
 - Connectors Operator is `Ready` on ACP Operator Hub
 
+### Pod Security Requirements for Installation \{#pod-security-requirements-for-installation}
+
+Kubernetes enforces [Pod Security Standards](https://kubernetes.io/docs/concepts/security/pod-security-standards/) (PSS) at the namespace level. The Connectors system consists of components with different privilege requirements:
+
+| Component  | Suggested Policy | Rationale |
+| ---------- | ---------------- | --------- |
+| **Connectors Operator**                                                                 | `restricted`     | Runs as a standard Kubernetes controller and does not rely on privileged capabilities. The Operator also runs correctly under the less-permissive `baseline`, but `restricted` aligns better with least-privilege practices. |
+| **Other Connectors Components** (ConnectorsCore, ConnectorsGit, ConnectorsGitLab, etc.) | `privileged`     | The Connectors-CSI component requires host-level access (e.g., hostPath mounts, privileged syscalls) to provide CSI driver functionality. This requirement forces the entire namespace to adopt the `privileged` policy.     |
+
+**Note**: If the namespace is configured with an insufficient policy (e.g., `restricted` or `baseline` for CSI components), the CSI driver will fail to start due to blocked privileged operations. Conversely, applying `privileged` where not needed broadens the namespace's attack surface.
+
 ### Install Connectors Operator
 
 First, install the Connectors Operator which manages the lifecycle of all other components.
@@ -630,3 +641,24 @@ spec:
 
   # Other configurations as needed
 ```
+
+## Troubleshooting
+
+### connectors-csi is not ready
+
+If `daemonset/connectors-csi` is not ready, check the events of the `connectors-csi` pod.
+A common error looks like:
+
+```
+Error creating: pods "connectors-csi-d4r6r" is forbidden: violates PodSecurity "baseline:latest": non-default capabilities (container "driver" must not include "SYS_ADMIN" in securityContext.capabilities.add), host namespaces (hostNetwork=true), hostPath volumes (volumes "socket-dir", "mountpoint-dir", "registration-dir") . . .
+```
+
+This means the namespace's Pod Security level is too restrictive for the CSI driver.
+
+**Fix**
+
+- Ensure the namespace is configured with the **`privileged`** Pod Security level.
+- Update the namespace with the correct labels.
+- Restart the `connectors-csi` DaemonSet.
+
+For details, see [Pod Security Requirements for Installation](#pod-security-requirements-for-installation).
