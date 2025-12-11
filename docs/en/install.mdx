@@ -21,6 +21,7 @@ The Connectors system has a modular architecture with the following components:
 - **ConnectorsMaven**: Optional component that adds support for Maven registries (e.g., Maven Central, or Maven repositories hosted on Sonatype Nexus).
 - **ConnectorsPyPI**: Optional component that adds support for Python package registries (e.g., PyPI, or Python repositories hosted on Sonatype Nexus).
 - **ConnectorsNPM**: Optional component that adds support for Node.js package registries (e.g., npm, or Node.js repositories hosted on Sonatype Nexus).
+- **ConnectorsHarbor**: Optional component that adds support for Harbor container registries.
 This document provides instructions for installing and configuring the Connectors system.
 
 ### Prerequisites
@@ -456,10 +457,39 @@ To add support for integration with NPM registries, install the ConnectorsNPM co
    kubectl get connectorsnpm -n connectors-system
    ```
 
-3. Verify that the Kubernetes ConnectorClass is ready:
+3. Verify that the NPM ConnectorClass is ready:
 
    ```bash
    kubectl get connectorclass npm
+   ```
+
+### Install ConnectorsHarbor (Optional)
+
+To add support for integration with Harbor registries, install the ConnectorsHarbor component:
+
+1. Create the ConnectorsHarbor custom resource:
+
+   ```bash
+   cat <<EOF | kubectl apply -f -
+   apiVersion: operator.connectors.alauda.io/v1alpha1
+   kind: ConnectorsHarbor
+   metadata:
+     name: connectors-harbor
+     namespace: connectors-system
+   spec: {}
+   EOF
+   ```
+
+2. Monitor the deployment progress:
+
+   ```bash
+   kubectl get connectorsharbor -n connectors-system
+   ```
+
+3. Verify that the Harbor ConnectorClass is ready:
+
+   ```bash
+   kubectl get connectorclass harbor
    ```
 
 ## Uninstall Connectors
@@ -489,6 +519,9 @@ To uninstall the Connectors system, remove components in the reverse order of in
 
    # Delete ConnectorsNPM
    kubectl delete connectorsnpm --all -n connectors-system
+
+   # Delete ConnectorsHarbor
+   kubectl delete connectorsharbor --all -n connectors-system
    ```
 
 2. Delete the core component:

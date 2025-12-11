@@ -37,12 +37,15 @@ The following table shows the compatibility and support matrix between the Alaud
   - [GitLab Connector Quick Start](../connectors-gitlab/quick_start.mdx)
 - Support integration with NPM Registries by using NPM Connector. more details:
   - [NPM Connector Quick Start](../connectors-npm/quick_start.mdx)
+- Support integration with Harbor Registries by using Harbor Connector. more details:
+  - [Harbor Connector Quick Start](../connectors-harbor/quick_start.mdx)
 - Support accessing tool's original API through the Connector API when the ConnectorClass provides Proxy Service capabilities. The system now supports two ways to access tool resources: using the tool's original API via Proxy Service, or using custom APIs provided for the ConnectorClass. For more details, see
   * [Connector API](../connectors/concepts/connector_api.mdx)
 - Support using Rego rules to extract tokens from client requests when using the built-in HTTP reverse proxy. Combined with the existing ability to inject authentication credentials into backend requests through Rego rules, you can now extend the built-in reverse proxy's capabilities to support tools with non-standard HTTP authentication mechanisms.
   - For token extraction configuration, see [Custom Rego-based Authentication](../connectors/concepts/connectors_proxy.mdx#custom-rego-based-authentication).
   - For authentication injection configuration, see [Injecting Authentication Credentials into Backend Request when using built-in Reverse Proxy](../connectors/concepts/connectors_proxy.mdx#injecting-authentication-when-using-built-in-reverse-proxy).
 - Support using request variables in `spec.auth.types[].generator.rego` to inject authentication credentials into backend requests. more details: [Variables Available in Rego](../connectors/concepts/connectorclass.mdx#variables-available-in-rego).
+- OCI Connector supports using forward proxy for image operations. For more details, see [OCI Connector Forward Proxy](../connectors-oci/concepts/oci_connectorclass.mdx#forward-proxy)
 
 ### Breaking Changes
 
@@ -118,7 +121,7 @@ The OCI connector image address format has been updated to provide better namesp
 
 **Affected Scenarios**:
 - **[Building Images Using OCI Connector in K8S Job](../connectors-oci/how_to/using_oci_connector_in_k8s_job.mdx)**: Image address changed from `c-harbor.default.svc.cluster.local/test/demo:v1` to `harbor.default.svc.cluster.local/namespaces/oci-connector-demo/connectors/oci-connector/test/demo:v1`
-- **[Building Images Using OCI Connector in Tekton Pipeline](../connectors-oci/how_to/using_oci_connector_in_tekton_pipeline.mdx)**: Image address changed from `c-harbor.default.svc.cluster.local/test/demo:v1` to `harbor.default.svc.cluster.local/namespaces/oci-connector-demo/connectors/oci-connector/test/demo:v1`
+- **[Building Images Using OCI Connector in Tekton Pipeline](../connectors-oci/how_to/using_oci_connector_reverse_proxy_in_tekton_pipeline.mdx)**: Image address changed from `c-harbor.default.svc.cluster.local/test/demo:v1` to `harbor.default.svc.cluster.local/namespaces/oci-connector-demo/connectors/oci-connector/test/demo:v1`
 
 **Upgrade Instructions**: Existing workloads using OCI connectors need to update their image address format to adapt to the new naming convention.
 

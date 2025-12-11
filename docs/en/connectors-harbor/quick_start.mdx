@@ -1,0 +1,193 @@
+---
+weight: 30
+---
+
+# Quick Start
+
+This document will help you quickly understand how to create a Harbor connector to connect to a Harbor registry and perform container image operations securely without directly handling credentials.
+
+We will create a Harbor connector, and use it to perform container image operations without directly handling credentials in client side.
+
+## Estimated Reading Time
+
+15 minutes
+
+## Prerequisites
+
+- Kubernetes cluster with Connectors system installed (Operator, ConnectorsCore and ConnectorsHarbor components). See the [Installation Guide](../install) for details on installing these components.
+- Harbor registry address and credentials
+- Basic knowledge of Kubernetes and container registries
+- The Harbor registry should be accessible and support standard container registry APIs
+
+## Process Overview
+
+| Step | Operation                                        | Description                                               |
+| ---- | ------------------------------------------------ | --------------------------------------------------------- |
+| 1    | Create Namespace                                 | Set up a dedicated namespace for the demonstration        |
+| 2    | Configure Harbor Registry Credentials & Connector  | Create authentication secret and Harbor connector resource |
+| 3    | Create a Job for executing container operations  | Create a job that performs container operations via the connector |
+| 4    | Verify Operation                                | Check that the image was built and pushed successfully |
+
+## Steps to Operate
+
+### Step 1: Create Namespace
+
+Create a dedicated namespace for this demonstration:
+
+```bash
+kubectl create ns connectors-harbor-demo
+```
+
+### Step 2: Create Harbor Registry Credentials and Connector
+
+Create both the Secret containing Harbor registry credentials and the Harbor connector resource.
+
+For more detailed information about creating and configuring connectors, please refer to the [Connectors Quick Start Guide](../../connectors/quick_start).
+
+```bash
+cat <<EOF | kubectl apply -n connectors-harbor-demo -f -
+kind: Secret
+apiVersion: v1
+metadata:
+  name: harbor-secret
+type: kubernetes.io/basic-auth
+stringData:
+  username: your-username # Replace with your Harbor registry username
+  password: your-password # Replace with your Harbor registry password
+---
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: harbor-connector
+spec:
+  connectorClassName: harbor
+  address: https://harbor.example.com # Replace with your Harbor registry address
+  auth:
+    name: basicAuth
+    secretRef:
+      name: harbor-secret
+EOF
+```
+
+Verify that the connector is ready:
+
+```bash
+kubectl get connector harbor-connector -n connectors-harbor-demo
+```
+
+### Step 3: Create a Job for Executing Container Operations
+
+Create a ConfigMap with a sample Dockerfile:
+
+```bash
+cat <<EOF | kubectl apply -f -
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dockerfile
+  namespace: oci-connector-demo
+data:
+  Dockerfile: |
+    FROM scratch
+    LABEL maintainer="example@example.com"
+    WORKDIR /app
+    ENV APP_VERSION="1.0.0"
+EOF
+```
+
+Create a Job that uses the connector to build and push a container image:
+
+```bash
+cat <<EOF | kubectl apply -f -
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: image-build
+  namespace: oci-connector-demo
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: buildkit
+        image: moby/buildkit:v0.11.0
+        securityContext:
+          privileged: true
+        env:
+        - name: BUILDKITD_FLAGS
+          value: "--config /etc/buildkit/buildkitd.toml"
+        command:
+        - /bin/sh
+        - -c
+        args:
+        - |
+          set -ex
+          export http_proxy=$(cat /tmp/http.proxy)
+          export https_proxy=$(cat /tmp/https.proxy)
+          export HTTP_PROXY=$http_proxy
+          export HTTPS_PROXY=$https_proxy
+          export no_proxy=localhost,127.0.0.1
+          export NO_PROXY=$no_proxy
+          echo "Using proxy: http_proxy=$http_proxy, https_proxy=$https_proxy, no_proxy=$no_proxy"
+
+          buildctl-daemonless.sh \
+          build \
+          --progress=plain \
+          --frontend=dockerfile.v0 \
+          --local context=/workspace \
+          --local dockerfile=/workspace \
+          --output type=image,name=harbor.example.com/library/image:v1,push=true
+        volumeMounts:
+        - name: dockerfile
+          mountPath: /workspace
+        - name: proxyconfig
+          mountPath: /tmp/
+      volumes:
+      - name: dockerfile
+        configMap:
+          name: dockerfile
+      - name: proxyconfig
+        csi:
+          readOnly: true
+          driver: connectors-csi
+          volumeAttributes:
+            connector.name: "harbor-connector"
+EOF
+```
+
+Verify that the job is running:
+
+```bash
+kubectl get job image-build -n connectors-harbor-demo
+```
+
+Key parameters in the volume definition:
+- `connector.name`: The name of your OCI connector
+- `configuration.names`: Specifies which configuration to generate from the OCI ConnectorClass:
+  - `"config"`: Generates authentication config (config.json) needed for any registry operations
+  - `"buildkitd"`: Generates BuildKit daemon config for insecure registry access
+  - if not specified, will be mounted [default configurations](../connectors/concepts/connectors_csi.mdx#built-in-configurations)
+- `mountPath`: Specifies where the configuration file should be mounted in the container:
+  - "/root/.docker" for Docker authentication configuration
+
+### Step 4: Verify Operation
+
+Check the job's logs to confirm the image was built and pushed successfully:
+
+```bash
+kubectl logs -f job/image-build -n oci-connector-demo
+```
+
+You should see the build process completing and the image being pushed to the registry.
+
+
+## How It Works
+
+The Harbor Connector works by:
+
+1. Creating a proxy service that handles authentication with the Harbor registry
+2. Mounting proxy configuration into the Pod via the CSI driver
+3. Using the proxy configuration through environment variables during container image operations
+4. The proxy service validates the proxy configuration and injects Harbor registry authentication credentials
+
+This allows workloads to access the Harbor registry without directly handling credentials.

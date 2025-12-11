@@ -1,0 +1,242 @@
+---
+weight: 60
+---
+
+# Using Harbor Connector to Deploy Workloads in a Secretless Way
+
+In a Kubernetes cluster, pulling images from private registries typically requires distributing registry credentials to namespaces, which increases the risk of credential leakage.
+
+The Harbor Connector provides a **secretless** solution by acting as a proxy for the registry. This allows users to access private registries without storing long-term passwords or robot tokens in every namespace, thereby maximizing credential security.
+
+This guide demonstrates how to use the Harbor Connector to deploy workloads that need to pull images from private Harbor registries. The Harbor Connector functions as a reverse proxy between your Kubernetes cluster and the Harbor registry, handling authentication and image retrieval.
+
+## Feature Overview
+
+When deploying workloads with the Harbor Connector, keep the following key points in mind:
+
+- To enable image pulls via the Harbor Connector proxy in the Kubernetes runtime, you must configure the ConnectorHarbor to expose its service using either NodePort or Ingress. Refer to the [Installation Guide](../../../install) for detailed setup instructions.
+- The image address specified in your workload will be automatically rewritten to point to the Harbor Connector proxy. Since the proxy uses HTTP, you must configure the runtime to allow insecure registries.
+- The Harbor Connector acts as a reverse proxy for the Harbor registry, handling authentication and image pulls on behalf of your workloads.
+- The Harbor Connector proxy authenticates clients using their service account tokens, ensuring that only authorized workloads can access the specified connector.
+
+## Prerequisites
+
+- **ConnectorsCore is installed and running in the cluster:** Ensure that ConnectorsCore is deployed in your cluster.
+- **ConnectorHarbor is installed and exposed externally (NodePort or Ingress):** Deploy ConnectorHarbor and expose it outside the cluster. See the [Installation Guide](../../../install) for details.
+- **Access to a private Harbor registry:** You must have valid credentials and access to the target registry.
+- **kubectl configured:** Ensure `kubectl` is installed and configured to access your cluster.
+
+With the Harbor Connector, you can securely pull images from private registries in your Kubernetes cluster without storing credentials on the client side. This approach ensures that sensitive credentials are managed centrally and never exposed to individual workloads or users.
+
+The Harbor Connector enables seamless, credential-free image pulls for pods by proxying authentication and image requests through a secure, centralized service.
+
+## Overview
+
+The process involves several key steps:
+1. Creating a Connector resource that defines the connection to your Harbor registry.
+2. Setting up authentication secrets.
+3. Creating a ServiceAccount token for internal authentication.
+4. Configuring image pull secrets.
+5. Deploying the workload with the appropriate annotations.
+
+## Operational Steps
+
+### Step 1: Create Connector
+
+First, create a namespace for the demo:
+
+```bash
+kubectl create namespace harbor-connector-demo
+```
+
+Next, create a Connector resource that defines the connection to your Harbor registry. This resource will manage authentication and proxy operations.
+
+```bash
+kubectl apply -n harbor-connector-demo -f - <<'EOF'
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: harbor
+spec:
+  address: https://harbor.example.com # Replace with your Harbor registry address
+  auth:
+    name: basicAuth
+    secretRef:
+      name: harbor-secret
+  connectorClassName: harbor
+---
+apiVersion: v1
+stringData: # Replace with actual authentication information
+  password: your-password
+  username: your-username
+kind: Secret
+metadata:
+  name: harbor-secret
+type: kubernetes.io/basic-auth
+EOF
+```
+
+> **Recommendation:** Use a `robot account` for registry access instead of an `admin` account if your Harbor registry supports it.
+
+**Explanation:**
+
+- The `Connector` resource defines the connection parameters including the registry address and authentication method
+- The `Secret` resource stores the registry credentials securely
+- The `connectorClassName: harbor` specifies that this is a Harbor-type connector
+- The `basicAuth` authentication method is used for basic authentication
+
+Now, we have created a connector in the namespace `harbor-connector-demo`, and the connector status is `Ready`.
+
+```bash
+$ kubectl get connector.connectors -n harbor-connector-demo
+NAME     CLASS   ADDRESS                      READY   REASON   AGE
+harbor   harbor  https://harbor.example.com True             30s
+```
+
+### Step 2: Create a ServiceAccount Token
+
+Generate a token for the default ServiceAccount in your namespace:
+
+```bash
+$ kubectl create token default -n harbor-connector-demo
+eyJhbGciOiJSUzI1NiIsImtpZCI6xxxximJ0VNVV_GblYvYy3dg...
+```
+
+This token will be used for pulling images through the connector proxy. Any ServiceAccount with permission to access the connector can be used as a pull secret for the pod.
+For more information on Connector resource permissions, see [Connector Scope Permissions](../../connectors/concepts/connector_scope_permissions.html).
+
+**Explanation:**
+- This token will be used to authenticate requests to the connector proxy
+- The token is scoped to the specific namespace (`harbor-connector-demo`)
+- Store this token securely as it will be used in the next step
+
+> **Note:** ServiceAccount tokens have an expiration time (default: 1 hour). You can use the `--duration` flag to extend the expiration. For more details, see the [Kubernetes documentation](https://kubernetes.io/docs/reference/access-authn-authz/authentication/#service-account-tokens).
+
+### Step 3: Create an Image Pull Secret
+
+Create a Docker registry secret using the ServiceAccount token:
+
+```bash
+kubectl create secret docker-registry harbor-connector-secret \
+  --docker-server="192.168.x.x:31567" \
+  --docker-username="u" \
+  --docker-password="eyJhbGciOiJSUzI1NiIsImtpZCI6xxxximJ0VNVV_GblYvYy3dg" \
+  --docker-email=xxx@xxxx \
+  --namespace=harbor-connector-demo
+```
+
+**Explanation:**
+
+The `docker-server` points to the connector proxy service address in the cluster, you can get the address from the connector status
+
+```bash
+$ kubectl get connectors.connector harbor -n harbor-connector-demo -o jsonpath='{.status.proxy.httpAddress.url}'
+http://192.168.x.x:31567/namespaces/harbor-connector-demo/connectors/harbor
+```
+
+- The `docker-username` is set to "u" (a placeholder username)
+- The `docker-password` uses the Service Account token from the previous step
+- The `docker-email` can be any valid email address (used for Docker registry compatibility)
+
+### Step 4: Patch ServiceAccount with Image Pull Secret
+
+Attach the image pull secret to the ServiceAccount so that pods using this ServiceAccount can automatically use the secret for image pulling.
+
+```bash
+kubectl patch serviceaccount default -n harbor-connector-demo -p "{\"imagePullSecrets\": [{\"name\": \"harbor-connector-secret\"}]}"
+```
+
+**Explanation:**
+- This command adds the `harbor-connector-secret` to the `imagePullSecrets` list of the default ServiceAccount
+- Any pod using this ServiceAccount will automatically use this secret for image pulling
+- This eliminates the need to specify the secret in each pod definition
+
+This ensures that any pod using this ServiceAccount will automatically use the secret for image pulls.
+
+### Step 5: Deploy the Workload
+
+Create a workload (Pod in this example) with the necessary annotations to use the Harbor connector.
+
+```bash
+kubectl apply -n harbor-connector-demo -f - <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: harbor-connector-pod
+  annotations:
+    connectors.cpaas.io/connector: harbor-connector-demo/harbor
+  labels:
+    connectors.cpaas.io/proxy-inject: "true"
+spec:
+  containers:
+    - name: harbor-connector-container
+      image: harbor.example.com/harbor-connector-demo:v1
+  serviceAccountName: default
+EOF
+```
+
+- The `connectors.cpaas.io/connector` annotation specifies which connector to use (`namespace/connector-name`).
+- The `connectors.cpaas.io/proxy-inject: "true"` label enables proxy injection for this pod.
+- The `image` field should specify your original image address.
+- The `serviceAccountName: default` ensures the pod uses the ServiceAccount with the image pull secret.
+
+### Step 6: Verify Pod Status
+
+After the pod is created, you can see the image address in the pod is rewritten to the connector proxy address.
+
+```bash
+$ kubectl get pod harbor-connector-pod -n harbor-connector-demo -o jsonpath='{.spec.containers[0].image}'
+# Example output:
+# 192.168.x.x:31567/namespaces/harbor-connector-demo/connectors/harbor/harbor-connector-demo:v1
+```
+
+Then, check that the pod is running and has successfully pulled the image through the connector proxy:
+
+```bash
+kubectl get pod harbor-connector-pod -n harbor-connector-demo
+```
+
+**Expected Output:**
+```
+NAME                    READY   STATUS    RESTARTS   AGE
+harbor-connector-pod    1/1     Running   0          2m
+```
+
+## Troubleshooting
+
+### Common Issues
+
+1. **Pod stuck in ImagePullBackOff:**
+   - Ensure the connector is properly configured and running.
+   - Verify the ServiceAccount token is valid and not expired.
+   - Confirm the image pull secret is correctly attached to the ServiceAccount.
+
+2. **Authentication failures:**
+   - Check the registry credentials in the `harbor-secret`.
+   - Ensure the connector address is accessible.
+   - Verify the credentials are correct for the Harbor registry.
+
+3. **Proxy injection not working:**
+   - Confirm the `connectors.cpaas.io/proxy-inject: "true"` label is present.
+   - Check that the connector annotation is correctly formatted.
+   - Ensure the connector exists in the specified namespace.
+
+### Verification Commands
+
+```bash
+# Check connector status
+kubectl get connector.connectors harbor -n harbor-connector-demo
+
+# Verify secret exists
+kubectl get secret harbor-connector-secret -n harbor-connector-demo
+
+# Check ServiceAccount configuration
+kubectl get serviceaccount default -n harbor-connector-demo -o yaml
+
+# View pod events for troubleshooting
+kubectl describe pod harbor-connector-pod -n harbor-connector-demo
+```
+
+## Conclusion
+
+You have now completed the process of using the Harbor Connector to deploy workloads in a secretless way. This approach enhances security by centralizing credential management and eliminating the need to distribute sensitive information to individual workloads.

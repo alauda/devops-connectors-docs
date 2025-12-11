@@ -1,0 +1,117 @@
+---
+weight: 20
+sourceSHA: 9127ed46c690502a00565477f7c29eee7941b32f59f83faf3498b5bb9097e080
+---
+
+# Using the Harbor Connector Proxy in K8S Workload
+
+In a Kubernetes cluster, when using container registry clients to access the Harbor Registry, it is often necessary to configure the Registry authentication information for the client. This requires distributing the authentication information to the workload orchestrators, thereby increasing the risk of credential leakage.
+
+The Harbor Connector provides a `secretless` way to access the Registry through its proxy capability, allowing ordinary users to access the Registry without having contact with authentication information, thus maximizing credential security.
+
+Currently, there are various container registry clients available in the community for accessing the `Harbor Registry`. This document will introduce how to utilize the proxy capabilities of the `Harbor Connector` in Kubernetes workloads and explain its general configuration logic.
+
+If you already have a preliminary understanding, you can directly refer to more specific cases:
+
+- [Using Harbor Connector to Build Images in K8S Job](./using_harbor_connector_in_k8s_job.mdx)
+- [Using Harbor Connector to Build Images in Tekton Pipeline](./using_harbor_connector_forward_proxy_in_tekton_pipeline.mdx)
+
+## Utilizing Harbor Connector Proxy Capability
+
+Currently, there are two proxy modes supported:
+- Forward Proxy
+- Reverse Proxy
+
+### Forward Proxy
+
+- Configure the forward proxy for the Harbor Connector, such as `http_proxy`, `https_proxy`, `no_proxy`, etc.
+
+The `Harbor ConnectorClass` provides an out-of-the-box configuration that can be mounted through connector-csi.
+
+```yaml
+volumes:
+- name: proxyconfig
+  csi:
+    readOnly: true
+    driver: connectors-csi
+    volumeAttributes:
+      connector.name: "harbor"
+```
+
+> Note: The configuration name don't need support, it will be mounted as `http.proxy` and `https.proxy`.
+
+Before using, configure the proxy according to different container registry clients. Most container registry clients support directly reading the HTTP_PROXY, HTTPS_PROXY, NO_PROXY, http_proxy, https_proxy, no_proxy environment variables.
+
+```bash
+export http_proxy=$(cat /{mount-path}/http.proxy)
+export https_proxy=$(cat /{mount-path}/https.proxy)
+export HTTP_PROXY=$http_proxy
+export HTTPS_PROXY=$https_proxy
+export no_proxy=localhost,127.0.0.1
+export NO_PROXY=$no_proxy
+```
+
+Some clients need to specify the proxy in the software configuration file, the configuration method needs to refer to the specific documentation of the client.
+
+
+### Reverse Proxy
+
+Using the Harbor Connector proxy capability mainly involves the following three aspects:
+
+- Modifying the target image address to the proxied image repository address
+- Configuring the authentication information required to access the proxy
+- Configuring the client CLI to support pushing to insecure registries
+
+Next, we will elaborate on the specific meaning of each item.
+
+1. Modifying the target image address to the proxied image repository address
+
+Example:
+harbor.example.com/test/abc:v1 → c-harbor-connector.default.svc.local/namespaces/harbor-connector-ns/connectors/harbor-connector-name/test/abc:v1
+
+2. Configuring the authentication information required to access the proxy
+
+The authentication information required to access the proxy can be configured through the `config.json` file.
+
+The `Harbor ConnectorClass` provides an out-of-the-box configuration that can be mounted through connector-csi.
+
+```yaml
+volumes:
+- name: docker-config
+  csi:
+    readOnly: true
+    driver: connectors-csi
+    volumeAttributes:
+      connector.name: "harbor"
+      configuration.names: "config"
+```
+
+> For the configuration information of the Harbor ConnectorClass, please refer to [Harbor ConnectorClass Configuration](../concepts/harbor_connectorclass.mdx#configuration).
+
+3. Configuring the client CLI to support pushing to insecure registries
+
+Since the proxy service provided by the connector uses HTTP protocol, it is necessary to configure `insecure-registries` on the client. Different clients have different configuration methods:
+
+`buildkitd` can specify this through `buildkitd.toml`. The Harbor ConnectorClass provides an out-of-the-box configuration for `buildkitd`, which can be mounted through connector-csi.
+
+```yaml
+- name: buildkitd-config
+  csi:
+    readOnly: true
+    driver: connectors-csi
+    volumeAttributes:
+      connector.name: "harbor"
+      configuration.names: "buildkitd"
+```
+
+Certain tools may support specifying directly in the command line, in which case the corresponding parameters can be fixed in the script.
+
+For example:
+
+- `buildah` specifies `--tls-verify=false` in the command line to support insecure registry.
+- `ko` specifies `--insecure-registry` in the command line to support insecure registry.
+
+## More
+
+- [Using Harbor Connector to Build Images in K8S Job](./using_harbor_connector_in_k8s_job.mdx)
+- [Using Harbor Connector to Build Images in Tekton Pipeline](./using_harbor_connector_in_tekton_pipeline.mdx)

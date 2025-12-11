@@ -26,7 +26,7 @@ The OCI Registry to be accessed must meet the following conditions:
 
 ## Creating an OCI Connector Based on OCI Connector Type
 
-### Quick Start
+Here's how to create a basic OCI Connector:
 
 ```yaml
 apiVersion: connectors.alauda.io/v1alpha1
@@ -134,6 +134,8 @@ To simplify usage, the OCI Connector type provides configuration information tha
 
 ### Proxy \{#proxy}
 
+#### Proxy Address
+
 When a Connector is created, the system will:
 
 1. Automatically create a Service for the proxy.
@@ -164,11 +166,45 @@ status:
       url: http://c-dockerhub-demo.default.svc.cluster.local/namespaces/oci-connector-demo/connectors/oci-connector
 ```
 
-### Configuration
+
+#### Forward Proxy \{#forward-proxy}
+
+You can mount proxy information into Pods using CSI, and then use the proxy information through environment variables or configuration files.
+
+```yaml
+volumes:
+- name: proxyconfig
+  csi:
+    readOnly: true
+    driver: connectors-csi
+    volumeAttributes:
+      connector.name: "harbor"
+```
+
+Then, before executing container operations, use the proxy information through environment variables or configuration files.
+
+```bash
+export http_proxy=$(cat /{mount-path}/http.proxy)
+export https_proxy=$(cat /{mount-path}/https.proxy)
+export HTTP_PROXY=$http_proxy
+export HTTPS_PROXY=$https_proxy
+export no_proxy=localhost,127.0.0.1
+export NO_PROXY=$no_proxy
+echo "Using proxy: http_proxy=$http_proxy, https_proxy=$https_proxy, no_proxy=$no_proxy"
+```
+
+#### Reverse Proxy
+
+When using a reverse proxy, you need to modify the target image address to the proxy address.
+
+Example:
+index.docker.io/test/abc:v1 → c-dockerhub-demo.default.svc.cluster.local/namespaces/oci-connector-demo/connectors/oci-connector/test/abc:v1
+
+and mount the credential configuration files into the Pod and configure the proxy address in `insecure-registries`.
 
 The OCI Connector created based on the OCI Connector type provides the following configurations:
 
-**docker-config**: Configuration information required by Docker CLI.
+**docker-config**: Configuration credentials required by Container Registry Client.
 
 - Provides the `config.json` configuration file.
 - Contains the authentication information required to access the proxy.
@@ -222,4 +258,4 @@ You can mount this configuration information into Pods using connectors-csi, and
 - [What is OCI Registry](https://github.com/opencontainers/distribution-spec/blob/v1.0.0/spec.md#definitions)
 - [General Introduction to Using the OCI Connector Proxy in K8S Workload](../how_to/using_oci_connector_in_k8s.mdx)
 - [Building Images Using OCI Connector in K8S Job](../how_to/using_oci_connector_in_k8s_job.mdx)
-- [Building Images Using OCI Connector in Tekton Pipeline](../how_to/using_oci_connector_in_tekton_pipeline.mdx)
+- [Building Images Using OCI Connector in Tekton Pipeline](../how_to/using_oci_connector_forward_proxy_in_tekton_pipeline.mdx)

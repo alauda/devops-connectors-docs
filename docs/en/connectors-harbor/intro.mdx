@@ -1,0 +1,27 @@
+---
+weight: 10
+---
+
+# Introduction
+
+## What is Harbor Connector
+
+Harbor Connector is a specialized connector component that enables secure and convenient integration with Harbor Registry, allowing users to interact with Harbor Registry without handling credentials in clients.
+
+Once Harbor Connector Component is deployed, users can:
+
+- Create Harbor connectors to integrate with various Harbor Registries
+- Perform container image operations in CI/CD pipelines or Kubernetes workloads without directly handling credentials.
+
+## Application Scenarios
+
+The Harbor Connector allows you to perform container image operations securely by:
+
+- Managing credentials centrally rather than hardcoding them in clients
+- Automatically injecting authentication during the container image operations
+
+This approach is particularly useful for:
+
+- `CI/CD pipelines` or `kubernetes jobs` requiring access to Harbor Registry
+- Teams sharing Harbor Registry access without sharing credentials
+- Environments requiring centralized management of Harbor Registry credentials without distributing credentials to each client

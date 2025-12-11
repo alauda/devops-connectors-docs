@@ -1,0 +1,172 @@
+---
+weight: 40
+sourceSHA: 2180654000bbe22205dbba04865c91f0d39ed53a5553c0ce8275ece684e3084e
+---
+
+# Using Harbor Connector Reverse Proxy to Build Images in Tekton Pipeline
+
+Before reading, please refer to [General Logic of Using Harbor Connector Proxy in K8S Workload](./using_harbor_connector_in_k8s.mdx)
+
+## Feature Overview
+
+This article will teach you how to use the Harbor Connector in the `Tekton Pipeline` to build images and push them to a Registry. With the capabilities of the Harbor Connector, ordinary users do not need to handle authentication information, thus maximizing the security of credentials.
+
+When using the Harbor Connector in Tekton Pipeline, there are several key points to note:
+
+- The address of the target image to be built is changed to the connector's proxy address.
+  - For example, harbor.example.cn/test/abc:v1 -> harbor.default.cluster.local/namespaces/harbor-connector-ns/connectors/harbor-connector-name/test/abc:v1
+- Mount the configuration provided by the Connector.
+- Configure `insecure registry` for the client tools.
+
+This article will take the `buildkit-daemonless task` as an example to detail how to use the `Harbor Connector` to complete the image build and push process without configuring authentication information on the client side.
+
+## Prerequisites
+
+- The `buildkit-daemonless` Tekton Task
+- A Dockerfile for image building
+
+### buildkit-daemonless task
+
+We need to make some modifications based on the [TektonHub buildkit-daemonless](https://hub.tekton.dev/tekton/task/buildkit-daemonless)
+
+- Add a `docker config` workspace to allow users to specify `docker/config.json`.
+- Add a `buildkitd config` workspace to allow users to specify `buildkitd.toml`.
+
+The content is as follows. You can use the following command to install the Task into the cluster.
+
+```shell
+kubectl apply -f - <<'EOF'
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: buildkit-daemonless
+  labels:
+    app.kubernetes.io/version: "0.1"
+  annotations:
+    tekton.dev/pipelines.minVersion: "0.12.1"
+    tekton.dev/categories: Image Build
+    tekton.dev/tags: image-build
+    tekton.dev/displayName: "buildkit daemonless"
+    tekton.dev/platforms: "linux/amd64"
+    tekton.dev/deprecated: "true"
+spec:
+  description: >-
+    This Task builds source into a container image using Moby BuildKit.
+    This buildkit-daemonless Task is similar to buildkit but does not need
+    creating Secret, Deployment, and Service resources for setting up the
+    buildkitd daemon cluster.
+  params:
+    - name: Dockerfile
+      description: The name of the Dockerfile
+      default: "Dockerfile"
+    - name: repository
+      description: The name of the repository
+  workspaces:
+    - name: source
+    - name: docker-config
+    - name: buildkitd-config
+  steps:
+    - name: build-and-push
+      image: moby/buildkit:v0.18.2
+      workingDir: $(workspaces.source.path)
+      securityContext:
+        privileged: true
+      script: |
+        #!/bin/sh
+
+        set -ex
+
+        mkdir -p ~/.docker
+        cp $(workspaces.docker-config.path)/config.json ~/.docker
+
+        export BUILDKITD_FLAGS="--config $(workspaces.buildkitd-config.path)/buildkitd.toml $BUILDKITD_FLAGS"
+
+        buildctl-daemonless.sh --debug \
+          build \
+          --progress=plain \
+          --frontend=dockerfile.v0 \
+          --opt filename=$(params.Dockerfile) \
+          --local context=. \
+          --local dockerfile=. \
+          --output type=image,name=$(params.repository),push=true \
+          --export-cache type=inline
+EOF
+```
+
+### Dockerfile
+
+To demonstrate the build and push process, we need to prepare a Dockerfile. To simplify the operation, we will save the content of the Dockerfile in a ConfigMap and then mount it to the Pod through the Tekton Task's workspace.
+
+```shell
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dockerfile
+data:
+  Dockerfile: |
+    FROM scratch
+    LABEL maintainer="example@example.com"
+    WORKDIR /app
+    ENV APP_VERSION="1.0.0"
+EOF
+```
+
+## Operational Steps
+
+### Execute TaskRun
+
+Pass the following parameters to TaskRun:
+
+- Specify the `docker-config` workspace as the `config` configuration of the Harbor connector, thereby mounting `docker/config.json`.
+- Specify the `buildkitd-config` workspace as the `buildkitd` configuration of the Harbor connector, thereby mounting `buildkitd.toml`.
+- Adjust the target image address for the push to the proxy address.
+
+{/* lint-ignore code-block-split-list */}
+
+```shell
+kubectl create -f - <<EOF
+apiVersion: tekton.dev/v1beta1
+kind: TaskRun
+metadata:
+  generateName: buildkit-build-
+spec:
+  taskRef:
+    name: buildkit-daemonless
+  workspaces:
+    - name: source # Mount Dockerfile to the Pod
+      configMap:
+        name: dockerfile
+    - name: docker-config
+      csi: # Mount docker/config.json
+        driver: connectors-csi
+        readOnly: true
+        volumeAttributes:
+          connector.name: "harbor"
+          configuration.names: "config"
+    - name: buildkitd-config
+      csi: # Mount buildkitd.toml
+        driver: connectors-csi
+        readOnly: true
+        volumeAttributes:
+          connector.name: "harbor"
+          configuration.names: "buildkitd"
+  params:
+    - name: repository
+      value: "c-harbor.default.svc.cluster.local/namespaces/harbor-connector-demo/connectors/harbor-connector/test/demo:v1" # Push to proxy address
+EOF
+```
+
+> To obtain the Connector's proxy address, refer to: [Harbor Connectorclass Proxy Information Description](../concepts/harbor_connectorclass.mdx#proxy)
+
+## Operational Results
+
+We can check whether the TaskRun executed successfully with the following command.
+
+```shell
+$ kubectl get taskrun
+```
+
+## Conclusion
+
+We have completed the entire process of "Using Harbor Connector to Build and Push Images in Tekton Pipeline." We can see that we did not require the user to specify the authentication information for the image repository when executing the TaskRun, and the user also cannot access the authentication data configured by the Connector in the Pod executing the TaskRun. This greatly ensures that credentials are not leaked and safeguards the security of the tool's authentication information.

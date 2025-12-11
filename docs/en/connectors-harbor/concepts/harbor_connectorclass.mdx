@@ -1,0 +1,197 @@
+---
+weight: 20
+---
+
+# Harbor Connector
+
+The Harbor connector is a platform-agnostic connector that you can use to connect to any Harbor registry.
+
+You can use the Harbor Connector to securely perform container image operations in CICD pipelines, or use it in kubernetes workloads to perform image operations without credentials.
+
+Additionally, you can centralize the management of Harbor access configurations across namespaces, avoiding the need to repeat the Harbor credentials in each namespace.
+
+## Overview
+
+This document covers:
+
+- **Integration Requirements**: Prerequisites for target Harbor registries
+- **Creating Harbor connector**
+- **Advanced Features**: Proxy capabilities and configuration capabilities about Harbor connector
+
+## Integration Requirements
+
+**Harbor Registries Prerequisites**
+
+- Supports Harbor 2.x versions
+
+## Creating a simple Harbor connector
+
+Here's how to create a basic Harbor Connector:
+
+```yaml
+# Harbor Connector
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: harbor-connector
+spec:
+  connectorClassName: harbor
+  address: https://harbor.example.com
+```
+
+## Fields Reference
+
+**spec.connectorClassName**:
+
+`harbor` (constant), specifies the ConnectorClass name for Harbor integration.
+
+**spec.address**:
+
+Target Harbor registry address, for example: `https://harbor.example.com`.
+
+**spec.auth(optional)**:
+
+specifies the authentication method of the Harbor registry
+
+- `spec.auth.name`: should be `basicAuth` for Harbor connector.
+
+- `spec.auth.secretRef`: specifies the secret that contains the authentication information of the Harbor registry, the secret should be created in the same namespace as the connector. If your Harbor registry does not require authentication, you can omit this field. secret type must be `kubernetes.io/basic-auth`.
+
+**Optional Metadata fields**:
+
+- `cpaas.io/description`: Description information for the Harbor connector, for example:
+
+  ```yaml
+  apiVersion: connectors.alauda.io/v1alpha1
+  kind: Connector
+  metadata:
+    name: harbor-connector
+    annotations:
+      cpaas.io/description: "Connect to team development Harbor registry"
+  ```
+
+## Connector Capabilities
+
+### Authentication Methods
+
+The Harbor Connector supports the following authentication methods:
+
+- **Basic Authentication**: Username and password authentication, secret type must be `kubernetes.io/basic-auth`.
+
+if your Harbor registry does not require authentication, you can omit this field.
+
+#### Token Permissions Required \{#token_permissions_required}
+
+The required permissions for the configured credential depend on how you intend to use it in your Pods/Pipelines.
+
+For example:
+- **Image pull and push operations**: If you need to pull and push images using this connector, the credentials must have both read and write permissions for the target Harbor registry.
+- **API operations**: Configure permissions based on the operations you need to perform. When configuring credentials, ensure the account has permission to access user information (/users/current).
+
+For security best practices, we recommend creating credentials with minimal required permissions. When additional privileges are needed, create separate Connectors with more privileged secret and use namespace isolation to control which users can access each Connector.
+
+### Proxy and Configuration Capabilities
+
+The Harbor Connector provides proxy capabilities to enable secure access to Harbor registries.
+
+To enable clients to access Harbor registries without directly handling credentials, the Harbor ConnectorClass provides a proxy server that automatically injects authentication information.
+
+Clients with access to the connector can use this proxy server to access Harbor registries without needing to configure credentials on the client side.
+
+#### Proxy Address
+
+When creating a Harbor connector, the system will automatically create a Service for proxying access to the Harbor registry.
+
+The system will record the proxy address in the `status.proxy.httpAddress` field.
+
+For example:
+
+```yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: harbor-connector
+spec:
+  # . . .
+status:
+  conditions:
+  # . . .
+  proxy:
+    httpAddress:
+      url: http://c-harbor-connector.default.svc.cluster.local
+```
+
+#### Forward Proxy
+
+You can mount proxy information into Pods using CSI, and then use the proxy information through environment variables or configuration files.
+
+```yaml
+volumes:
+- name: proxyconfig
+  csi:
+    readOnly: true
+    driver: connectors-csi
+    volumeAttributes:
+      connector.name: "harbor"
+```
+
+Then, before executing container operations, use the proxy information through environment variables or configuration files.
+
+```bash
+export http_proxy=$(cat /{mount-path}/http.proxy)
+export https_proxy=$(cat /{mount-path}/https.proxy)
+export HTTP_PROXY=$http_proxy
+export HTTPS_PROXY=$https_proxy
+export no_proxy=localhost,127.0.0.1
+export NO_PROXY=$no_proxy
+echo "Using proxy: http_proxy=$http_proxy, https_proxy=$https_proxy, no_proxy=$no_proxy"
+```
+
+#### Reverse Proxy
+
+When using a reverse proxy, you need to modify the target image address to the proxy address.
+
+Example:
+harbor.example.com/test/abc:v1 → c-harbor-connector.default.svc.cluster.local/namespaces/harbor-connector-demo/connectors/harbor-connector/test/abc:v1
+
+Additionally, you need to mount the configuration files into the Pod and configure the proxy address in `insecure-registries`. The default configuration files `buildkitd.toml` and `config.json` are provided.
+
+The OCI Connector created based on the OCI Connector type provides the following configurations:
+
+**config**: Configuration information required by Docker CLI.
+
+- Provides the `config.json` configuration file.
+- Contains the authentication information required to access the proxy.
+
+For example:
+
+```json
+// config.json
+
+{
+  "auths": {
+      "<proxy address of the connector>": {
+          "auth": "<authentication information required to access the connector proxy>"
+      }
+  }
+}
+```
+
+**buildkitd**: Configuration information required by the BuildKit Daemon.
+
+- Provides the `buildkitd.toml` configuration file.
+- In the configuration file, the current connector will be set as `insecure-registries` by default.
+
+For example:
+
+```yaml
+insecure-entitlements = [ "network.host", "security.insecure" ]
+[registry."<proxy address of the connector>"]
+  http = true
+```
+
+
+## Further Reading
+
+- [Harbor Connector Quick Start](../quick_start)
+- [Harbor Connector How To Guides](../how_to)

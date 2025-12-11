@@ -13,10 +13,44 @@ Currently, there are various OCI clients available in the community for accessin
 
 If you already have a preliminary understanding, you can directly refer to more specific cases:
 
-- [Using OCI Connector to Build Images in K8S Job](./using_oci_connector_in_k8s_job.md)
-- [Using OCI Connector to Build Images in Tekton Pipeline](./using_oci_connector_in_tekton_pipeline.md)
+- [Using OCI Connector to Build Images in K8S Job](./using_oci_connector_in_k8s_job.mdx)
+- [Using OCI Connector to Build Images in Tekton Pipeline](./using_oci_connector_reverse_proxy_in_tekton_pipeline.mdx)
 
 ## Utilizing OCI Connector Proxy Capability
+
+urrently, there are two proxy modes supported:
+- Forward Proxy
+- Reverse Proxy
+
+### Forward Proxy
+
+- Configure the forward proxy for the OCI Connector, such as `http_proxy`, `https_proxy`, `no_proxy`, etc.
+
+The `OCI ConnectorClass` provides an out-of-the-box configuration that can be mounted through connector-csi.
+
+```yaml
+volumes:
+- name: proxyconfig
+  csi:
+    readOnly: true
+    driver: connectors-csi
+    volumeAttributes:
+      connector.name: "oci-connector"
+```
+
+> Note: The configuration name don't need support, it will be mounted as `http.proxy` and `https.proxy`.
+
+Before using, configure the proxy according to different container registry clients. Most container registry clients support directly reading the HTTP_PROXY, HTTPS_PROXY, NO_PROXY, http_proxy, https_proxy, no_proxy environment variables.
+
+```bash
+export http_proxy=$(cat /{mount-path}/http.proxy)
+export https_proxy=$(cat /{mount-path}/https.proxy)
+export no_proxy=localhost,127.0.0.1
+```
+
+Some clients need to specify the proxy in the software configuration file, the configuration method needs to refer to the specific documentation of the client.
+
+### Reverse Proxy
 
 Using the OCI Connector proxy capability mainly involves the following three aspects:
 

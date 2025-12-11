@@ -1,24 +1,24 @@
 ---
-weight: 50
+weight: 30
 sourceSHA: 4623a7bc3e7b9a106d67836efeec9426e384c8243971264a67384edf8a6a0d85
 ---
 
-# Building Images Using OCI Connector in K8S Job
+# Building Images Using Harbor Connector in K8S Job
 
-Before reading, please refer to [The General Logic of Using the OCI Connector Proxy in K8S Workload](./using_oci_connector_in_k8s.mdx)
+Before reading, please refer to [The General Logic of Using the Harbor Connector Reverse Proxy in K8S Workload](./using_harbor_connector_in_k8s.mdx)
 
 ## Feature Overview
 
-This article will guide you on how to use the OCI Connector to build images within a `Kubernetes Job` and push them to a Registry. With the capabilities of the OCI Connector, ordinary users can operate without needing to touch or configure authentication credentials, thereby maximizing the security of these credentials.
+This article will guide you on how to use the Harbor Connector to build images within a `Kubernetes Job` and push them to a Registry. With the capabilities of the Harbor Connector, ordinary users can operate without needing to touch or configure authentication credentials, thereby maximizing the security of these credentials.
 
-When using the OCI Connector within a Kubernetes Job, the following key points should be noted:
+When using the Harbor Connector within a Kubernetes Job, the following key points should be noted:
 
-- Change the address of the target image being built to the connector's proxy address. [What is the Connector Proxy Address](../concepts/oci_connectorclass.mdx#proxy)
-  - For example: harbor.example.cn/test/abc:v1 -> harbor.default.cluster.local/namespaces/oci-connector-ns/connectors/oci-connector-name/test/abc:v1
+- Change the address of the target image being built to the connector's proxy address. [What is the Connector Proxy Address](../concepts/harbor_connectorclass.mdx#proxy)
+  - For example: harbor.example.cn/test/abc:v1 -> harbor.default.cluster.local/namespaces/harbor-connector-ns/connectors/harbor-connector-name/test/abc:v1
 - Mount the configuration provided by the Connector.
 - Configure `insecure registry` for the client tools.
 
-This article will take `buildkitd` as an example and detail the process of creating a Kubernetes Job to complete the image building and pushing utilizing the `OCI Connector`, without the need to configure authentication information on the client side.
+This article will take `buildkitd` as an example and detail the process of creating a Kubernetes Job to complete the image building and pushing utilizing the `Harbor Connector`, without the need to configure authentication information on the client side.
 
 ## Prerequisites
 
@@ -34,24 +34,21 @@ kind: Connector
 metadata:
   name: harbor
 spec:
-  address: https://harbor.example.com # Replace with an accessible OCI registry address
+  address: https://harbor.example.com # Replace with an accessible Harbor registry address
   auth:
-    name: tokenAuth
-    params:
-    - name: repository
-      value: testing/busybox
+    name: basicAuth
     secretRef:
       name: harbor-secret
-  connectorClassName: oci
+  connectorClassName: harbor
 ---
 apiVersion: v1
 stringData: # Replace with actual authentication information
-  password: admin
-  username: admin
+  password: username
+  username: password
 kind: Secret
 metadata:
   name: harbor-secret
-type: cpaas.io/distribution-registry-token
+type: kubernetes.io/basic-auth
 EOF
 ```
 
@@ -78,11 +75,9 @@ EOF
 
 ### Creating the K8S Job with Forward Proxy
 
-- Configure the forward proxy for the OCI Connector, such as `http_proxy`, `https_proxy`, `no_proxy`, etc.
+- Configure the forward proxy for the Harbor Connector, such as `http_proxy`, `https_proxy`, `no_proxy`, etc.
 
-The `OCI ConnectorClass` provides an out-of-the-box configuration that can be mounted through connector-csi.
-
-The Job content is as follows:
+The `Harbor ConnectorClass` provides an out-of-the-box configuration that can be mounted through connector-csi.
 
 ```shell
 cat << EOF | kubectl create -f -
@@ -106,6 +101,7 @@ spec:
     args:
     - |
       set -ex
+
       export http_proxy=$(cat /tmp/http.proxy)
       export https_proxy=$(cat /tmp/https.proxy)
       export HTTP_PROXY=$http_proxy
@@ -128,6 +124,7 @@ spec:
       mountPath: /workspace
     - name: proxyconfig
       mountPath: /tmp/
+
   volumes:
 
   # Mounting the dockerfile to the Pod
@@ -151,7 +148,7 @@ EOF
 - To allow the client to access the HTTP proxy, we need to configure `insecure-registries` for the client. A volume must be provided to mount `buildkitd.toml`.
 - Modify the address of the pushed image to the connector's proxy address.
 
-> For information on obtaining the Connector's proxy address, see: [OCI Connector Class Proxy Information Description](../concepts/oci_connectorclass.mdx#proxy)
+> For information on obtaining the Connector's proxy address, see: [Harbor Connector Class Proxy Information Description](../concepts/harbor_connectorclass.mdx#proxy)
 
 The Job content is as follows:
 
@@ -184,7 +181,7 @@ spec:
       --opt filename=Dockerfile \
       --local context=/workspace \
       --local dockerfile=/workspace \
-      --output type=image,name=c-harbor.default.svc.cluster.local/namespaces/oci-connector-demo/connectors/oci-connector/test-cjt:v1,push=true \
+      --output type=image,name=c-harbor.default.svc.cluster.local/namespaces/harbor-connector-demo/connectors/harbor-connector/test-cjt:v1,push=true \
       --export-cache type=inline
     volumeMounts:
     - name: dockerfile
@@ -208,7 +205,7 @@ spec:
       driver: connectors-csi
       volumeAttributes:
         connector.name: "harbor"
-        configuration.names: "docker-config"
+        configuration.names: "config"
 
   # Mounting buildkitd.toml to the Pod
   - name: buildkitd-config
@@ -231,4 +228,4 @@ $ kubectl get job
 
 ## Summary
 
-We have completed the entire process of "Building Images Using OCI Connector in K8S Job." We can observe that during the execution of the Job, users are required to specify the authentication information for the image repository, and within the Pod running the Job, users cannot access the authentication data configured for the Connector. This greatly ensures that credentials are not leaked in practical usage, safeguarding the security of the tool's authentication information.
+We have completed the entire process of "Building Images Using Harbor Connector in K8S Job." We can observe that during the execution of the Job, users are required to specify the authentication information for the image repository, and within the Pod running the Job, users cannot access the authentication data configured for the Connector. This greatly ensures that credentials are not leaked in practical usage, safeguarding the security of the tool's authentication information.
