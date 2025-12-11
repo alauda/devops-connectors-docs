@@ -1,0 +1,105 @@
+---
+weight: 35
+title: Using OCI Connector Forward Proxy in Tekton Task
+---
+
+# Using OCI Connector Forward Proxy in Tekton Task
+
+Using OCI Connector Forward Proxy in Tekton Tasks enables centralized management of OCI registry credentials and secure access to OCI registries during Tekton Task execution.
+
+## Requirements for Tekton Task \{#requirements-for-tekton-task}
+
+Not all Tekton Tasks can use OCI Connector Forward Proxy.
+
+OCI Connector injects proxy configurations through a CSI Driver. It provides built-in configuration files for forward proxy usage:
+
+- **`.env`**: Environment variables file containing `http_proxy`, `https_proxy`, and `no_proxy` in `key=value` format
+- **`http.proxy`**: Forward proxy URL with authentication for HTTP
+- **`https.proxy`**: Forward proxy URL with authentication for HTTPS
+
+**Therefore, Tekton Tasks must meet the following requirements to use OCI Connector Forward Proxy:**
+
+**1. The CLI tools used in the Task must support HTTP proxy environment variables**
+
+**2. The Task must support configuring HTTP proxy environment variables**.
+> This can be done by:
+> - Mounting a workspace containing a `.env` file
+> - Using custom commands to read environment variables from files
+
+**3. The Task must support configuring insecure registries**
+> This can be done by:
+> - Mounting a workspace containing a configuration file that supports insecure registries that connectorclass provides
+> - Using cli arguments to configure insecure registries
+
+## Usage Instructions
+
+### Using Forward Proxy with .env Workspace
+
+If the Task natively supports a workspace containing a `.env` file, you can directly mount the OCI Connector's built-in configurations via CSI.
+
+In the following example, we use a `buildah` Task that accepts a `docker-config` workspace with a `.env` file containing `http_proxy`, `https_proxy`, and `no_proxy` environment variables:
+
+```yaml
+apiVersion: tekton.dev/v1
+kind: TaskRun
+metadata:
+  name: buildah-build-my-repo
+spec:
+  taskRef:
+    name: buildah
+  params:
+    - name: IMAGES
+      value:
+        - registry.example.com/my-repo/my-image
+    - name: TLS_VERIFY
+      value: "false"
+  workspaces:
+    - name: source
+      persistentVolumeClaim:
+        claimName: my-source
+    - name: docker-config
+      csi:
+        readOnly: true
+        driver: connectors-csi
+        volumeAttributes:
+          connector.name: "oci-connector"
+          configuration.names: "config"
+```
+
+### Using Forward Proxy with Custom Commands
+
+If the Task does not natively support a `.env` workspace, but allows custom commands, you can source the `.env` file manually in the command.
+
+In the following example, we use a `buildah-cli` Task that accepts a `cmd` parameter for custom shell commands. The Task mounts the `docker-config` workspace to `/workspace/docker-config`:
+
+```yaml
+apiVersion: tekton.dev/v1
+kind: TaskRun
+metadata:
+  name: buildah-build-my-repo
+spec:
+  taskRef:
+    name: buildah-cli
+  workspaces:
+    - name: docker-config
+      csi:
+        readOnly: true
+        driver: connectors-csi
+        volumeAttributes:
+          connector.name: "oci-connector"
+          configuration.names: "config"
+  params:
+    - name: cmd
+      value: |
+        source /workspace/docker-config/.env
+        buildah push --tls-verify=false myimage registry.example.com/library/myimage:v1
+```
+
+> **Note:** The `--tls-verify=false` flag is required because the forward proxy intercepts and re-signs TLS traffic. Different CLI tools have different ways to configure insecure registries. Please refer to your CLI documentation for details.
+
+## Further Reading
+
+- [Using OCI Connector Proxy in K8S Workload](./using_oci_connector_in_k8s.mdx) - Learn about the general logic of using OCI Connector proxy
+- [OCI ConnectorClass Forward Proxy](../concepts/oci_connectorclass.mdx#forward-proxy) - Learn about forward proxy configurations
+- [Connectors CSI Built-in Configurations](../../connectors/concepts/connectors_csi.mdx#built-in-configurations) - Learn about built-in configuration files
+- [Using CSI Volumes in Tekton](https://tekton.dev/docs/pipelines/workspaces/#csi) - Tekton CSI workspace documentation

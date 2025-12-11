@@ -18,15 +18,19 @@ If you already have a preliminary understanding, you can directly refer to more 
 
 ## Utilizing Harbor Connector Proxy Capability
 
-Currently, there are two proxy modes supported:
-- Forward Proxy
-- Reverse Proxy
+The Harbor Connector supports two proxy modes:
+
+- **Forward Proxy** - Recommended for most cases. Less intrusive to client configurations and easier to use.
+- **Reverse Proxy** - Requires modifying the target image address and additional client configuration.
 
 ### Forward Proxy
 
-- Configure the forward proxy for the Harbor Connector, such as `http_proxy`, `https_proxy`, `no_proxy`, etc.
+Using Forward Proxy involves the following aspects:
 
-The `Harbor ConnectorClass` provides an out-of-the-box configuration that can be mounted through connector-csi.
+- Setting proxy environment variables for the client
+- Configuring the client to support insecure registries (if required)
+
+Mount the [built-in configurations](../../connectors/concepts/connectors_csi.mdx#built-in-configurations) through the Connectors CSI Driver:
 
 ```yaml
 volumes:
@@ -38,21 +42,24 @@ volumes:
       connector.name: "harbor"
 ```
 
-> Note: The configuration name don't need support, it will be mounted as `http.proxy` and `https.proxy`.
-
-Before using, configure the proxy according to different container registry clients. Most container registry clients support directly reading the HTTP_PROXY, HTTPS_PROXY, NO_PROXY, http_proxy, https_proxy, no_proxy environment variables.
+Most container registry clients support reading proxy settings from environment variables (`http_proxy`, `https_proxy`, `no_proxy`). You can configure them in two ways:
 
 ```bash
+# Option 1: Set proxy variables individually
 export http_proxy=$(cat /{mount-path}/http.proxy)
 export https_proxy=$(cat /{mount-path}/https.proxy)
 export HTTP_PROXY=$http_proxy
 export HTTPS_PROXY=$https_proxy
 export no_proxy=localhost,127.0.0.1
 export NO_PROXY=$no_proxy
+
+# Option 2: Source the environment file
+source /{mount-path}/.env
 ```
 
-Some clients need to specify the proxy in the software configuration file, the configuration method needs to refer to the specific documentation of the client.
+> Note: Some clients require specifying proxy settings in their configuration files.
 
+Since the forward proxy intercepts and re-signs TLS traffic (MITM), clients must be configured to trust the proxy's certificate or allow insecure connections. Refer to your CLI documentation for details, or see the [Harbor ConnectorClass Forward Proxy](../concepts/harbor_connectorclass.mdx#forward-proxy) for default configurations provided by the ConnectorClass.
 
 ### Reverse Proxy
 

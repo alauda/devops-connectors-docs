@@ -103,34 +103,32 @@ kubectl exec -ti csi-demo -- cat /tmp/config/.gitconfig
 
 The CSI Driver automatically provides built-in configuration files that are always mounted into Pods.
 
-**Available Files**
-
 | File Name                        | Description                                                                 |
 | -------------------------------- | --------------------------------------------------------------------------- |
-| `context.token`                 | Authentication token for the proxy service                                  |
-| `connector.status.proxyAddress` | Proxy address (see [connectors-proxy](./connectors_proxy.mdx))             |
+| `.env`                           | Environment variables file containing `http_proxy`, `https_proxy`, and `no_proxy` in `key=value` format |
 | `http.proxy`                     | Forward proxy URL with authentication for HTTP                              |
 | `https.proxy`                    | Forward proxy URL with authentication for HTTPS                             |
-| `context.proxy.caCert`           | CA certificate for the connectors proxy                                     |
+| `context.token`                  | Authentication token for the proxy service                                  |
+| `context.proxy.caCert`           | CA certificate for the Connectors proxy                                     |
+| `connector.status.proxyAddress`  | Proxy address (see [Connectors Proxy](./connectors_proxy.mdx))              |
 
-**Usage Examples**
-
-Forward proxy (if supported by your CLI and ConnectorClass):
+**Forward Proxy Usage:**
 
 ```bash
+# Option 1
 export http_proxy=$(cat /{mount-path}/http.proxy)
 export https_proxy=$(cat /{mount-path}/https.proxy)
 
-# Your CLI command
+# Option 2
+source /{mount-path}/.env
 ```
 
-Reverse proxy (if supported by your ConnectorClass):
+**Reverse Proxy Usage:**
 
 ```bash
 export TOKEN=$(cat /{mount-path}/context.token)
 export SERVER=$(cat /{mount-path}/connector.status.proxyAddress)
 
-# Your CLI command
 {cli} --server $SERVER --token $TOKEN
 ```
 
