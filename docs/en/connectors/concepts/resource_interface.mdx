@@ -102,6 +102,20 @@ metadata:
     cpaas.io/description: "GitCodeRepository is a resource interface for Git code repository"
 ```
 
+you can also use `style.tekton.dev/descriptors` annotation to describe the params for dynamic form.
+
+```yaml
+metadata:
+  annotations:
+    style.tekton.dev/descriptors: |-
+      - path: params.revision
+        x-descriptors:
+          - urn:alm:descriptor:widgets:select
+          - urn:alm:descriptor:expression:props.options:schema:openapi:context.connectorClass.spec.api.openapi:listGitRefs
+```
+
+more details please refer to [dynamic-form](#dynamic-form).
+
 ### Resource Categories \{#categories}
 
 ResourceInterface organizes resources into categories that define common contracts and behaviors. Categories are marked using the label `resourceinterface.connectors.cpaas.io/category`.
@@ -280,6 +294,199 @@ This enables the system to match compatible connectors with ResourceInterfaces a
 
 More about ConnectorClass please refer to [Concept of ConnectorClass](./connectorclass.mdx)
 
+## Dynamic Form \{#dynamic-form}
+
+Dynamic forms provide a declarative way to configure interactive UI components for Pipeline Integration. With dynamic forms, users can browse and select resources such as Git repositories and revisions directly through the connector.
+
+### Overview
+
+Use the `style.tekton.dev/descriptors` annotation to define dynamic form behavior for parameters. Here is an example:
+
+```yaml
+metadata:
+  annotations:
+    style.tekton.dev/descriptors: >-
+      - path: params.repository
+        x-descriptors:
+          - urn:alm:descriptor:com.tectonic.ui:select:repository
+          - urn:alm:descriptor:expression:props.options:api:/clusters-rewrite/${context.cluster}${context.connector.status.api.path}/api/v4/projects?simple=true
+          - urn:alm:descriptor:expression:props.options:label:path:path_with_namespace
+          - urn:alm:descriptor:expression:props.options:value:path:path_with_namespace
+          - urn:alm:descriptor:label:en:Repository
+          - urn:alm:descriptor:label:zh:Repository
+          - urn:alm:descriptor:description:zh:Repository path including group name or username, e.g. mygroup/my-app.
+          - urn:alm:descriptor:description:en:Repository path including group name or username, e.g. mygroup/my-app.
+```
+
+The syntax follows the <ExternalSiteLink name="pipelines" href="/pipelines/how_to/configure_dynamic_forms.html" children="Pipeline Dynamic Forms" /> specification. Familiarity with that documentation is recommended before proceeding.
+
+In addition to the standard capabilities, dynamic forms in ResourceInterface support:
+
+- **Extended context variables** for accessing connector and ResourceInterface data
+- **Reference OpenAPI display schema** definitions in ConnectorClass for centralized API configuration and reference the api definition when using dynamic form
+
+### Extended Context Variables
+
+The following context variables are available in ResourceInterface dynamic forms:
+
+| Variable | Description |
+| -------- | ----------- |
+| `context.connector` | The Connector object. Access any field, e.g., `context.connector.status.api.path` |
+| `context.connectorClass` | The ConnectorClass object. Access any field, e.g., `context.connectorClass.spec.api.openapi` |
+| `context.params` | Parameter values in `Pipeline Integration` UI form, e.g., `context.params.repository` |
+| `context.resourceInterface` | The ResourceInterface object. Access any field as needed |
+
+### Dynamic Form Configuration Approaches
+
+There are two approaches to configure dynamic forms in ResourceInterface:
+
+1. **Direct API Configuration**: Call connector APIs directly using descriptor expressions. This approach is straightforward and easy to understand. The Connectors System provides [Connector API](./connector_api.mdx) endpoints for listing repositories, git references, and more.
+
+2. **Reference OpenAPI Display Schema in ConnectorClass**: Define API calls and display mappings in the ConnectorClass using `spec.api.openapi`. This approach centralizes API definitions and display configurations, avoiding duplication across multiple ResourceInterfaces. When using dynamic form, you can reference the API definition in the ConnectorClass directly.
+
+You can use either approach independently or combine them as needed.
+
+### Direct API Configuration
+
+**Example: Listing GitLab Repositories**
+
+GitLab connectors expose the native GitLab API, which can be used to populate a repository selector:
+
+```yaml
+kind: ResourceInterface
+metadata:
+  name: gitlabcoderepository
+  annotations:
+    style.tekton.dev/descriptors: >-
+      - path: params.repository
+        x-descriptors:
+          - urn:alm:descriptor:com.tectonic.ui:select:repository
+          - urn:alm:descriptor:expression:props.options:api:/clusters-rewrite/${context.cluster}${context.connector.status.api.path}/api/v4/projects?simple=true
+          - urn:alm:descriptor:expression:props.options:label:path:path_with_namespace
+          - urn:alm:descriptor:expression:props.options:value:path:path_with_namespace
+          - urn:alm:descriptor:label:en:Repository
+          - urn:alm:descriptor:label:zh:Repository
+          - urn:alm:descriptor:description:zh:Repository path including group name or username, e.g. mygroup/my-app.
+          - urn:alm:descriptor:description:en:Repository path including group name or username, e.g. mygroup/my-app.
+```
+
+**Example: Listing Git References**
+
+Git connector provides a `gitrefs` endpoint for listing branches and tags:
+
+```yaml
+kind: ResourceInterface
+metadata:
+  name: gitcoderepository
+  annotations:
+    style.tekton.dev/descriptors: >-
+      - path: params.revision
+        x-descriptors:
+          - urn:alm:descriptor:com.tectonic.ui:select:revision
+          - urn:alm:descriptor:expression:props.options:api:/clusters-rewrite/${context.cluster}${context.connector.status.api.path}/git/gitrefs?repositoryUrl=${context.connector.spec.address + "/" + context.params.repository + ".git"}&search=${current.search}
+          - urn:alm:descriptor:expression:props.options:path:items
+          - urn:alm:descriptor:expression:props.options:label:path:name
+          - urn:alm:descriptor:expression:props.options:value:path:name
+          - urn:alm:descriptor:label:en:Revision
+          - urn:alm:descriptor:label:zh:Revision
+          - urn:alm:descriptor:description:zh:Git revision reference, e.g. refs/heads/main.
+          - urn:alm:descriptor:description:en:Git revision reference (e.g., refs/heads/main for branches)
+```
+
+### Reference OpenAPI Display Schema \{#reference-openapi-display-schema-in-connectorclass}
+
+To centralize API definitions and display configurations, define them in the ConnectorClass using `spec.api.openapi`. Dynamic forms can then reference these definitions directly, eliminating redundant configurations across ResourceInterfaces.
+
+**Prerequisites**
+
+1. Define the OpenAPI specification in the ConnectorClass. See [ConnectorClass OpenAPI Description](./connectorclass.mdx#api_openapi) for details.
+2. Add the `x-display-schema` extension to define how the API integrates with dynamic forms.
+
+**Display Schema Structure**
+
+The `x-display-schema` extension contains:
+
+- `parameters[]`: Defines how to populate API parameters at runtime.
+  - `name`: Parameter name (must match the API parameter name)
+  - `value`: Parameter value expression. Syntax follows <ExternalSiteLink name="pipelines" href="pipelines/how_to/configure_dynamic_forms.html#api-dynamic-options-configuration" children="Pipeline Dynamic Forms" />.
+- `descriptors`: Defines how API response data maps to form options. Syntax follows <ExternalSiteLink name="pipelines" href="pipelines/how_to/configure_dynamic_forms.html" children="Pipeline Dynamic Forms" />.
+
+**Example: Git References API**
+
+The following ConnectorClass configuration defines the `GET /git/gitrefs` API with display schema:
+
+- The `repositoryUrl` parameter is set to `${context.connector.spec.address + "/" + context.params.repository + ".git"}` and passed as a query parameter
+- The `search` parameter is set to `${current.search}` for filtering results
+- The response `items` array is mapped to select options, using `name` for both label and value
+
+``` yaml
+kind: ConnectorClass
+spec:
+  api:
+    openapi:
+      openapi: 3.0.3
+      info:
+        title: Git API
+        version: v1alpha1
+      paths:
+        /git/gitrefs:
+          get:
+            x-provider-type: api
+            x-display-schema:
+              parameters:
+              - name: repositoryUrl
+                value: ${context.connector.spec.address + "/" + context.params.repository + ".git"}
+              - name: search
+                value: ${current.search}
+              descriptors:
+              - urn:alm:descriptor:expression:props.options:path:items
+              - urn:alm:descriptor:expression:props.options:label:path:name
+              - urn:alm:descriptor:expression:props.options:value:path:name
+            operationId: listGitRefs
+            parameters:
+            - name: repositoryUrl
+              in: query
+              description: "Cloneable URL of the repository (e.g., https://github.com/mygroup/my-app.git)"
+              required: true
+              schema:
+                type: string
+            - name: search
+              in: query
+              description: "Return list of git references containing the search string"
+              required: false
+              schema:
+                type: string
+            responses:
+              '200':
+                description: "All git references for a repository"
+                content:
+                  application/json: {}
+```
+
+**Referencing OpenAPI in ResourceInterface**
+
+Once the API is defined in ConnectorClass, reference it in your ResourceInterface using the following syntax:
+
+- `urn:alm:descriptor:widgets:select` to specify the widget type
+- `schema:openapi:context.connectorClass.spec.api.openapi:<operationId>` to reference the API definition in the ConnectorClass
+
+```yaml
+kind: ResourceInterface
+metadata:
+  name: gitcoderepository
+  annotations:
+    style.tekton.dev/descriptors: >-
+      - path: params.revision
+        x-descriptors:
+          - urn:alm:descriptor:widgets:select
+          - urn:alm:descriptor:expression:props.options:schema:openapi:context.connectorClass.spec.api.openapi:listGitRefs
+          - urn:alm:descriptor:label:en:Revision
+          - urn:alm:descriptor:label:zh:Revision
+          - urn:alm:descriptor:description:zh:Git revision reference, e.g. refs/heads/main.
+          - urn:alm:descriptor:description:en:Git revision reference (e.g., refs/heads/main for branches)
+```
+
+With this configuration, the `revision` field in Pipeline Integration renders as a dropdown that fetches options from the `listGitRefs` API.
 
 ## Examples \{#examples}
 
@@ -397,3 +604,4 @@ spec:
 - [Concept of Connector](./connector.mdx)
 - [Concept of ConnectorClass](./connectorclass.mdx)
 - <ExternalSiteLink name="pipelines" href="/pipelines/concepts/integrate_with_connector.html" children="Pipeline Integration" />
+- <ExternalSiteLink name="pipelines" href="/pipelines/how_to/configure_dynamic_forms.html" children="Pipeline Dynamic Forms" />
