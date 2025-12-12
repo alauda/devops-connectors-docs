@@ -29,24 +29,44 @@ The following table shows the compatibility and support matrix between the Alaud
 
 ### Features and Enhancements
 
-- Provides out-of-the-box definitions for `GitCodeRepository`, `OCIArtifact`, and `MavenArtifact` resources, enabling seamless integration of external resources (Git repositories, OCI artifacts, Maven artifacts) into TektonCD pipelines through a unified UI interface. For more details, see
-  * [ResourceInterface](../connectors/concepts/resource_interface.mdx)
-  * <ExternalSiteLink name="pipelines" href="/pipelines/concepts/integrate_with_connector.html" children="Pipeline Integration" />
-- Add docs to explain credential permissions required for each connector. more details: [Credential Permissions Required](../connectors-git/concepts/git_connectorclass.mdx#credential_permissions_required)
+**More Connectors**
+
 - Support integration with GitLab Server by using GitLab Connector. more details:
   - [GitLab Connector Quick Start](../connectors-gitlab/quick_start.mdx)
 - Support integration with NPM Registries by using NPM Connector. more details:
   - [NPM Connector Quick Start](../connectors-npm/quick_start.mdx)
 - Support integration with Harbor Registries by using Harbor Connector. more details:
   - [Harbor Connector Quick Start](../connectors-harbor/quick_start.mdx)
-- Support accessing tool's original API through the Connector API when the ConnectorClass provides Proxy Service capabilities. The system now supports two ways to access tool resources: using the tool's original API via Proxy Service, or using custom APIs provided for the ConnectorClass. For more details, see
-  * [Connector API](../connectors/concepts/connector_api.mdx)
+
+**ResourceInterface for Pipeline Integration**
+
+- Provides out-of-the-box definitions for `GitCodeRepository`, `OCIArtifact`, and `MavenArtifact` resources, enabling seamless integration of external resources (Git repositories, OCI artifacts, Maven artifacts) into TektonCD pipelines through a unified UI interface. For more details, see
+  * [ResourceInterface](../connectors/concepts/resource_interface.mdx)
+  * <ExternalSiteLink name="pipelines" href="/pipelines/concepts/integrate_with_connector.html" children="Pipeline Integration" />
+- Support Dynamic Form in ResourceInterface for Pipeline Integration. For more details, see [ResourceInterface Dynamic Form](../connectors/concepts/resource_interface.mdx#dynamic-form).
+
+**Connector API Enhancement**
+
+- Support accessing tool's original API through the Connector API when the ConnectorClass provides Proxy Service capabilities. The system now supports two ways to access tool resources: using the tool's original API via Proxy Service, or using custom APIs provided for the ConnectorClass. For more details, see [Connector API](../connectors/concepts/connector_api.mdx).
+
+**ConnectorClass Customization Flexibility**
+
 - Support using Rego rules to extract tokens from client requests when using the built-in HTTP reverse proxy. Combined with the existing ability to inject authentication credentials into backend requests through Rego rules, you can now extend the built-in reverse proxy's capabilities to support tools with non-standard HTTP authentication mechanisms.
   - For token extraction configuration, see [Custom Rego-based Authentication](../connectors/concepts/connectors_proxy.mdx#custom-rego-based-authentication).
   - For authentication injection configuration, see [Injecting Authentication Credentials into Backend Request when using built-in Reverse Proxy](../connectors/concepts/connectors_proxy.mdx#injecting-authentication-when-using-built-in-reverse-proxy).
 - Support using request variables in `spec.auth.types[].generator.rego` to inject authentication credentials into backend requests. more details: [Variables Available in Rego](../connectors/concepts/connectorclass.mdx#variables-available-in-rego).
-- OCI Connector supports using forward proxy for image operations. For more details, see [OCI Connector Forward Proxy](../connectors-oci/concepts/oci_connectorclass.mdx#forward-proxy)
+
+**OCI Connector Forward Proxy**
+
+- OCI Connector supports using forward proxy for image operations. For more details, see [OCI Connector Forward Proxy](../connectors-oci/concepts/oci_connectorclass.mdx#forward-proxy).
+
+**CSI Driver Built-in Configurations**
+
 - `Connectors CSI Driver` provides built-in configuration files that are always mounted into Pods. For more details, see [Built-in Configurations](../connectors/concepts/connectors_csi.mdx#built-in-configurations).
+
+**Other Enhancements**
+
+- Add docs to explain credential permissions required for each connector. more details: [Credential Permissions Required](../connectors-git/concepts/git_connectorclass.mdx#credential_permissions_required).
 
 ### Breaking Changes
 
