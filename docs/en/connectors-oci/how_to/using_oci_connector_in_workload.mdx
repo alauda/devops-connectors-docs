@@ -114,7 +114,7 @@ For more information on Connector resource permissions, see [Connector Scope Per
 
 ### Step 3: Create an Image Pull Secret
 
-Create a Docker registry secret using the ServiceAccount token:
+Create a registry secret using the ServiceAccount token:
 
 ```bash
 kubectl create secret docker-registry oci-connector-secret \
@@ -136,7 +136,7 @@ http://192.168.x.x:31567/namespaces/oci-connector-demo/connectors/harbor
 
 - The `docker-username` is set to "u" (a placeholder username)
 - The `docker-password` uses the Service Account token from the previous step
-- The `docker-email` can be any valid email address (used for Docker registry compatibility)
+- The `docker-email` can be any valid email address (used for CNCF Distribution Registry compatibility)
 
 ### Step 4: Patch ServiceAccount with Image Pull Secret
 

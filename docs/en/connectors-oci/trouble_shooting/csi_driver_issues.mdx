@@ -17,7 +17,6 @@ This guide provides detailed steps for diagnosing and resolving common issues wi
 | Volume mount failures | Incorrect CSI configuration, driver unavailable | Workload can't start |
 | Docker config not found | Wrong mount path, missing volumes | Image pull/push operations fail |
 | Authentication failures | Token issues, configuration errors | Registry access denied |
-| Insecure registry issues | Misconfigured Docker daemon | TLS/certificate errors |
 
 ## Checking CSI Volume Configuration
 
@@ -38,7 +37,7 @@ volumes:
 
 | Configuration Name | Description | Use Case |
 |-------------------|-------------|----------|
-| `docker-config` | Standard Docker client configuration | General container operations |
+| `docker-config` | Standard OCI client like buildkit, buildah authentication configuration | General container operations |
 | `buildkitd` | BuildKit daemon configuration | For BuildKit based operations |
 
 **Common configuration issues**:
@@ -47,7 +46,7 @@ volumes:
 |-------|---------|------------|
 | Incorrect driver name | `MountVolume.SetUp failed` error | Set `driver` exactly to `connectors-csi` |
 | Connector not found | `could not get connector` error | Ensure connector exists in the same namespace |
-| Wrong configuration name | No Docker config generated | Set correct `configuration.names` value |
+| Wrong configuration name | No config generated | Set correct `configuration.names` value |
 | Namespace mismatch | Volume attachment fails | Make sure connector is in the same namespace as pod |
 
 **How to verify**:
@@ -76,7 +75,7 @@ volumeMounts:
 
 | Configuration | Recommended Mount Path | Description |
 |---------------|------------------------|-------------|
-| `docker-config` | `/root/.docker` or `$HOME/.docker` | Docker client configuration directory |
+| `docker-config` | `/root/.docker` or `$HOME/.docker` | OCI client like buildkit, buildah authentication configuration directory |
 | `buildkitd` | `/etc/buildkit` | BuildKit daemon configuration directory |
 
 
@@ -123,7 +122,7 @@ If configuration files are not found, check:
 4. Connector is Ready
 5. Mount path matches container user's expected path
 
-## Examining Docker Configuration Content
+## Examining OCI Client Configuration Content
 
 ### docker-config
 
@@ -160,29 +159,6 @@ insecure-entitlements = [ "network.host", "security.insecure" ]
 [registry."c-<connector-name>.<namespace>.svc.cluster.local"]
   http = true
 ```
-
-
-### Insecure Registry Issues
-
-**Symptoms**:
-- `server certificate verification failed` errors
-- TLS handshake failures
-
-**Troubleshooting**:
-1. Verify insecure registry settings are correctly configured:
-   ```bash
-   kubectl exec <pod-name> -n <namespace> -- cat /etc/docker/daemon.json
-   ```
-
-2. Check if the container runtime is using the mounted configuration:
-   ```bash
-   kubectl exec <pod-name> -n <namespace> -- docker info | grep -A 5 "Insecure Registries"
-   ```
-
-3. For containerd, verify proxy address is properly configured:
-   ```bash
-   kubectl exec -it <node-name> -n <namespace> -- cat /etc/containerd/config.toml | grep -A 10 registry
-   ```
 
 ## Advanced Troubleshooting
 
