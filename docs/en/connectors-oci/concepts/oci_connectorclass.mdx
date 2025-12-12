@@ -223,21 +223,6 @@ For example:
 }
 ```
 
-**dockerd**: Configuration information for the Docker Daemon.
-
-- Provides the `daemon.json` configuration file.
-- In the configuration file, the current connector will be set as `insecure-registries` by default.
-
-For example:
-
-```json
-{
-  "insecure-registries": [
-    "<proxy address of the connector>"
-  ]
-}
-```
-
 **buildkitd**: Configuration information required by the BuildKit Daemon.
 
 - Provides the `buildkitd.toml` configuration file.

@@ -38,8 +38,7 @@ volumes:
 
 | Configuration Name | Description | Use Case |
 |-------------------|-------------|----------|
-| `docker-config` | Standard Docker configuration | General container operations |
-| `dockerd` | Docker daemon configuration | For Docker daemon in Docker pattern |
+| `docker-config` | Standard Docker client configuration | General container operations |
 | `buildkitd` | BuildKit daemon configuration | For BuildKit based operations |
 
 **Common configuration issues**:
@@ -78,7 +77,6 @@ volumeMounts:
 | Configuration | Recommended Mount Path | Description |
 |---------------|------------------------|-------------|
 | `docker-config` | `/root/.docker` or `$HOME/.docker` | Docker client configuration directory |
-| `dockerd` | `/etc/docker` | Docker daemon configuration directory |
 | `buildkitd` | `/etc/buildkit` | BuildKit daemon configuration directory |
 
 
@@ -114,9 +112,6 @@ Locate the configuration files:
 # For docker-config
 kubectl exec <pod-name> -n <namespace> -- cat /root/.docker/config.json
 
-# For dockerd
-kubectl exec <pod-name> -n <namespace> -- cat /etc/docker/daemon.json
-
 # For buildkitd
 kubectl exec <pod-name> -n <namespace> -- cat /etc/buildkit/buildkitd.toml
 ```
@@ -147,24 +142,6 @@ kubectl exec <pod-name> -n <namespace> -- cat /root/.docker/config.json
       "auth": "<base64-encoded-token>"
     }
   }
-}
-```
-
-### dockerd configuration
-
-Check the generated `daemon.json` file:
-
-```bash
-kubectl exec <pod-name> -n <namespace> -- cat /etc/docker/daemon.json
-```
-
-**Expected configuration elements**:
-
-```json
-{
-  "insecure-registries": [
-    "c-<connector-name>.<namespace>.svc.cluster.local"
-  ]
 }
 ```
 
