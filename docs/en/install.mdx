@@ -16,7 +16,7 @@ The Connectors system has a modular architecture with the following components:
 - **ConnectorsCore**: Required core component that provides the foundation for all connector types
 - **ConnectorsGit**: Optional component that adds support for Git services (GitHub, GitLab, etc.)
 - **ConnectorsGitLab**: Optional component that adds support for GitLab-specific features (GitLab CLI, enhanced authentication)
-- **ConnectorsOCI**: Optional component that adds support for container registries (Harbor, Docker Registry, etc.)
+- **ConnectorsOCI**: Optional component that adds support for container registries (Harbor, Distribution, etc.)
 - **ConnectorsK8S**: Optional component that adds support for Kubernetes clusters
 - **ConnectorsMaven**: Optional component that adds support for Maven registries (e.g., Maven Central, or Maven repositories hosted on Sonatype Nexus).
 - **ConnectorsPyPI**: Optional component that adds support for Python package registries (e.g., PyPI, or Python repositories hosted on Sonatype Nexus).
@@ -263,7 +263,7 @@ To add support for GitLab-specific features (GitLab CLI, enhanced authentication
 
 ### Install ConnectorsOCI (Optional)
 
-To add support for container registries, like Harbor, Docker Registry, etc., install the ConnectorsOCI component:
+To add support for container registries, like Harbor, Distribution, etc., install the ConnectorsOCI component:
 
 1. Create the ConnectorsOCI custom resource:
 
