@@ -99,18 +99,6 @@ volumes:
 
 Since the proxy service provided by the connector uses HTTP protocol, it is necessary to configure `insecure-registries` on the client. Different clients have different configuration methods:
 
-`dockerd` can specify this through `daemon.json`. The OCI ConnectorClass provides an out-of-the-box configuration for `dockerd`, which can be mounted through connector-csi.
-
-```yaml
-- name: dockerd-config
-  csi:
-    readOnly: true
-    driver: connectors-csi
-    volumeAttributes:
-      connector.name: "harbor"
-      configuration.names: "dockerd"
-```
-
 `buildkitd.yaml` can specify this through `buildkitd.toml`. The OCI ConnectorClass provides an out-of-the-box configuration for `buildkitd`, which can be mounted through connector-csi.
 
 ```yaml
