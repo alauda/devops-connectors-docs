@@ -93,9 +93,9 @@ volumes:
       configuration.names: "config"
 ```
 
-> For the configuration information of the Harbor ConnectorClass, please refer to [Harbor ConnectorClass Configuration](../concepts/harbor_connectorclass.mdx#configuration).
+> For the configuration information of the Harbor ConnectorClass, please refer to [Harbor ConnectorClass Configuration](../concepts/harbor_connectorclass.mdx#proxy_and_configuration_capabilities).
 
-3. Configuring the client CLI to support pushing to insecure registries
+1. Configuring the client CLI to support pushing to insecure registries
 
 Since the proxy service provided by the connector uses HTTP protocol, it is necessary to configure `insecure-registries` on the client. Different clients have different configuration methods:
 
@@ -121,4 +121,4 @@ For example:
 ## More
 
 - [Using Harbor Connector to Build Images in K8S Job](./using_harbor_connector_in_k8s_job.mdx)
-- [Using Harbor Connector to Build Images in Tekton Pipeline](./using_harbor_connector_in_tekton_pipeline.mdx)
+- [Using Harbor Connector to Build Images in Tekton Pipeline](./using_harbor_connector_forward_proxy_in_tekton_pipeline.mdx)
