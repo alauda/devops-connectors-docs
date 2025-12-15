@@ -419,6 +419,8 @@ The following ConnectorClass configuration defines the `GET /git/gitrefs` API wi
 - The `search` parameter is set to `${current.search}` for filtering results
 - The response `items` array is mapped to select options, using `name` for both label and value
 
+example:
+
 ``` yaml
 kind: ConnectorClass
 spec:
@@ -469,6 +471,8 @@ Once the API is defined in ConnectorClass, reference it in your ResourceInterfac
 
 - `urn:alm:descriptor:widgets:select` to specify the widget type
 - `schema:openapi:context.connectorClass.spec.api.openapi:<operationId>` to reference the API definition in the ConnectorClass
+
+for example:
 
 ```yaml
 kind: ResourceInterface
