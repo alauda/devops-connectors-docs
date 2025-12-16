@@ -1,10 +1,10 @@
 # Documentation Sync Information
 
-- **Last synced**: 2025-12-16 03:34:34 UTC
+- **Last synced**: 2025-12-16 05:25:34 UTC
 - **Source repository**: alaudadevops/connectors-operator
-- **Source commit**: [51d13a0d82b294e26c1c7c3bde9ac7db20258a1d](https://github.com/alaudadevops/connectors-operator/commit/51d13a0d82b294e26c1c7c3bde9ac7db20258a1d)
-- **Triggered by**: edge-katanomi-app2[bot]
-- **Workflow run**: [#69](https://github.com/alaudadevops/connectors-operator/actions/runs/20255581950)
+- **Source commit**: [9f2b02f76843db38708796a835ef52addee3ef59](https://github.com/alaudadevops/connectors-operator/commit/9f2b02f76843db38708796a835ef52addee3ef59)
+- **Triggered by**: chengjingtao
+- **Workflow run**: [#70](https://github.com/alaudadevops/connectors-operator/actions/runs/20257526004)
 
 ## Files synced:
 - docs/
