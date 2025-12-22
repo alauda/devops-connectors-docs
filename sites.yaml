@@ -1,6 +1,6 @@
 - name: acp
   base: /container_platform
-  version: "4.0"
+  version: "4.2"
 - name: pipelines
   base: /alauda-devops-pipelines
-  version: "4.4"
+  version: "4.6"
