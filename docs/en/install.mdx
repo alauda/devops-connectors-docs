@@ -675,6 +675,161 @@ spec:
   # Other configurations as needed
 ```
 
+## High Availability Deployment
+
+For production environments, it is recommended to deploy the Connectors system in a high availability (HA) configuration to ensure service continuity and fault tolerance.
+
+### Configuring Replicas
+
+You can increase the number of replicas for each workload to achieve high availability. This is done through the `workloads` field in the component spec. For production environments, we recommend configuring at least 3 replicas for each workload to ensure service continuity during node failures or rolling updates.
+
+Below are specific examples for each major connector component:
+
+#### ConnectorsCore
+
+ConnectorsCore includes three main workloads: API server, controller manager, and proxy. For high availability, configure all three with multiple replicas:
+
+```yaml
+apiVersion: operator.connectors.alauda.io/v1alpha1
+kind: ConnectorsCore
+metadata:
+  name: connectors-core
+  namespace: connectors-system
+spec:
+  workloads:
+  - name: connectors-api
+    replicas: 3
+  - name: connectors-controller-manager
+    replicas: 3
+  - name: connectors-proxy
+    replicas: 3
+```
+
+#### ConnectorsGit
+
+ConnectorsGit runs a single plugin deployment for Git Server integration:
+
+```yaml
+apiVersion: operator.connectors.alauda.io/v1alpha1
+kind: ConnectorsGit
+metadata:
+  name: connectors-git
+  namespace: connectors-system
+spec:
+  workloads:
+  - name: connectors-git-plugin
+    replicas: 3
+```
+
+#### ConnectorsOCI
+
+ConnectorsOCI runs a single plugin deployment that handles OCI registry integration:
+
+```yaml
+apiVersion: operator.connectors.alauda.io/v1alpha1
+kind: ConnectorsOCI
+metadata:
+  name: connectors-oci
+  namespace: connectors-system
+spec:
+  workloads:
+  - name: connectors-oci-plugin
+    replicas: 3
+```
+
+#### ConnectorsMaven
+
+ConnectorsMaven runs a single plugin deployment for Maven registry integration:
+
+```yaml
+apiVersion: operator.connectors.alauda.io/v1alpha1
+kind: ConnectorsMaven
+metadata:
+  name: connectors-maven
+  namespace: connectors-system
+spec:
+  workloads:
+  - name: connectors-maven-plugin
+    replicas: 3
+```
+
+#### ConnectorsHarbor
+
+ConnectorsHarbor runs a single plugin deployment for Harbor-specific features:
+
+```yaml
+apiVersion: operator.connectors.alauda.io/v1alpha1
+kind: ConnectorsHarbor
+metadata:
+  name: connectors-harbor
+  namespace: connectors-system
+spec:
+  workloads:
+  - name: connectors-harbor-plugin
+    replicas: 3
+```
+
+#### Components Without Workloads
+
+The following connector components do not have Deployment workloads and therefore do not require replica configuration:
+
+- ConnectorsGitLab
+- ConnectorsK8S
+- ConnectorsNPM
+- ConnectorsPyPI
+
+### Built-in Pod Anti-Affinity
+
+The system includes built-in pod anti-affinity rules to ensure that replicas are distributed across different nodes. By default, the system uses `preferredDuringSchedulingIgnoredDuringExecution` with a weight of `100`, which means the scheduler will try to place pods on different nodes when possible, but will still schedule them on the same node if no other options are available.
+
+This default configuration ensures:
+- Pods are spread across different nodes when possible
+- Deployment remains schedulable even if the cluster has limited nodes
+- Automatic failover capability when a node becomes unavailable
+
+### Customizing Affinity Rules
+
+If the default affinity rules do not meet your requirements, you can override them through the `workloads` configuration. The `template.spec.affinity` field allows you to specify custom affinity rules.
+
+For multi-zone clusters, you can configure zone-aware scheduling to spread pods across availability zones. The following example uses `requiredDuringSchedulingIgnoredDuringExecution` to enforce zone-level distribution, combined with `preferredDuringSchedulingIgnoredDuringExecution` to prefer node-level distribution within each zone:
+
+```yaml
+apiVersion: operator.connectors.alauda.io/v1alpha1
+kind: ConnectorsCore
+metadata:
+  name: connectors-core
+  namespace: connectors-system
+spec:
+  workloads:
+  - name: connectors-api
+    replicas: 3
+    template:
+      spec:
+        affinity:
+          podAntiAffinity:
+            # Hard requirement: pods must be distributed across different zones
+            requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  control-plane: api
+                  app.kubernetes.io/name: connectors
+              topologyKey: topology.kubernetes.io/zone
+            # Soft requirement: prefer distributing pods across different nodes within the same zone
+            preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    control-plane: api
+                    app.kubernetes.io/name: connectors
+                topologyKey: kubernetes.io/hostname
+```
+
+This configuration ensures:
+- Pods are strictly distributed across different availability zones (hard requirement)
+- Within the same zone, pods are preferably scheduled on different nodes (soft requirement)
+- Provides resilience against both zone-level and node-level failures
+
 ## Troubleshooting
 
 ### connectors-csi is not ready
