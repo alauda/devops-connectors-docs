@@ -6,11 +6,10 @@ i18n:
 title: Release Notes
 ---
 
-
 # Release Notes
 
 ::: tip
-The maintenance period for version **v1.2.z**  is from August 22, 2025 to December 22, 2025.
+The maintenance period for version **v1.6.z** is from December 25, 2025 to December 25, 2026.
 :::
 
 ## Compatibility and support matrix
@@ -19,14 +18,14 @@ The following table shows the compatibility and support matrix between the Alaud
 
 | Alauda DevOps Connectors Operator Version | ACP Version |
 | ----------------------------------------- | ----------- |
-| v1.6.0                                    | v4.2, v4.1  |
+| v1.6.0 (LTS)                              | v4.2, v4.1  |
 | v1.4.0                                    | v4.1, v4.0  |
 | v1.2.1                                    | v4.1, v4.0  |
 | v1.1.0                                    | v4.1, v4.0  |
 | v1.0.8                                    | v4.0        |
 | v1.0.4                                    | v4.0        |
 
-## v1.6.0
+## v1.6.0 (LTS)
 
 ### Features and Enhancements
 
@@ -42,8 +41,12 @@ The following table shows the compatibility and support matrix between the Alaud
 **ResourceInterface for Pipeline Integration**
 
 - Provides out-of-the-box definitions for `GitCodeRepository`, `OCIArtifact`, and `MavenArtifact` resources, enabling seamless integration of external resources (Git repositories, OCI artifacts, Maven artifacts) into TektonCD pipelines through a unified UI interface. For more details, see
-  * [ResourceInterface](../connectors/concepts/resource_interface.mdx)
-  * <ExternalSiteLink name="pipelines" href="/pipelines/concepts/integrate_with_connector.html" children="Pipeline Integration" />
+  - [ResourceInterface](../connectors/concepts/resource_interface.mdx)
+  - <ExternalSiteLink
+      name="pipelines"
+      href="/pipelines/concepts/integrate_with_connector.html"
+      children="Pipeline Integration"
+    />
 - Support Dynamic Form in ResourceInterface for Pipeline Integration. For more details, see [ResourceInterface Dynamic Form](../connectors/concepts/resource_interface.mdx#dynamic-form).
 
 **Connector API Enhancement**
@@ -142,6 +145,7 @@ The OCI connector image address format has been updated to provide better namesp
 **New Format**: `connector.connector-ns.svc.cluster.local/namespaces/<connector-ns>/connectors/<connector-name>`
 
 **Affected Scenarios**:
+
 - **[Building Images Using OCI Connector in K8S Job](../connectors-oci/how_to/using_oci_connector_in_k8s_job.mdx)**: Image address changed from `c-harbor.default.svc.cluster.local/test/demo:v1` to `harbor.default.svc.cluster.local/namespaces/oci-connector-demo/connectors/oci-connector/test/demo:v1`
 - **[Building Images Using OCI Connector in Tekton Pipeline](../connectors-oci/how_to/using_oci_connector_reverse_proxy_in_tekton_pipeline.mdx)**: Image address changed from `c-harbor.default.svc.cluster.local/test/demo:v1` to `harbor.default.svc.cluster.local/namespaces/oci-connector-demo/connectors/oci-connector/test/demo:v1`
 
@@ -191,7 +195,6 @@ Out-of-the-box support:
 - oci registries
 
 Connectors also provide extensibility for custom connectors through the API and custom connectors implementation.
-
 
 ### Fixed Issues
 
