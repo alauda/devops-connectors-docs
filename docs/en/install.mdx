@@ -681,7 +681,7 @@ For production environments, it is recommended to deploy the Connectors system i
 
 ### Configuring Replicas
 
-You can increase the number of replicas for each workload to achieve high availability. This is done through the `workloads` field in the component spec. For production environments, we recommend configuring at least 3 replicas for each workload to ensure service continuity during node failures or rolling updates.
+You can increase the number of replicas for each workload to achieve high availability. This is done through the `workloads` field in the component spec. For production environments, we recommend configuring at least 2 replicas for each workload to ensure service continuity during node failures or rolling updates.
 
 Below are specific examples for each major connector component:
 
@@ -698,11 +698,24 @@ metadata:
 spec:
   workloads:
   - name: connectors-api
-    replicas: 3
+    replicas: 2
   - name: connectors-controller-manager
-    replicas: 3
+    replicas: 2
   - name: connectors-proxy
-    replicas: 3
+    replicas: 2
+```
+
+After a period of time, all pods of the connectors-core component have a replica count of 2, except for connectors-csi.
+
+```
+$ kubectl get pod -n connectors-system
+NAME                                             READY   STATUS    RESTARTS   AGE
+connectors-api-58fc8b45c4-9n8hc                  1/1     Running   0          67s
+connectors-api-58fc8b45c4-12da7                  1/1     Running   0          67s
+connectors-controller-manager-548659cdff-1d2dd   1/1     Running   0          35s
+connectors-controller-manager-548659cdff-s7gnn   1/1     Running   0          35s
+connectors-proxy-64bb994cd9-jbp2l                1/1     Running   0          61s
+connectors-proxy-64bb994cd9-dfade                1/1     Running   0          61s
 ```
 
 #### ConnectorsGit
@@ -718,7 +731,16 @@ metadata:
 spec:
   workloads:
   - name: connectors-git-plugin
-    replicas: 3
+    replicas: 2
+```
+
+After a period of time, all pods of the connectors-git component have a replica count of 2.
+
+```
+$ kubectl get pod -n connectors-system
+NAME                                                    READY   STATUS    RESTARTS   AGE
+connectors-git-plugin-84985b9d7d-vllp6                  1/1     Running   0          67s
+connectors-git-plugin-84985b9d7d-vllp6                  1/1     Running   0          67s
 ```
 
 #### ConnectorsOCI
@@ -734,7 +756,16 @@ metadata:
 spec:
   workloads:
   - name: connectors-oci-plugin
-    replicas: 3
+    replicas: 2
+```
+
+After a period of time, all pods of the connectors-oci component have a replica count of 2.
+
+```
+$ kubectl get pod -n connectors-system
+NAME                                                    READY   STATUS    RESTARTS   AGE
+connectors-oci-plugin-84985b9d7d-vllp6                  1/1     Running   0          67s
+connectors-oci-plugin-84985b9d7d-vllp6                  1/1     Running   0          67s
 ```
 
 #### ConnectorsMaven
@@ -750,7 +781,16 @@ metadata:
 spec:
   workloads:
   - name: connectors-maven-plugin
-    replicas: 3
+    replicas: 2
+```
+
+After a period of time, all pods of the connectors-maven component have a replica count of 2.
+
+```
+$ kubectl get pod -n connectors-system
+NAME                                                      READY   STATUS    RESTARTS   AGE
+connectors-maven-plugin-84985b9d7d-vllp6                  1/1     Running   0          67s
+connectors-maven-plugin-84985b9d7d-vllp6                  1/1     Running   0          67s
 ```
 
 #### ConnectorsHarbor
@@ -766,17 +806,21 @@ metadata:
 spec:
   workloads:
   - name: connectors-harbor-plugin
-    replicas: 3
+    replicas: 2
+```
+
+After a period of time, all pods of the connectors-harbor component have a replica count of 2.
+
+```
+$ kubectl get pod -n connectors-system
+NAME                                                      READY   STATUS    RESTARTS   AGE
+connectors-harbor-plugin-84985b9d7d-vllp6                  1/1     Running   0          67s
+connectors-harbor-plugin-84985b9d7d-vllp6                  1/1     Running   0          67s
 ```
 
 #### Components Without Workloads
 
-The following connector components do not have Deployment workloads and therefore do not require replica configuration:
-
-- ConnectorsGitLab
-- ConnectorsK8S
-- ConnectorsNPM
-- ConnectorsPyPI
+The other connector components do not have Deployment workloads and therefore do not require replica configuration.
 
 ### Built-in Pod Anti-Affinity
 
