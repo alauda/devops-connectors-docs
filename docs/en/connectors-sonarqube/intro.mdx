@@ -1,0 +1,30 @@
+---
+weight: 10
+---
+
+# Introduction
+
+## What is SonarQube Connector
+
+SonarQube Connector is a specialized connector component that enables secure and convenient integration with SonarQube platforms, allowing users to perform code quality analysis without handling authentication tokens directly in scanning tools.
+
+Once SonarQube Connector is deployed, users can:
+
+- Create SonarQube connectors to integrate with SonarQube instances
+- Execute code quality scans in CI/CD pipelines or Kubernetes workloads without directly handling authentication tokens
+- Perform security scanning and quality gate checks with centralized credential management
+
+## Application Scenarios
+
+The SonarQube Connector enables secure code quality analysis by:
+
+- Managing SonarQube tokens centrally rather than hardcoding them in scanner configurations
+- Automatically injecting authentication during scanning operations via proxy
+- Supporting both self-hosted and managed SonarQube instances
+
+This approach is particularly useful for:
+
+- CI/CD pipelines and Kubernetes jobs requiring code quality analysis
+- Teams sharing SonarQube access without distributing authentication tokens
+- Environments requiring centralized management of SonarQube credentials
+- Organizations enforcing code quality policies across multiple projects

@@ -1,0 +1,193 @@
+---
+weight: 30
+---
+
+# Quick Start
+
+This document will help you quickly understand how to create a SonarQube connector to connect to a SonarQube instance and perform code quality analysis securely without directly handling authentication tokens.
+
+We will create a SonarQube connector and use it to execute `sonar-scanner` for code analysis without directly handling credentials on the client side.
+
+## Estimated Reading Time
+
+15 minutes
+
+## Prerequisites
+
+- Kubernetes cluster with Connectors system installed (Operator, ConnectorsCore and ConnectorsSonarQube components). See the [Installation Guide](../install) for details on installing these components.
+- SonarQube instance address (SonarQube server) and authentication token
+- Basic knowledge of Kubernetes and SonarQube
+- A project to analyze (source code)
+
+## Process Overview
+
+| Step | Operation                                          | Description                                                     |
+| ---- | -------------------------------------------------- | --------------------------------------------------------------- |
+| 1    | Create Namespace                                   | Set up a dedicated namespace for the demonstration              |
+| 2    | Configure SonarQube Token & Connector              | Create authentication secret and SonarQube connector resource   |
+| 3    | Create a Job for Executing Sonar Scanner           | Create a job that performs code analysis via the connector      |
+
+## Steps to Operate
+
+### Step 1: Create Namespace
+
+Create a dedicated namespace for this demonstration:
+
+```bash
+kubectl create ns connectors-sonarqube-demo
+```
+
+### Step 2: Create SonarQube Token and Connector
+
+Create both the Secret containing SonarQube authentication token and the SonarQube connector resource.
+
+For more detailed information about creating and configuring connectors, please refer to the [Connectors Quick Start Guide](../../connectors/quick_start).
+
+```bash
+cat <<EOF | kubectl apply -n connectors-sonarqube-demo -f -
+kind: Secret
+apiVersion: v1
+metadata:
+  name: sonarqube-token-secret
+type: connectors.cpaas.io/bearer-token
+stringData:
+  token: your-sonarqube-token # Replace with your SonarQube user token or project analysis token
+---
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: sonarqube-connector
+spec:
+  connectorClassName: sonarqube
+  address: https://sonarqube.example.com # Replace with your SonarQube server address (e.g., https://sonarqube.example.com)
+  auth:
+    name: tokenAuth
+    secretRef:
+      name: sonarqube-token-secret
+EOF
+```
+
+Verify that the connector is in "Ready" status:
+
+```bash
+kubectl get connector sonarqube-connector -n connectors-sonarqube-demo
+```
+
+The output should show:
+
+```
+NAME                   CLASS       ADDRESS                    READY   REASON   AGE
+sonarqube-connector    sonarqube   https://sonarqube.example.com      True             10s
+```
+
+### Step 3: Create a Job to Perform Code Analysis
+
+Create a Kubernetes job that uses the connector to perform SonarQube scanning:
+
+```bash
+cat <<'EOF' | kubectl apply -n connectors-sonarqube-demo -f -
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: sonar-scanner-job
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: sonar-scanner
+          image: sonarsource/sonar-scanner-cli:latest
+          command:
+            - sh
+            - -c
+            - |
+              # Clone your project repository (replace with your repo)
+              # For this demo, we'll create a simple project structure
+              mkdir -p /src/myproject
+              cd /src/myproject
+              
+              # Create a simple source file for analysis
+              cat > hello.js <<'EOJS'
+              function hello(name) {
+                  console.log("Hello, " + name);
+              }
+              hello("World");
+              EOJS
+              
+              # Create sonar-project.properties
+              cat > sonar-project.properties <<'EOPROPS'
+              sonar.projectKey=my-project-key
+              sonar.sources=.
+              EOPROPS
+              
+              # If your SonarQube server or proxy uses a private CA, import its certificate;
+              # for publicly trusted certificates, this step is not required and the file may be absent.
+              if [ -f /scanner-config/context.proxy.caCert ]; then
+                  keytool -importcert -noprompt \
+                      -trustcacerts \
+                      -keystore "$JAVA_HOME/lib/security/cacerts" \
+                      -storepass changeit \
+                      -alias corp-ca \
+                      -file /scanner-config/context.proxy.caCert
+              fi
+
+              # Merge connector configuration
+              cat /scanner-config/sonar-scanner.properties >> sonar-project.properties
+
+              # Execute sonar-scanner with connector configuration
+              sonar-scanner
+          volumeMounts:
+            - name: scanner-config
+              mountPath: /scanner-config/
+      volumes:
+        - name: scanner-config
+          csi:
+            driver: connectors.cpaas.io
+            volumeAttributes:
+              connectorName: sonarqube-connector
+              connectorNamespace: connectors-sonarqube-demo
+              configuration.names: "sonar-scanner"
+EOF
+```
+
+:::tip
+The connector mounts a `sonar-scanner.properties` configuration file via CSI that contains scanner settings with proxy configuration. The configuration includes:
+- `sonar.host.url`: SonarQube server address
+- `sonar.scanner.proxyHost`: Proxy hostname for secure access
+- `sonar.scanner.proxyPort`: Proxy port
+- `sonar.scanner.proxyUser`: Proxy authentication username
+- `sonar.scanner.proxyPassword`: Proxy authentication password (token)
+
+If your `sonar-project.properties` file already contains `sonar.scanner.proxy*` or `sonar.host.url` properties, remove them to avoid conflicts with the connector-provided configuration.
+:::
+
+Verify the job execution:
+
+```bash
+kubectl get job sonar-scanner-job -n connectors-sonarqube-demo
+kubectl logs job/sonar-scanner-job -n connectors-sonarqube-demo
+```
+
+The output should show successful analysis results:
+
+```
+INFO: Scanner configuration file: /scanner-config/sonar-scanner.properties
+INFO: Project root configuration file: /src/myproject/sonar-project.properties
+INFO: Analyzing on SonarQube...
+INFO: ANALYSIS SUCCESSFUL
+```
+
+## Cleanup
+
+After completing the demonstration, clean up the resources:
+
+```bash
+kubectl delete ns connectors-sonarqube-demo
+```
+
+## What's Next
+
+- Learn about [SonarQube ConnectorClass](./concepts/sonarqube_connectorclass) to understand the connector configuration in detail
+- Explore [How-to Guides](./how_to/) for advanced usage scenarios
+- Check [Troubleshooting](./trouble_shooting/) if you encounter any issues

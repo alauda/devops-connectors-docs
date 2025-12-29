@@ -22,6 +22,7 @@ The Connectors system has a modular architecture with the following components:
 - **ConnectorsPyPI**: Optional component that adds support for Python package registries (e.g., PyPI, or Python repositories hosted on Sonatype Nexus).
 - **ConnectorsNPM**: Optional component that adds support for Node.js package registries (e.g., npm, or Node.js repositories hosted on Sonatype Nexus).
 - **ConnectorsHarbor**: Optional component that adds support for Harbor container registries.
+- **ConnectorsSonarQube**: Optional component that adds support for SonarQube and SonarCloud platforms for code quality analysis.
 This document provides instructions for installing and configuring the Connectors system.
 
 ### Prerequisites
@@ -492,6 +493,35 @@ To add support for integration with Harbor registries, install the ConnectorsHar
    kubectl get connectorclass harbor
    ```
 
+### Install ConnectorsSonarQube (Optional)
+
+To add support for integration with SonarQube and SonarCloud platforms, install the ConnectorsSonarQube component:
+
+1. Create the ConnectorsSonarQube custom resource:
+
+   ```bash
+   cat <<EOF | kubectl apply -f -
+   apiVersion: operator.connectors.alauda.io/v1alpha1
+   kind: ConnectorsSonarQube
+   metadata:
+     name: connectors-sonarqube
+     namespace: connectors-system
+   spec: {}
+   EOF
+   ```
+
+2. Monitor the deployment progress:
+
+   ```bash
+   kubectl get connectorssonarqube -n connectors-system
+   ```
+
+3. Verify that the SonarQube ConnectorClass is ready:
+
+   ```bash
+   kubectl get connectorclass sonarqube
+   ```
+
 ## Uninstall Connectors
 
 To uninstall the Connectors system, remove components in the reverse order of installation.
@@ -522,6 +552,9 @@ To uninstall the Connectors system, remove components in the reverse order of in
 
    # Delete ConnectorsHarbor
    kubectl delete connectorsharbor --all -n connectors-system
+
+   # Delete ConnectorsSonarQube
+   kubectl delete connectorssonarqube --all -n connectors-system
    ```
 
 2. Delete the core component:

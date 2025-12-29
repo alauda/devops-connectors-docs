@@ -1,0 +1,266 @@
+---
+weight: 20
+---
+
+# SonarQube Connector
+
+The SonarQube connector is a connector that enables connections to any SonarQube instance.
+
+You can use the SonarQube Connector to securely access SonarQube in CI/CD pipelines for code quality analysis, security scanning, and quality gate checks.
+
+Additionally, the connector enables centralized management of SonarQube access configurations across namespaces, eliminating the need to duplicate SonarQube tokens in each namespace.
+
+## Overview
+
+This document covers:
+
+- **Integration Requirements**: Prerequisites for target SonarQube instances
+- **Creating SonarQube connector**
+- **Advanced Features**: Proxy capabilities and configuration capabilities about SonarQube connector
+
+## Integration Requirements
+
+**SonarQube Prerequisites**
+
+- The SonarQube instance must be accessible via HTTP/HTTPS
+- SonarQube version should support the API endpoints used by the connector:
+  - `/api/authentication/validate` - for authentication validation
+  - `/api/system/status` - for liveness checking
+
+## Creating a Simple SonarQube Connector
+
+Here's how to create a basic SonarQube Connector for a self-hosted SonarQube instance:
+
+```yaml
+# SonarQube Connector for self-hosted instance
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: sonarqube-connector
+spec:
+  connectorClassName: sonarqube
+  address: https://sonarqube.example.com
+  auth:
+    name: tokenAuth
+    secretRef:
+      name: sonarqube-token-secret
+```
+
+## Fields Reference
+
+**spec.connectorClassName**:
+
+`sonarqube` (constant), specifies the ConnectorClass name for SonarQube integration.
+
+**spec.address**:
+
+Target SonarQube server address, for example:
+- Self-hosted: `https://sonarqube.example.com`
+
+**spec.auth** (optional):
+
+Specifies the authentication method for the SonarQube instance.
+
+- `spec.auth.name`: Should be `tokenAuth` for SonarQube connector.
+
+- `spec.auth.secretRef`: Specifies the secret containing the authentication token for the SonarQube instance. The secret must be created in the same namespace as the connector.
+
+**Optional Metadata fields**:
+
+- `cpaas.io/description`: Description information for the SonarQube connector, for example:
+
+  ```yaml
+  apiVersion: connectors.alauda.io/v1alpha1
+  kind: Connector
+  metadata:
+    name: sonarqube-connector
+    annotations:
+      cpaas.io/description: "Connect to team SonarQube for code quality analysis"
+  ```
+
+## Capabilities of SonarQube Connector
+
+### Authentication
+
+The SonarQube connector supports the following authentication types:
+
+- `tokenAuth`: Token-based authentication, corresponding secret type: `connectors.cpaas.io/bearer-token`
+
+For example:
+
+```yaml
+apiVersion: v1
+stringData:
+  token: your-sonarqube-token  # User token or project analysis token
+kind: Secret
+metadata:
+  name: sonarqube-token-secret
+type: connectors.cpaas.io/bearer-token
+```
+
+:::tip Token Types
+SonarQube supports multiple token types:
+- **User Token**: Personal access token for individual users
+- **Project Analysis Token**: Token scoped to specific projects (recommended for CI/CD)
+- **Global Analysis Token**: Token for analyzing any project (use with caution)
+
+For production environments, we recommend using Project Analysis Tokens with minimal required permissions.
+:::
+
+For comprehensive status information, see [Connector Status Documentation](../../connectors/concepts/connector.mdx#status-information).
+
+#### Credential Permissions Required \{#credential_permissions_required}
+
+The required permissions for the configured credential depend on how you intend to use it in your Pods/Pipelines.
+
+For example:
+- **Code Analysis**: If you only need to perform code analysis, the token requires "Execute Analysis" permission on the target project.
+- **Quality Gate Checks**: For checking quality gate status, the token needs read permissions on quality gates.
+- **Creating Projects**: For creating new projects during analysis, additional permissions are required.
+
+For security best practices, we recommend creating tokens with minimal required permissions. When additional privileges are needed, create separate Connectors with more privileged tokens and use namespace isolation to control which users can access each Connector.
+
+### SonarQube Connector Proxy and Configuration with sonar-scanner.properties File
+
+To enable clients to access SonarQube without handling tokens directly, the SonarQube connector provides a proxy server that automatically injects authentication information.
+
+Clients can use this proxy server to access SonarQube without needing to configure tokens on the client side.
+
+To simplify usage, the SonarQube connector provides a `sonar-scanner.properties` file that can be mounted into Pods via CSI. When executing scanner operations in the Pod, the proxy service automatically injects authentication information.
+
+#### Proxy Address
+
+Upon Connector creation, the system automatically provisions a proxy service for the target SonarQube instance.
+
+The proxy endpoint is recorded in `status.proxy.httpAddress`:
+
+For example:
+
+```yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: sonarqube-connector
+spec:
+  # connector spec fields
+status:
+  conditions:
+    # status conditions
+  proxy:
+    httpAddress:
+      url: http://c-sonarqube-connector.default.svc.cluster.local
+```
+
+#### sonar-scanner.properties Configuration File \{#sonar-scanner-properties-configuration-file}
+
+The SonarQube connector provides the following configuration:
+
+**sonar-scanner.properties**:
+
+- Provides a `sonar-scanner.properties` configuration file. This configuration file is mounted into the Pod via CSI, enabling access to the SonarQube instance through the proxy without requiring token configuration on the client side.
+
+Example of the configuration file generated in the ConfigMap:
+
+  ```properties
+  # SonarQube server configuration
+  sonar.host.url=https://sonarqube.example.com
+
+  # Proxy configuration (scanner properties)
+  sonar.scanner.proxyHost=c-sonarqube-connector.default.svc.cluster.local
+  sonar.scanner.proxyPort=80
+  sonar.scanner.proxyUser=default%2Fsonarqube-connector
+  sonar.scanner.proxyPassword=<connector-token>
+  ```
+
+The configuration includes:
+- `sonar.host.url`: The actual SonarQube server address
+- `sonar.scanner.proxyHost`: Proxy hostname for secure access
+- `sonar.scanner.proxyPort`: Proxy port (80 for HTTP, 443 for HTTPS)
+- `sonar.scanner.proxyUser`: Encoded connector namespace and name
+- `sonar.scanner.proxyPassword`: Authentication token (automatically managed)
+
+#### Using sonar-scanner.properties in Pods
+
+The connector mounts a `sonar-scanner.properties` configuration file via CSI that contains scanner settings with proxy `configuration.names`.
+
+To use it in your Pod:
+
+```yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: sonar-scanner-job
+spec:
+  template:
+    spec:
+      containers:
+        - name: sonar-scanner
+          image: sonarsource/sonar-scanner-cli:latest
+          command:
+            - sh
+            - -c
+            - |
+              # Use the connector configuration
+              sonar-scanner -Dproject.settings=/scanner-config/sonar-scanner.properties
+          volumeMounts:
+            - name: scanner-config
+              mountPath: /scanner-config
+      volumes:
+        - name: scanner-config
+          csi:
+            driver: connectors.cpaas.io
+            volumeAttributes:
+              connectorName: sonarqube-connector
+              connectorNamespace: connectors-sonarqube-demo
+              configuration.names: "sonar-scanner"
+```
+
+The scanner will use the proxy configuration to access SonarQube securely without requiring direct token access.
+
+If your SonarQube instance uses HTTPS, you need to import the CA certificate into the Java truststore in the scanner container:
+
+```bash
+keytool -importcert -noprompt \
+    -trustcacerts \
+    -keystore $JAVA_HOME/lib/security/cacerts \
+    -storepass changeit \
+    -alias corp-ca \
+    -file /<mount-path>/context.proxy.caCert
+```
+
+`context.proxy.caCert` is automatically mounted by the connector and contains the CA certificate of the Connector Proxy server. More details can be found in the [Connectors CSI Built-in Configurations](../../connectors/concepts/connectors_csi.mdx#built-in-configurations).
+
+## Health Checks
+
+The SonarQube connector performs automatic health checks to verify connectivity:
+
+**Liveness Probe**:
+- Endpoint: `/api/system/status`
+- Expected Response: HTTP 200 with `{"status": "UP"}`
+- Purpose: Ensures the SonarQube instance is operational
+
+**Authentication Probe**:
+- Endpoint: `/api/authentication/validate`
+- Expected Response: HTTP 200 with `{"valid": true}`
+- Purpose: Validates that the provided token is valid
+
+These probes run automatically and the results are reflected in the Connector's status conditions.
+
+## Best Practices
+
+1. **Namespace Isolation**: Create separate connectors for different teams or projects using namespace isolation
+2. **Token Rotation**: Regularly rotate authentication tokens and update the secrets accordingly
+3. **Monitor Status**: Monitor the connector's Ready condition to detect authentication or connectivity issues
+4. **Minimize Permissions**: Grant only the minimum permissions required for your specific use case
+
+## Troubleshooting
+
+If the connector shows a non-Ready status:
+
+1. **Check Authentication**: Verify the token in the secret is valid and has not expired
+2. **Verify Connectivity**: Ensure the SonarQube instance is accessible from the Kubernetes cluster
+3. **Review Logs**: Check connector-proxy-service logs for detailed error messages
+4. **Validate Address**: Confirm the `spec.address` is correct and includes the protocol (https://)
+5. **API Access**: Ensure the SonarQube instance allows API access from your cluster
+
+For more troubleshooting guidance, see [Troubleshooting Guide](../trouble_shooting/).

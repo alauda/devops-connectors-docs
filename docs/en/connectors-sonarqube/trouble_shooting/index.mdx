@@ -1,0 +1,161 @@
+---
+weight: 70
+---
+
+# Troubleshooting
+
+This guide helps you resolve common issues with SonarQube connectors.
+
+## Connector Not Ready
+
+### Symptom
+The SonarQube connector shows `Ready: False` status.
+
+### Diagnosis Steps
+
+1. **Check connector status**:
+   ```bash
+   kubectl get connector <connector-name> -n <namespace> -o yaml
+   ```
+   Review the `status.conditions` field for specific error messages.
+
+2. **Common Causes and Solutions**:
+
+   **Invalid Token**:
+   - Error: "Authentication failed" or "Token invalid"
+   - Solution: Verify the token in the secret is correct and not expired
+   - Generate a new token in SonarQube and update the secret
+
+   **Connectivity Issues**:
+   - Error: "Connection refused" or "Timeout"
+   - Solution: Verify the SonarQube instance is accessible from the cluster
+   - Check network policies, firewalls, and DNS resolution
+
+   **Incorrect Address**:
+   - Error: "404 Not Found" or "Invalid URL"
+   - Solution: Verify that `spec.address` includes the correct protocol (https://) and path
+
+## Scanner Job Fails
+
+### Symptom
+The sonar-scanner job fails or hangs during analysis.
+
+### Diagnosis Steps
+
+1. **Check job logs**:
+   ```bash
+   kubectl logs job/<job-name> -n <namespace>
+   ```
+
+2. **Common Causes and Solutions**:
+
+   **Missing sonar-project.properties**:
+   - Error: "You must define the following mandatory properties"
+   - Solution: Ensure sonar-project.properties exists in your project root with required fields:
+     ```properties
+     sonar.projectKey=my-project-key
+     sonar.sources=.
+     ```
+
+   **Proxy Configuration Not Loaded**:
+   - Error: "Authentication required"
+   - Solution: Verify the scanner is using the connector configuration:
+     ```bash
+     SONAR_SCANNER_OPTS="-Dproject.settings=/scanner-config/sonar-scanner.properties"
+     ```
+
+   **Insufficient Permissions**:
+   - Error: "Insufficient privileges" or "403 Forbidden"
+   - Solution: Verify the token has "Execute Analysis" permission on the project
+
+## Configuration Not Found
+
+### Symptom
+Pod fails to mount the sonar-scanner.properties configuration.
+
+### Diagnosis Steps
+
+1. **Verify CSI volume is properly configured**:
+   Check that the CSI volume is correctly configured in your Pod specification with the proper `connectorName` and `configuration.names` attributes.
+
+2. **Common Causes and Solutions**:
+
+   **Connector Not Ready**:
+   - Solution: Wait for the connector to reach Ready state
+   - Configuration is available only when the connector is Ready
+
+   **Incorrect Volume Configuration**:
+   - Solution: Verify the CSI volume configuration includes:
+     - `connectorName`: Name of your connector
+     - `connectorNamespace`: Namespace of your connector
+     - `configuration.names`: "sonar-scanner"
+
+## Quality Gate Failure
+
+### Symptom
+Analysis completes but quality gate status is not as expected.
+
+### Diagnosis Steps
+
+1. **Check SonarQube project dashboard** for quality gate details
+
+2. **Common Causes and Solutions**:
+
+   **Quality Profile Mismatch**:
+   - Solution: Verify the correct quality profile is assigned to your project
+
+   **Coverage Threshold Not Met**:
+   - Solution: Check if your project has test coverage data
+   - Ensure coverage reports are generated before analysis
+
+   **New Code Period Configuration**:
+   - Solution: Verify the new code period definition in SonarQube
+
+## Performance Issues
+
+### Symptom
+Scanner takes too long or times out.
+
+### Diagnosis Steps
+
+1. **Common Causes and Solutions**:
+
+   **Large Codebase**:
+   - Solution: Increase job timeout and resource limits:
+     ```yaml
+     spec:
+       activeDeadlineSeconds: 1800  # 30 minutes
+       template:
+         spec:
+           containers:
+           - name: sonar-scanner
+             resources:
+               limits:
+                 memory: "2Gi"
+                 cpu: "1000m"
+     ```
+
+   **Network Latency**:
+   - Solution: Check network connectivity to SonarQube instance
+   - Consider using a SonarQube instance closer to your cluster
+
+## Getting Help
+
+If you continue to experience issues:
+
+1. **Check connector logs**:
+   ```bash
+   kubectl logs -n connectors-system -l app=connectors-proxy-service
+   ```
+
+2. **Review connector events**:
+   ```bash
+   kubectl get events -n <namespace> --field-selector involvedObject.name=<connector-name>
+   ```
+
+3. **Verify SonarQube instance health**:
+   - Access the SonarQube web interface
+   - Check `/api/system/status` endpoint directly
+
+4. **Consult documentation**:
+   - [SonarQube ConnectorClass](../concepts/sonarqube_connectorclass)
