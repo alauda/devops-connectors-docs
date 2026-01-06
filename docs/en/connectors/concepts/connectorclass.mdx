@@ -223,6 +223,19 @@ You can configure `spec.authProbes[].probe.http` to perform authentication valid
 - `spec.authProbes[].probe.http.disableRedirect` specifies whether to disable HTTP redirects during authentication validation. Defaults to false (automatic redirection is allowed).
 - `spec.authProbes[].probe.http.httpHeaders` specifies the HTTP headers to include in authentication validation requests.
 - `spec.authProbes[].probe.http.scheme` specifies the URI scheme for authentication validation. Defaults to the scheme from the connector address.
+- `spec.authProbes[].probe.http.response.cel` specifies the expected response for authentication validation.
+  - **Default behavior**: Returns 200 for success.
+  - **Custom validation**: When configured with a CEL expression, authentication succeeds if the expression evaluates to `true`.
+
+The CEL expression can use the following variables:
+
+| Variable               | Type                  | Description                            |
+| ---------------------- | --------------------- | -------------------------------------- |
+| `response.statusCode`  | `int`                 | HTTP status code                       |
+| `response.bodyString`  | `string`              | Response body as string                |
+| `response.headers`     | `map[string][]string` | Response headers                       |
+| `response.body`        | `object`              | Response body parsed as JSON           |
+
 
 **Example**
 
@@ -242,6 +255,8 @@ spec:
           path: /
           method: GET # Defaults to GET, supports both POST and GET methods
           disableRedirect: false # Defaults to false, allowing automatic redirection
+          response:
+            cel: response.statusCode == 200  # Custom validation expression
 ---
 kind: Connector
 metadata:

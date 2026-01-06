@@ -9,7 +9,7 @@ SonarQube Connector 是用于连接 SonarQube 的 Connector。
 SonarQube ConnectorClass 包含以下几个部分：
 
 - 配置文件：
-  - sonar-scanner.properties: 指定 SonarQube 服务器地址及认证信息。
+  - sonar-project.properties: 指定 SonarQube 服务器地址及认证信息。
 - 地址：
   - address: SonarQube server URL, e.g. https://sonarqube.example.com
 - 认证类型: tokenAuth, 认证配置为可选
@@ -35,7 +35,7 @@ spec:
   configurations:
   - name: sonar-scanner
     data:
-      sonar-scanner.properties: |
+      sonar-project.properties: |
         {{- $proxyURL := urlParse .connector.status.proxyAddress -}}
         {{- $registryURL := urlParse .connector.spec.address -}}
         {{- $username := printf "%s/%s" .connector.metadata.namespace .connector.metadata.name | urlquery -}}
@@ -76,19 +76,13 @@ spec:
         - name: Authorization
           value: >-
             {{- if .Secret }}Bearer {{ printf "%s" .Secret.StringData.token }}{{- end }}
-        expectedResponse:
-          statusCodes: 
-          - 200
-          bodyValidation:
+        response:
             cel: >-
               statusCode == 200 && bodyJSON.valid == true
   livenessProbe:
     http:
       path: /api/system/status
-      expectedResponse:
-        statusCodes: 
-        - 200
-        bodyValidation:
+      response:
           cel: >-
             statusCode == 200 && bodyJSON.status == 'UP'
   proxy:
@@ -142,43 +136,23 @@ spec:
 
 ```go
 ...
-ExpectedResponse *HttpProbeExpectedResponse `json:"expectedResponse,omitempty"`
+Response *HttpProbeExpectedResponse `json:"response,omitempty"`
 ...
 
 // HttpProbeExpectedResponse defines validation rules for HTTP probe responses
 type HttpProbeExpectedResponse struct {
-	// StatusCodes defines the expected HTTP status codes.
-	// If specified, the response status code must match one of the values in this list.
-	// If not specified, will not verify the status code.
-	// +optional
-	// +listType=atomic
-	StatusCodes []int `json:"statusCodes,omitempty"`
-
-	// Headers defines the expected response headers.
-	// The probe succeeds only if all specified headers are present and match the expected values.
-	// Header names are case-insensitive. Header values are case-sensitive.
-	// +optional
-	Headers map[string]string `json:"headers,omitempty"`
-
-	// BodyValidation defines how to validate the response body.
-	// +optional
-	BodyValidation *HttpProbeBodyValidation `json:"bodyValidation,omitempty"`
-}
-
-// HttpProbeBodyValidation defines how to validate HTTP response body
-type HttpProbeBodyValidation struct {
 	// CEL contains a CEL (Common Expression Language) expression for response validation.
 	// The expression must evaluate to a boolean value.
 	// Available variables:
-	//  - statusCode (int): HTTP status code
-	//  - headers (map<string, list<string>>): Response headers
-	//  - body (string): Response body as string
-	//  - bodyJSON (dynamic): Parsed JSON body (if Content-Type is application/json and body is valid JSON)
+	//  - response.statusCode (int): HTTP status code
+	//  - response.headers (map<string, list<string>>): Response headers
+	//  - response.bodyString (string): Response body as string
+	//  - response.body (dynamic): Parsed JSON body (if Content-Type is application/json and body is valid JSON)
 	//
 	// Example expressions:
-	//  - statusCode == 200 && bodyJSON.status == 'healthy'
-	//  - bodyJSON.uptime > 60 && bodyJSON.errors.size() == 0
-	//  - body.contains('success') && !body.contains('error')
+	//  - response.statusCode == 200 && bodyJSON.status == 'healthy'
+	//  - response.body.uptime > 60 && bodyJSON.errors.size() == 0
+	//  - response.bodyString.contains('success') && !response.bodyString.contains('error')
 	//  - headers['content-type'][0].startsWith('application/json')
 	//
 	// CEL is recommended for simple to medium complexity validations:
@@ -206,10 +180,7 @@ type HttpProbeBodyValidation struct {
         - name: Authorization
           value: >-
             {{- if .Secret }}Bearer {{ printf "%s" .Secret.StringData.token }}{{- end }}
-        expectedResponse:
-          statusCodes: 
-          - 200
-          bodyValidation:
+        response:
             cel: >-
               statusCode == 200 && bodyJSON.valid == true
 ```
@@ -246,11 +217,11 @@ SonarQube 提供了多种 scanner 工具，例如 SonarQube Scanner CLI、SonarQ
 | **Gradle** | `build.gradle` 或 `build.gradle.kts` | Groovy/Kotlin DSL |
 | **Azure DevOps** | Pipeline YAML | YAML |
 
-整体上对于 sonar，在流水线的实践中，SonarQube Scanner CLI 使用最为广泛，因此 SonarQube Connector 主要支持 `sonar-scanner.properties` 配置文件的生成和挂载。
+整体上对于 sonar，在流水线的实践中，SonarQube Scanner CLI 使用最为广泛，因此 SonarQube Connector 主要支持 `sonar-project.properties` 配置文件的生成和挂载。
 
 SonarScanner CLI 配置文件：
 - 默认位置：项目根目录的 sonar-project.properties
-- 系统配置：<scanner-home>/conf/sonar-scanner.properties
+- 系统配置：<scanner-home>/conf/sonar-project.properties
 
 优先级：
 
@@ -260,11 +231,11 @@ SonarScanner CLI 配置文件：
 4. 项目级配置 sonar-project.properties 文件
 5. 系统级配置 sonar-scanner.properties
 
-SonarQube Connector 生成的需要挂载的配置文件，挂载路径用户可以自行指定，如： `~/.sonar/sonar-scanner.properties`。
+SonarQube Connector 生成的需要挂载的配置文件，挂载路径用户可以自行指定，如： `~/.sonar/sonar-project.properties`。
 
 ## 使用connector挂载
 
-用户可以通过挂载 SonarQube Connector 提供的配置文件 `sonar-scanner.properties` 来使用 SonarQube Connector。
+用户可以通过挂载 SonarQube Connector 提供的配置文件 `sonar-project.properties` 来使用 SonarQube Connector。
 
 示例：
 
@@ -280,8 +251,8 @@ spec:
     command: ["sonar-scanner"]
     volumeMounts:
     - name: sonar-scanner-config
-      mountPath: /root/.sonar/sonar-scanner.properties
-      subPath: sonar-scanner.properties
+      mountPath: /root/.sonar/sonar-project.properties
+      subPath: sonar-project.properties
   volumes:
   - name: sonar-scanner-config
     csi:
@@ -297,7 +268,7 @@ spec:
 
 可以将 SonarQube Connector config 挂载到 `sonar-settings` workspace 中。
 
-task 会自动将 workspace 中的 `sonar-scanner.properties` 文件内容合并到扫描配置中。
+task 会自动将 workspace 中的 `sonar-project.properties` 文件内容合并到扫描配置中。
 
 ```bash
 # Merge properties from workspace

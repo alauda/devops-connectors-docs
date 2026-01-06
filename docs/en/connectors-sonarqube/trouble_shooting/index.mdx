@@ -61,7 +61,7 @@ The sonar-scanner job fails or hangs during analysis.
    - Error: "Authentication required"
    - Solution: Verify the scanner is using the connector configuration:
      ```bash
-     SONAR_SCANNER_OPTS="-Dproject.settings=/scanner-config/sonar-scanner.properties"
+     SONAR_SCANNER_OPTS="-Dproject.settings=/scanner-config/sonar-project.properties"
      ```
 
    **Insufficient Permissions**:
@@ -71,7 +71,7 @@ The sonar-scanner job fails or hangs during analysis.
 ## Configuration Not Found
 
 ### Symptom
-Pod fails to mount the sonar-scanner.properties configuration.
+Pod fails to mount the sonar-project.properties configuration.
 
 ### Diagnosis Steps
 

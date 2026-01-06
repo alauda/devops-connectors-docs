@@ -1,0 +1,210 @@
+# Connectors 插件功能成熟度评估
+
+## 初衷
+
+- 依据功能成熟度做功能的展示和屏蔽
+- 后续新增加的功能，可以增加功能开关，参考已有定义，配置成熟度
+- 不同的功能，可以有独立的演进规划
+
+## Check List
+
+- [ ] 成熟度定义
+- [ ] 功能划分与成熟度定义
+- [ ] 提升计划
+
+## 功能成熟度定义
+
+> **参考规范**
+> - 公司规范：[ACP 产品功能成熟度定义规范](https://confluence.alauda.cn/pages/viewpage.action?pageId=48731881)
+> - AIT 定义：[数据面功能成熟度](https://confluence.alauda.cn/pages/viewpage.action?pageId=120122052)
+
+功能成熟度分为三个阶段：**Alpha** 和 **Beta** 以及 **GA**。每个阶段对应不同的稳定性承诺、工程化要求和质量标准。
+
+## Connectors 功能成熟度
+
+**划分思路**
+
+- Connector 类别
+- Connector 基础能力
+- 高级功能
+  *  Resource Interface
+  *  自定义 ConnectorClass
+  *  K8S 集群使用 Connector 拉取镜像
+
+
+| 功能                            | 成熟度 | 功能描述                                                                                               |
+| ------------------------------- | ------ | ------------------------------------------------------------------------------------------------------ |
+| Connector 基础能力                        | Alpha  | Connector 资源的增删改查,  CSI Driver, Proxy (正向代理，反向代理)， API (访问工具原始 API, 自定义 API)  |
+| Resource Interface              | Alpha  | 提供不同工具资源的标准抽象，以使得工具资源可以在流水线编排场景中使用                                   |
+| 自定义 ConnectorClass           | Alpha  | 用户可以以自定义的方式，扩展新的工具类型                                                               |
+| K8S 集群使用 Connector 拉取镜像 | Alpha  | K8S 集群可以使用 OCI/Harbor Connector 拉取镜像                                                         |
+
+**Connector 类别**
+
+依赖框架的成熟度
+
+| 功能                    | 成熟度 | 功能描述 |
+| ----------------------- | ------ | -------- |
+| Git Connector           | Alpha  |          |
+| OCI Registry Connector  | Alpha  |          |
+| PyPI Registry Connector | Alpha  |          |
+| NPM Registry Connector  | Alpha  |          |
+| Kubernetes Connector    | Alpha  |          |
+| Maven Connector         | Alpha  |          |
+| Gitlab Connector        | Alpha  |          |
+| Harbor Connector        | Alpha  |          |
+| SonarQube Connector     | Alpha  |          |
+
+
+## 其他可选划分方式
+
+<details>
+<summary>展开 ...</summary>
+
+### 思路 1
+
+按照 Connector 类别
+
+| 功能                    | 成熟度 | 功能描述 |
+| ----------------------- | ------ | -------- |
+| Git Connector           | Alpha  |          |
+| OCI Registry Connector  | Alpha  |          |
+| PyPI Registry Connector | Alpha  |          |
+| NPM Registry Connector  | Alpha  |          |
+| Kubernetes Connector    | Alpha  |          |
+| Maven Connector         | Alpha  |          |
+| Gitlab Connector        | Alpha  |          |
+| Harbor Connector        | Alpha  |          |
+| SonarQube Connector     | Alpha  |          |
+
+### 思路 2
+
+按照用户场景来划分
+
+| 功能                                       | 成熟度 | 功能描述                                                                                                                   |
+| ------------------------------------------ | ------ | -------------------------------------------------------------------------------------------------------------------------- |
+| 在流水线/k8s workload 中使用 Connector                                  |        | 在 K8S Workload 中，通过 CSI Driver 来挂载 Connector, 在流水线中，使用 Connector 提供的代理，以 Secret-less 的方式访问工具 |
+| k8s 集群使用 OCI/Harbor Connector 拉取镜像 |        | 以插件的方式，扩展支持新的工具类型                                                                                         |
+| 自定义 ConnectorClass                      |        | 以插件的方式，扩展支持新的工具类型                                                                                         |
+</details>
+
+
+## 功能成熟度提升计划
+
+> **说明**：各功能从 Alpha 提升到 Beta 需满足 [Beta 阶段的工程化要求和质量要求](#beta)。
+
+---
+
+### Connector 基础能力
+
+| 项目 | 内容 |
+|------|------|
+| 目标 | Alpha → Beta |
+| 计划版本 | v1.8 |
+| 前置条件 | 无 |
+
+**工程化要求**
+
+- [ ] UI 测试
+- [ ] 端到端（E2E）测试覆盖主要场景
+- [ ] ~~用户文档、API 文档~~、故障排查指南完善
+
+**质量要求**
+
+- [ ] 解决已知的 L0、L1 级别缺陷
+- [ ] 通过中等规模性能测试
+- [ ] 通过中等规模稳定性测试（3 天持续运行）
+- [ ] ~~通过混沌工程（Chaos）测试~~
+
+---
+
+### 已有 Connector
+
+| 项目 | 内容 |
+|------|------|
+| 范围 | Git, OCI, Harbor, GitLab, PyPI, NPM, Maven, Kubernetes, SonarQube |
+| 目标 | Alpha → Beta |
+| 计划版本 | v1.8 |
+| 前置条件 | Connector 基础能力达到 Beta |
+
+**工程化要求**
+
+- [ ] ~~端到端（E2E）测试覆盖主要场景~~
+- [ ] ~~各 Connector 的用户文档和~~故障排查指南完善
+
+**质量要求**
+
+- [ ] 解决各 Connector 已知的 L0、L1 级别缺陷
+- [ ] 通过中等规模性能测试
+- [ ] 通过中等规模稳定性测试（3 天持续运行）
+
+---
+
+### Resource Interface
+
+| 项目 | 内容 |
+|------|------|
+| 目标 | Alpha → Beta |
+| 计划版本 | v1.8 |
+| 前置条件 | Connector 基础能力达到 Beta |
+
+**工程化要求**
+
+- [ ] 后端集成测试
+- [ ] UI 测试
+- [ ] ~~Resource Interface API 文档完善~~
+
+**质量要求**
+
+- [ ] 解决已知的 L0、L1 级别缺陷
+
+---
+
+### 自定义 ConnectorClass
+
+| 项目 | 内容 |
+|------|------|
+| 目标 | Alpha → Beta |
+| 计划版本 | v1.9+（待定） |
+| 前置条件 | Connector 基础能力达到 Beta |
+
+> 计划版本: 考虑 1.8 周期内的任务量， 以及 先有人用，然后才会有定制的诉求。
+
+**工程化要求**
+
+- [ ] 端到端（E2E）测试覆盖主要场景
+- [ ] 自定义 ConnectorClass 开发指南完善
+
+**质量要求**
+
+- [ ] 解决已知的 L0、L1 级别缺陷
+
+---
+
+### K8S 集群使用 Connector 拉取镜像
+
+| 项目 | 内容 |
+|------|------|
+| 目标 | Alpha → Beta |
+| 计划版本 | v1.9+（待定） |
+| 前置条件 | Connector 基础能力达到 Beta，OCI/Harbor Connector 达到 Beta |
+
+> 计划版本: 考虑 1.8 周期内的任务量，当前功能存在不少前置手工操作，成熟度低。
+
+**工程化要求**
+
+- [ ] 端到端（E2E）测试覆盖主要场景
+- [ ] 镜像拉取功能用户文档和故障排查指南完善
+
+**质量要求**
+
+- [ ] 解决已知的 L0、L1 级别缺陷
+- [ ] 通过中等规模性能测试
+- [ ] 通过中等规模稳定性测试（3 天持续运行）
+
+## 实施计划与注意事项
+
+- [ ] 为已有功能补充功能开关
+- [ ] 产品文档中增加对功能开关的说明。
+  - 功能开关的含义，不同成熟度的含义。
+  - 功能成熟度列表（功能列表，成熟度列表）

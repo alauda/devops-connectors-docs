@@ -133,7 +133,7 @@ spec:
               fi
 
               # Merge connector configuration
-              cat /scanner-config/sonar-scanner.properties >> sonar-project.properties
+              cat /scanner-config/sonar-project.properties >> sonar-project.properties
 
               # Execute sonar-scanner with connector configuration
               sonar-scanner
@@ -152,7 +152,7 @@ EOF
 ```
 
 :::tip
-The connector mounts a `sonar-scanner.properties` configuration file via CSI that contains scanner settings with proxy configuration. The configuration includes:
+The connector mounts a `sonar-project.properties` configuration file via CSI that contains scanner settings with proxy configuration. The configuration includes:
 - `sonar.host.url`: SonarQube server address
 - `sonar.scanner.proxyHost`: Proxy hostname for secure access
 - `sonar.scanner.proxyPort`: Proxy port
@@ -172,7 +172,7 @@ kubectl logs job/sonar-scanner-job -n connectors-sonarqube-demo
 The output should show successful analysis results:
 
 ```
-INFO: Scanner configuration file: /scanner-config/sonar-scanner.properties
+INFO: Scanner configuration file: /scanner-config/sonar-project.properties
 INFO: Project root configuration file: /src/myproject/sonar-project.properties
 INFO: Analyzing on SonarQube...
 INFO: ANALYSIS SUCCESSFUL

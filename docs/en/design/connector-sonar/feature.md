@@ -101,7 +101,7 @@ spec:
          name: sonarqube-secret
    ```
 
-3. 创建执行 sonarscanner 的 Job，并通过 CSI 挂载 `sonar-scanner.properties` 配置：
+3. 创建执行 sonarscanner 的 Job，并通过 CSI 挂载 `sonar-project.properties` 配置：
 
     ```yaml
    apiVersion: batch/v1
@@ -125,8 +125,8 @@ spec:
                 -Dsonar.sources=.
            volumeMounts:
            - name: sonar-scanner-properties
-             mountPath: /root/.sonar/sonar-scanner.properties
-             subPath: sonar-scanner.properties
+             mountPath: /root/.sonar/sonar-project.properties
+             subPath: sonar-project.properties
          volumes:
          - name: sonar-scanner-properties
            csi:
@@ -139,7 +139,7 @@ spec:
 
 #### 关键点说明
 
-- 通过 `connectors-csi` 驱动挂载 `sonar-scanner.properties`，内容由 SonarQube ConnectorClass 模板生成，其中已配置代理与认证参数，无需在容器内直接配置凭据。
+- 通过 `connectors-csi` 驱动挂载 `sonar-project.properties`，内容由 SonarQube ConnectorClass 模板生成，其中已配置代理与认证参数，无需在容器内直接配置凭据。
 
 #### 验收标准
 
@@ -202,8 +202,8 @@ spec:
               }
            volumeMounts:
            - name: sonar-scanner-properties
-             mountPath: /root/.sonar/sonar-scanner.properties
-             subPath: sonar-scanner.properties
+             mountPath: /root/.sonar/sonar-project.properties
+             subPath: sonar-project.properties
          volumes:
          - name: sonar-scanner-properties
            csi:

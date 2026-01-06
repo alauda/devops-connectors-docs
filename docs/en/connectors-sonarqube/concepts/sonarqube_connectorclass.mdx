@@ -120,13 +120,13 @@ For example:
 
 For security best practices, we recommend creating tokens with minimal required permissions. When additional privileges are needed, create separate Connectors with more privileged tokens and use namespace isolation to control which users can access each Connector.
 
-### SonarQube Connector Proxy and Configuration with sonar-scanner.properties File
+### SonarQube Connector Proxy and Configuration with sonar-project.properties File
 
 To enable clients to access SonarQube without handling tokens directly, the SonarQube connector provides a proxy server that automatically injects authentication information.
 
 Clients can use this proxy server to access SonarQube without needing to configure tokens on the client side.
 
-To simplify usage, the SonarQube connector provides a `sonar-scanner.properties` file that can be mounted into Pods via CSI. When executing scanner operations in the Pod, the proxy service automatically injects authentication information.
+To simplify usage, the SonarQube connector provides a `sonar-project.properties` file that can be mounted into Pods via CSI. When executing scanner operations in the Pod, the proxy service automatically injects authentication information.
 
 #### Proxy Address
 
@@ -151,13 +151,13 @@ status:
       url: http://c-sonarqube-connector.default.svc.cluster.local
 ```
 
-#### sonar-scanner.properties Configuration File \{#sonar-scanner-properties-configuration-file}
+#### sonar-project.properties Configuration File \{#sonar-scanner-properties-configuration-file}
 
 The SonarQube connector provides the following configuration:
 
-**sonar-scanner.properties**:
+**sonar-project.properties**:
 
-- Provides a `sonar-scanner.properties` configuration file. This configuration file is mounted into the Pod via CSI, enabling access to the SonarQube instance through the proxy without requiring token configuration on the client side.
+- Provides a `sonar-project.properties` configuration file. This configuration file is mounted into the Pod via CSI, enabling access to the SonarQube instance through the proxy without requiring token configuration on the client side.
 
 Example of the configuration file generated in the ConfigMap:
 
@@ -179,9 +179,9 @@ The configuration includes:
 - `sonar.scanner.proxyUser`: Encoded connector namespace and name
 - `sonar.scanner.proxyPassword`: Authentication token (automatically managed)
 
-#### Using sonar-scanner.properties in Pods
+#### Using sonar-project.properties in Pods
 
-The connector mounts a `sonar-scanner.properties` configuration file via CSI that contains scanner settings with proxy `configuration.names`.
+The connector mounts a `sonar-project.properties` configuration file via CSI that contains scanner settings with proxy `configuration.names`.
 
 To use it in your Pod:
 
@@ -201,7 +201,7 @@ spec:
             - -c
             - |
               # Use the connector configuration
-              sonar-scanner -Dproject.settings=/scanner-config/sonar-scanner.properties
+              sonar-scanner -Dproject.settings=/scanner-config/sonar-project.properties
           volumeMounts:
             - name: scanner-config
               mountPath: /scanner-config
