@@ -179,6 +179,12 @@ The configuration includes:
 - `sonar.scanner.proxyUser`: Encoded connector namespace and name
 - `sonar.scanner.proxyPassword`: Authentication token (automatically managed)
 
+:::info 
+
+Sonar Scanner 8.0+ disables tunnel proxy authentication by default. To enable authentication proxy support, you need to add the parameter `-Djdk.http.auth.tunneling.disabledSchemes=` via `SONAR_SCANNER_OPTS` during execution.
+
+:::
+
 #### Using sonar-project.properties in Pods
 
 The connector mounts a `sonar-project.properties` configuration file via CSI that contains scanner settings with proxy `configuration.names`.
@@ -225,10 +231,10 @@ keytool -importcert -noprompt \
     -keystore $JAVA_HOME/lib/security/cacerts \
     -storepass changeit \
     -alias corp-ca \
-    -file /<mount-path>/context.proxy.caCert
+    -file /<mount-path>/ca.cert
 ```
 
-`context.proxy.caCert` is automatically mounted by the connector and contains the CA certificate of the Connector Proxy server. More details can be found in the [Connectors CSI Built-in Configurations](../../connectors/concepts/connectors_csi.mdx#built-in-configurations).
+`ca.cert` is automatically mounted by the connector and contains the CA certificate of the Connector Proxy server. More details can be found in the [Connectors CSI Built-in Configurations](../../connectors/concepts/connectors_csi.mdx#built-in-configurations).
 
 ## Health Checks
 
