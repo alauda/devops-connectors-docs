@@ -9,7 +9,7 @@ title: Release Notes
 # Release Notes
 
 ::: tip
-The maintenance period for version **v1.6.z** is from December 25, 2025 to December 25, 2026.
+The maintenance period for version **v1.7.z** is from January 15, 2026 to May 15, 2026.
 :::
 
 ## Compatibility and support matrix
@@ -21,10 +21,6 @@ The following table shows the compatibility and support matrix between the Alaud
 | v1.7.0                                    | v4.2, v4.1, v4.0 |
 | v1.6.0 (LTS)                              | v4.2, v4.1, v4.0 |
 | v1.4.0                                    | v4.1, v4.0       |
-| v1.2.1                                    | v4.1, v4.0       |
-| v1.1.0                                    | v4.1, v4.0       |
-| v1.0.8                                    | v4.0             |
-| v1.0.4                                    | v4.0             |
 
 
 ## v1.7.0
@@ -33,6 +29,8 @@ The following table shows the compatibility and support matrix between the Alaud
 
 - Support integration with SonarQube and SonarCloud by using SonarQube Connector. more details:
   - [SonarQube Connector Quick Start](../connectors-sonarqube/quick_start.mdx)
+- Support to deploy the Connectors system in a high availability (HA) configuration to ensure service continuity and fault tolerance. more details:
+  - [Deploy Connectors in High Availability (HA) Configuration](../install.mdx#high-availability-deployment)
 
 ### Breaking Changes
 
@@ -125,102 +123,3 @@ No breaking changes.
 ### Known Issues
 
 {/* release-notes-for-bugs?template=unfixed&project=DEVOPS&version=v1.4.0 */}
-
-## v1.2.1
-
-### Features and Enhancements
-
-- Support integration with Kubernetes Cluster by using Kubernetes Connector and using Kubernetes Connector in k8s workloads or tektoncd pipelines. more details:
-  - [Kubernetes Connector Quick Start](../connectors-k8s/quick_start.mdx)
-  - [Understand Kubernetes Connector](../connectors-k8s/concepts/k8s_connectorclass.mdx)
-  - [Using Kubernetes Connector in tektoncd pipelines](../connectors-k8s/how_to/using-in-tekton-task.mdx)
-- Security updates: Updated base images, dependencies, and resolved security vulnerabilities
-
-### Breaking Changes
-
-No breaking changes.
-
-### Fixed Issues
-
-{/* release-notes-for-bugs?template=fixed&project=DEVOPS&version=v1.2.0 */}
-
-### Known Issues
-
-{/* release-notes-for-bugs?template=unfixed&project=DEVOPS&version=v1.2.0 */}
-
-## v1.1.0
-
-### Features and Enhancements
-
-- Support using OCI Connector when pulling images in k8s. more details: [Using OCI Connector to Deploy Workloads in a Secretless Way](../connectors-oci/how_to/using_oci_connector_in_workload.mdx)
-- Security updates: Updated base images, dependencies, and resolved security vulnerabilities
-
-### Breaking Changes
-
-#### OCI ConnectorClass resolver-type Change
-
-The OCI connector image address format has been updated to provide better namespace isolation and resource management.
-
-**Previous Format**: `c-connector.connector-ns.svc.cluster.local`
-
-**New Format**: `connector.connector-ns.svc.cluster.local/namespaces/<connector-ns>/connectors/<connector-name>`
-
-**Affected Scenarios**:
-
-- **[Building Images Using OCI Connector in K8S Job](../connectors-oci/how_to/using_oci_connector_in_k8s_job.mdx)**: Image address changed from `c-harbor.default.svc.cluster.local/test/demo:v1` to `harbor.default.svc.cluster.local/namespaces/oci-connector-demo/connectors/oci-connector/test/demo:v1`
-- **[Building Images Using OCI Connector in Tekton Pipeline](../connectors-oci/how_to/using_oci_connector_reverse_proxy_in_tekton_pipeline.mdx)**: Image address changed from `c-harbor.default.svc.cluster.local/test/demo:v1` to `harbor.default.svc.cluster.local/namespaces/oci-connector-demo/connectors/oci-connector/test/demo:v1`
-
-**Upgrade Instructions**: Existing workloads using OCI connectors need to update their image address format to adapt to the new naming convention.
-
-#### Services "c-xxx" already exist
-
-After upgrading to v1.1.0, Connectors created in v1.0.8 may encounter the error: `services "c-xxx" already exist`
-
-This issue occurs because the Service label associated with the Connector proxy has changed, preventing it from matching the old Service.
-
-**Resolution**: Delete the service resource with the conflicting name, and the Connector status will automatically recover.
-
-### Fixed Issues
-
-{/* release-notes-for-bugs?template=fixed&project=DEVOPS&version=v1.1.0 */}
-
-### Known Issues
-
-{/* release-notes-for-bugs?template=unfixed&project=DEVOPS&version=v1.1.0 */}
-
-## v1.0.8
-
-### Features and Enhancements
-
-- Security updates: Updated base images, dependencies, and resolved security vulnerabilities
-
-### Fixed Issues
-
-{/* release-notes-for-bugs?template=fixed&project=DEVOPS&version=v1.0.8 */}
-
-### Known Issues
-
-{/* release-notes-for-bugs?template=unfixed&project=DEVOPS&version=v1.0.8 */}
-
-## v1.0.4
-
-### Features and Enhancements
-
-#### Alauda DevOps Connectors v1.0 (Alpha)
-
-Connectors provide a secure and efficient way to connect to external services and tools and provide an unobtrusive way to integrate with them. Platform teams can easily and securely create connectors while keeping access secrets protected.
-
-Out-of-the-box support:
-
-- git repositories
-- oci registries
-
-Connectors also provide extensibility for custom connectors through the API and custom connectors implementation.
-
-### Fixed Issues
-
-{/* release-notes-for-bugs?template=fixed&project=DEVOPS&version=v1.0.4 */}
-
-### Known Issues
-
-{/* release-notes-for-bugs?template=unfixed&project=DEVOPS&version=v1.0.4 */}
