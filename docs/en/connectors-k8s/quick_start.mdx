@@ -19,16 +19,24 @@ This document will help you quickly understand how to create a kubernetes connec
 
 ## Process Overview
 
-| Step | Operation                             | Description                                                     |
-| ---- | ------------------------------------- | --------------------------------------------------------------- |
-| 1    | Create Namespace                      | Set up a dedicated namespace for the demonstration              |
-| 2    | Configure K8s Credentials & Connector | Create authentication secret and kubernetes connector resource  |
-| 3    | Deploy a Kubernetes Job for testing   | Create a job that performs kubectl operations via the connector |
-| 4    | Verify Results                        | Validate successful execution of kubectl operations             |
+| Step | Operation                             | Description                                                               |
+| ---- | ------------------------------------- | ------------------------------------------------------------------------- |
+| 1    | Generate ServiceAccount token         | Generate ServiceAccount token for the k8s connector to perform operations |
+| 2    | Create Namespace                      | Set up a dedicated namespace for the demonstration                        |
+| 3    | Configure K8s Credentials & Connector | Create authentication secret and kubernetes connector resource            |
+| 4    | Deploy a Kubernetes Job for testing   | Create a job that performs kubectl operations via the connector           |
+| 5    | Verify Results                        | Validate successful execution of kubectl operations                       |
 
 ## Steps to Operate
 
-### Step 1: Create Namespace
+### Step 1: Generate ServiceAccount token
+
+Generate ServiceAccount token for the k8s connector to perform operations.
+
+1. Create a ServiceAccount and bind a clusterrole to it, the clusterrole should have the required permissions that match your use cases for the k8s connector to perform operations. Follow the guide for [Creating a ServiceAccount and binding a clusterrole](https://kubernetes.io/docs/reference/access-authn-authz/rbac/#creating-a-serviceaccount-and-binding-a-clusterrole).
+2. Generate a ServiceAccount token for the k8s connector to perform operations. Follow the guide for [ServiceAccount tokens](https://kubernetes.io/docs/reference/access-authn-authz/authentication/#service-account-tokens).
+
+### Step 2: Create Namespace
 
 Create a dedicated namespace for this demonstration:
 
@@ -36,7 +44,7 @@ Create a dedicated namespace for this demonstration:
 kubectl create ns k8s-connector-demo
 ```
 
-### Step 2: Create K8S Credentials and Connector
+### Step 3: Create K8S Credentials and Connector
 
 Create both the Secret containing k8s credentials and the kubernetes connector resource. For more detailed information about creating and configuring connectors, please refer to the [Connectors Quick Start Guide](../../connectors/quick_start).
 
@@ -76,7 +84,7 @@ NAME           CLASS   ADDRESS            READY   AGE
 k8s-connector  k8s     https://192.168.1.100:6443 True    1m
 ```
 
-### Step 3: Create a Job to Perform Kubectl Operations
+### Step 4: Create a Job to Perform Kubectl Operations
 
 Create a job that uses the connector to perform k8s operations:
 
@@ -119,7 +127,7 @@ Key parameters in volumeAttributes:
 - `connector.name`: The name of your kubernetes connector
 - `configuration.names`: Set to "kubeconfig", which references a specific configuration template defined in the kubernetes connectorClass. This template is used to generate the ".kubeconfig" file with the appropriate settings for authentication.
 
-### Step 4: Verify Operation
+### Step 5: Verify Operation
 
 Check the job's logs to confirm the kubectl operations were successfully performed:
 
