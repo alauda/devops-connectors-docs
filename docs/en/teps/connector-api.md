@@ -518,7 +518,7 @@ Harbor 的 API 包装了一层 Artifacts, 一个 Artifact 对应多个 Tag. 数�
 [
   {
     "accessories": null,
-    "artifact_type": "application/vnd.docker.container.image.v1+json",
+    "artifact_type": "application/vnd.xxx.container.image.v1+json",
     "digest": "sha256:aff3958709498501c2badc11023a63ba973535515dde5564876bcb633e97ed5b",
     "extra_attrs": {
       "architecture": "amd64",
@@ -540,8 +540,8 @@ Harbor 的 API 包装了一层 Artifacts, 一个 Artifact 对应多个 Tag. 数�
     "icon": "sha256:0048162a053eef4d4ce3fe7518615bef084403614f8bca43b40ae2e762e11e06",
     "id": 18170,
     "labels": null,
-    "manifest_media_type": "application/vnd.docker.distribution.manifest.v2+json",
-    "media_type": "application/vnd.docker.container.image.v1+json",
+    "manifest_media_type": "application/vnd.xxx.distribution.manifest.v2+json",
+    "media_type": "application/vnd.xxx.container.image.v1+json",
     "project_id": 221,
     "pull_time": "2025-10-22T21:22:01.738Z",
     "push_time": "2025-10-22T21:17:35.710Z",

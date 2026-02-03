@@ -84,7 +84,7 @@ The `Harbor ConnectorClass` provides an out-of-the-box configuration that can be
 
 ```yaml
 volumes:
-- name: docker-config
+- name: registry-config
   csi:
     readOnly: true
     driver: connectors-csi
@@ -95,7 +95,7 @@ volumes:
 
 > For the configuration information of the Harbor ConnectorClass, please refer to [Harbor ConnectorClass Configuration](../concepts/harbor_connectorclass.mdx#proxy_and_configuration_capabilities).
 
-1. Configuring the client CLI to support pushing to insecure registries
+3. Configuring the client CLI to support pushing to insecure registries
 
 Since the proxy service provided by the connector uses HTTP protocol, it is necessary to configure `insecure-registries` on the client. Different clients have different configuration methods:
 

@@ -78,19 +78,19 @@ harbar.example.com/test/abc:v1 → c-harbor-connector.default.svc.local/namespac
 
 2. Configuring the authentication information required to access the proxy
 
-The authentication information required to access the proxy can be configured through the `docker/config.json` file.
+The authentication information required to access the proxy can be configured through the `config.json` file.
 
 The `OCI ConnectorClass` provides an out-of-the-box configuration that can be mounted through connector-csi.
 
 ```yaml
 volumes:
-- name: docker-config
+- name: registry-config
   csi:
     readOnly: true
     driver: connectors-csi
     volumeAttributes:
       connector.name: "harbor"
-      configuration.names: "docker-config"
+      configuration.names: "registry-config"
 ```
 
 > For the configuration information of the OCI ConnectorClass, please refer to [OCI ConnectorClass Configuration](../concepts/oci_connectorclass.mdx#configuration).

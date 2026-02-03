@@ -23,13 +23,13 @@ This article will take the `buildkit-daemonless task` as an example to detail ho
 ## Prerequisites
 
 - The `buildkit-daemonless` Tekton Task
-- A Dockerfile for image building
+- A Containerfile for image building
 
 ### buildkit-daemonless task
 
 We need to make some modifications based on the [TektonHub buildkit-daemonless](https://hub.tekton.dev/tekton/task/buildkit-daemonless)
 
-- Add a `docker config` workspace to allow users to specify `docker/config.json`.
+- Add a `registry config` workspace to allow users to specify `config.json`.
 - Add a `buildkitd config` workspace to allow users to specify `buildkitd.toml`.
 
 The content is as follows. You can use the following command to install the Task into the cluster.
@@ -56,14 +56,14 @@ spec:
     creating Secret, Deployment, and Service resources for setting up the
     buildkitd daemon cluster.
   params:
-    - name: Dockerfile
-      description: The name of the Dockerfile
-      default: "Dockerfile"
+    - name: containerfile
+      description: The name of the containerfile
+      default: "containerfile"
     - name: repository
       description: The name of the repository
   workspaces:
     - name: source
-    - name: docker-config
+    - name: registry-config
     - name: buildkitd-config
   steps:
     - name: build-and-push
@@ -77,7 +77,7 @@ spec:
         set -ex
 
         mkdir -p ~/.docker
-        cp $(workspaces.docker-config.path)/config.json ~/.docker
+        cp $(workspaces.registry-config.path)/config.json ~/.docker
 
         export BUILDKITD_FLAGS="--config $(workspaces.buildkitd-config.path)/buildkitd.toml $BUILDKITD_FLAGS"
 
@@ -85,7 +85,7 @@ spec:
           build \
           --progress=plain \
           --frontend=dockerfile.v0 \
-          --opt filename=$(params.Dockerfile) \
+          --opt filename=$(params.containerfile) \
           --local context=. \
           --local dockerfile=. \
           --output type=image,name=$(params.repository),push=true \
@@ -93,18 +93,18 @@ spec:
 EOF
 ```
 
-### Dockerfile
+### Containerfile
 
-To demonstrate the build and push process, we need to prepare a Dockerfile. To simplify the operation, we will save the content of the Dockerfile in a ConfigMap and then mount it to the Pod through the Tekton Task's workspace.
+To demonstrate the build and push process, we need to prepare a Containerfile. To simplify the operation, we will save the content of the Containerfile in a ConfigMap and then mount it to the Pod through the Tekton Task's workspace.
 
 ```shell
 kubectl apply -f - <<EOF
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: dockerfile
+  name: containerfile
 data:
-  Dockerfile: |
+  Containerfile: |
     FROM scratch
     LABEL maintainer="example@example.com"
     WORKDIR /app
@@ -118,7 +118,7 @@ EOF
 
 Pass the following parameters to TaskRun:
 
-- Specify the `docker-config` workspace as the `docker-config` configuration of the OCI connector, thereby mounting `docker/config.json`.
+- Specify the `registry-config` workspace as the `registry-config` configuration of the OCI connector, thereby mounting `config.json`.
 - Specify the `buildkitd-config` workspace as the `buildkitd` configuration of the OCI connector, thereby mounting `buildkitd.toml`.
 - Adjust the target image address for the push to the proxy address.
 
@@ -134,16 +134,16 @@ spec:
   taskRef:
     name: buildkit-daemonless
   workspaces:
-    - name: source # Mount Dockerfile to the Pod
+    - name: source # Mount Containerfile to the Pod
       configMap:
-        name: dockerfile
-    - name: docker-config
-      csi: # Mount docker/config.json
+        name: containerfile
+    - name: registry-config
+      csi: # Mount config.json
         driver: connectors-csi
         readOnly: true
         volumeAttributes:
           connector.name: "harbor"
-          configuration.names: "docker-config"
+          configuration.names: "registry-config"
     - name: buildkitd-config
       csi: # Mount buildkitd.toml
         driver: connectors-csi

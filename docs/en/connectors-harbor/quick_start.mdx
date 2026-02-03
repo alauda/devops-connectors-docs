@@ -77,17 +77,17 @@ kubectl get connector harbor-connector -n connectors-harbor-demo
 
 ### Step 3: Create a Job for Executing Container Operations
 
-Create a ConfigMap with a sample Dockerfile:
+Create a ConfigMap with a sample Containerfile:
 
 ```bash
 cat <<EOF | kubectl apply -f -
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: dockerfile
+  name: containerfile
   namespace: oci-connector-demo
 data:
-  Dockerfile: |
+  Containerfile: |
     FROM scratch
     LABEL maintainer="example@example.com"
     WORKDIR /app
@@ -138,14 +138,14 @@ spec:
           --local dockerfile=/workspace \
           --output type=image,name=harbor.example.com/library/image:v1,push=true
         volumeMounts:
-        - name: dockerfile
+        - name: containerfile
           mountPath: /workspace
         - name: proxyconfig
           mountPath: /tmp/
       volumes:
-      - name: dockerfile
+      - name: containerfile
         configMap:
-          name: dockerfile
+          name: containerfile
       - name: proxyconfig
         csi:
           readOnly: true

@@ -11,7 +11,7 @@ This document will help you quickly understand how to create an OCI Connector an
 ### Applicable Scenarios
 
 The OCI (Open Container Initiative) Connector provides a secure way to:
-- Access container registries (Docker Hub, Harbor, etc.) without embedding credentials in workloads
+- Access container registries (CNCF Distribution Registry, Harbor, etc.) without embedding credentials in workloads
 - Centrally manage registry authentication information
 - Use a proxy mechanism to securely push and pull container images
 - Configure container tools to work with the registry proxy
@@ -35,7 +35,7 @@ This approach is particularly useful for:
 
 - Kubernetes cluster with Connectors system installed (Operator, Core, and OCI components). See the [Installation Guide](../../install) for details on installing these components.
 - kubectl configured to communicate with your cluster
-- Access credentials for a container registry (Docker Hub, Harbor, etc.)
+- Access credentials for a container registry (CNCF Distribution Registry, Harbor, etc.)
 - Basic knowledge of Kubernetes resources
 
 ## Process Overview
@@ -80,7 +80,7 @@ metadata:
   namespace: oci-connector-demo
 spec:
   connectorClassName: oci
-  address: "https://index.docker.io"  # Replace with your registry address
+  address: "https://registry.example.com"  # Replace with your registry address
   auth:
     name: tokenAuth
     secretRef:
@@ -97,22 +97,22 @@ kubectl get connector oci-connector -n oci-connector-demo
 The output should show:
 ```
 NAME           CLASS   ADDRESS               READY   AGE
-oci-connector  oci     https://index.docker.io True    1m
+oci-connector  oci     https://registry.example.com True    1m
 ```
 
 ### Step 3: Create a Container Build/Push Job
 
-Create a ConfigMap with a sample Dockerfile:
+Create a ConfigMap with a sample Containerfile:
 
 ```bash
 cat <<EOF | kubectl apply -f -
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: dockerfile
+  name: containerfile
   namespace: oci-connector-demo
 data:
-  Dockerfile: |
+  Containerfile: |
     FROM scratch
     LABEL maintainer="example@example.com"
     WORKDIR /app
@@ -155,23 +155,23 @@ spec:
           --local dockerfile=/workspace \
           --output type=image,name=c-oci-connector.oci-connector-demo.svc.cluster.local/namespaces/oci-connector-demo/connectors/oci-connector/your-username/test-image:v1,push=true
         volumeMounts:
-        - name: dockerfile
+        - name: containerfile
           mountPath: /workspace
-        - name: docker-config
+        - name: registry-config
           mountPath: /root/.docker
         - name: buildkitd-config
           mountPath: /etc/buildkit
       volumes:
-      - name: dockerfile
+      - name: containerfile
         configMap:
-          name: dockerfile
-      - name: docker-config
+          name: containerfile
+      - name: registry-config
         csi:
           readOnly: true
           driver: connectors-csi
           volumeAttributes:
             connector.name: "oci-connector"
-            configuration.names: "docker-config"
+            configuration.names: "registry-config"
       - name: buildkitd-config
         csi:
           readOnly: true
@@ -185,7 +185,7 @@ EOF
 Key parameters in the volume definition:
 - `connector.name`: The name of your OCI connector
 - `configuration.names`: Specifies which configuration to generate from the OCI ConnectorClass:
-  - `"docker-config"`: Generates authentication config (config.json) needed for any registry operations
+  - `"registry-config"`: Generates authentication config (config.json) needed for any registry operations
   - `"buildkitd"`: Generates BuildKit daemon config for insecure registry access
 - `mountPath`: Specifies where the configuration file should be mounted in the container:
   - "/root/.docker" for OCI CLI like buildkit, buildah authentication configuration
@@ -208,7 +208,7 @@ After successfully completing all steps, you will see:
 1. An OCI connector in "Ready" status:
    ```
    NAME           CLASS   ADDRESS               READY   AGE
-   oci-connector  oci     https://index.docker.io True    5m
+   oci-connector  oci     https://registry.example.com True    5m
    ```
 
 2. A successful image build and push operation in the job logs, showing that the image was pushed to the registry via the connector proxy.
@@ -231,7 +231,7 @@ The OCI Connector works by:
 
 The connector generates three types of configuration files that serve different purposes:
 
-1. **docker-config**: Creates a `config.json` file with the necessary authentication information to access the proxy service
+1. **registry-config**: Creates a `config.json` file with the necessary authentication information to access the proxy service
    ```json
    {
      "auths": {
@@ -266,23 +266,23 @@ spec:
     image: busybox
     command: ["sleep", "3600"]
     volumeMounts:
-    - name: docker-config
-      mountPath: /mnt/docker
+    - name: registry-config
+      mountPath: /mnt/registry
   volumes:
-  - name: docker-config
+  - name: registry-config
     csi:
       readOnly: true
       driver: connectors-csi
       volumeAttributes:
         connector.name: "oci-connector"
-        configuration.names: "docker-config"
+        configuration.names: "registry-config"
 EOF
 ```
 
 View the generated configuration:
 
 ```bash
-kubectl exec -it inspect-config -n oci-connector-demo -- cat /mnt/docker/config.json
+kubectl exec -it inspect-config -n oci-connector-demo -- cat /mnt/registry/config.json
 ```
 
 ## Troubleshooting

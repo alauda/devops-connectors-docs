@@ -37,7 +37,7 @@ Harbor Connector injects proxy configurations through a CSI Driver. It provides 
 
 If the Task natively supports a workspace containing a `.env` file, and will expose the `.env` file to the environment variable, you can directly mount the Harbor Connector's configurations via CSI.
 
-In the following example, we use a `buildah` Task that accepts a `docker-config` workspace with a `.env` file containing `http_proxy`, `https_proxy`, and `no_proxy` environment variables:
+In the following example, we use a `buildah` Task that accepts a `registryconfig` workspace with a `.env` file containing `http_proxy`, `https_proxy`, and `no_proxy` environment variables:
 
 ```yaml
 apiVersion: tekton.dev/v1
@@ -57,7 +57,7 @@ spec:
     - name: source
       persistentVolumeClaim:
         claimName: my-source
-    - name: docker-config
+    - name: registryconfig
       csi:
         readOnly: true
         driver: connectors-csi
@@ -70,7 +70,7 @@ spec:
 
 If the Task does not natively support a `.env` workspace, but allows custom commands, you can source the `.env` file manually in the command.
 
-In the following example, we use a `buildah-cli` Task that accepts a `cmd` parameter for custom shell commands. The Task mounts the `docker-config` workspace to `/workspace/docker-config`:
+In the following example, we use a `buildah-cli` Task that accepts a `cmd` parameter for custom shell commands. The Task mounts the `registryconfig` workspace to `/workspace/registryconfig`:
 
 ```yaml
 apiVersion: tekton.dev/v1
@@ -81,7 +81,7 @@ spec:
   taskRef:
     name: buildah-cli
   workspaces:
-    - name: docker-config
+    - name: registryconfig
       csi:
         readOnly: true
         driver: connectors-csi
@@ -91,7 +91,7 @@ spec:
   params:
     - name: cmd
       value: |
-        source /workspace/docker-config/.env
+        source /workspace/registryconfig/.env
         buildah push --tls-verify=false myimage harbor.example.com/library/myimage:v1
 ```
 

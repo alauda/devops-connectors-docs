@@ -23,7 +23,7 @@ This article will take `buildkitd` as an example and detail the process of creat
 ## Prerequisites
 
 - Create a Connector.
-- A Dockerfile for building the image.
+- A Containerfile for building the image.
 
 ### Connector
 
@@ -55,18 +55,18 @@ type: cpaas.io/distribution-registry-token
 EOF
 ```
 
-### Dockerfile
+### Containerfile
 
-To demonstrate the building and pushing process, we need to prepare a Dockerfile. To simplify the operation, we will store the content of the Dockerfile in a ConfigMap and mount it to the Pod using a Kubernetes Pod volume.
+To demonstrate the building and pushing process, we need to prepare a Containerfile. To simplify the operation, we will store the content of the Containerfile in a ConfigMap and mount it to the Pod using a Kubernetes Pod volume.
 
 ```shell
 kubectl apply -f - <<EOF
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: dockerfile
+  name: containerfile
 data:
-  Dockerfile: |
+  Containerfile: |
     FROM scratch
     LABEL maintainer="example@example.com"
     WORKDIR /app
@@ -118,22 +118,22 @@ spec:
       build \
       --progress=plain \
       --frontend=dockerfile.v0 \
-      --opt filename=Dockerfile \
+      --opt filename=Containerfile \
       --local context=/workspace \
       --local dockerfile=/workspace \
       --output type=image,name=harbor.example.com/library/image:v1,push=true \
       --export-cache type=inline
     volumeMounts:
-    - name: dockerfile
+    - name: containerfile
       mountPath: /workspace
     - name: proxyconfig
       mountPath: /tmp/
   volumes:
 
-  # Mounting the dockerfile to the Pod
-  - name: dockerfile
+  # Mounting the containerfile to the Pod
+  - name: containerfile
     configMap:
-      name: dockerfile
+      name: containerfile
 
   # Mounting proxyconfig to the Pod
   - name: proxyconfig
@@ -147,7 +147,7 @@ EOF
 
 ### Creating the K8S Job with Reverse Proxy
 
-- To utilize the connector's proxy capabilities, we need to inject the authentication information required by the proxy into `docker/config.json`. A volume must be provided to mount `docker/config.json`.
+- To utilize the connector's proxy capabilities, we need to inject the authentication information required by the proxy into `registry/config.json`. A volume must be provided to mount `config.json`.
 - To allow the client to access the HTTP proxy, we need to configure `insecure-registries` for the client. A volume must be provided to mount `buildkitd.toml`.
 - Modify the address of the pushed image to the connector's proxy address.
 
@@ -181,34 +181,34 @@ spec:
       build \
       --progress=plain \
       --frontend=dockerfile.v0 \
-      --opt filename=Dockerfile \
+      --opt filename=Containerfile \
       --local context=/workspace \
       --local dockerfile=/workspace \
       --output type=image,name=c-harbor.default.svc.cluster.local/namespaces/oci-connector-demo/connectors/oci-connector/test-cjt:v1,push=true \
       --export-cache type=inline
     volumeMounts:
-    - name: dockerfile
+    - name: containerfile
       mountPath: /workspace
-    - name: docker-config
+    - name: registry-config
       mountPath: /root/.docker
     - name: buildkitd-config
       mountPath: /etc/buildkit
 
   volumes:
 
-  # Mounting the dockerfile to the Pod
-  - name: dockerfile
+  # Mounting the containerfile to the Pod
+  - name: containerfile
     configMap:
-      name: dockerfile
+      name: containerfile
 
-  # Mounting docker's config.json to the Pod
-  - name: docker-config
+  # Mounting registry config.json to the Pod
+  - name: registry-config
     csi:
       readOnly: true
       driver: connectors-csi
       volumeAttributes:
         connector.name: "harbor"
-        configuration.names: "docker-config"
+        configuration.names: "registry-config"
 
   # Mounting buildkitd.toml to the Pod
   - name: buildkitd-config

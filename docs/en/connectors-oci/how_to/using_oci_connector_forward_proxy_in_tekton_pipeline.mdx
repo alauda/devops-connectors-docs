@@ -37,7 +37,7 @@ OCI Connector injects proxy configurations through a CSI Driver. It provides bui
 
 If the Task natively supports a workspace containing a `.env` file, you can directly mount the OCI Connector's built-in configurations via CSI.
 
-In the following example, we use a `buildah` Task that accepts a `docker-config` workspace with a `.env` file containing `http_proxy`, `https_proxy`, and `no_proxy` environment variables:
+In the following example, we use a `buildah` Task that accepts a `registry-config` workspace with a `.env` file containing `http_proxy`, `https_proxy`, and `no_proxy` environment variables:
 
 ```yaml
 apiVersion: tekton.dev/v1
@@ -57,7 +57,7 @@ spec:
     - name: source
       persistentVolumeClaim:
         claimName: my-source
-    - name: docker-config
+    - name: registry-config
       csi:
         readOnly: true
         driver: connectors-csi
@@ -70,7 +70,7 @@ spec:
 
 If the Task does not natively support a `.env` workspace, but allows custom commands, you can source the `.env` file manually in the command.
 
-In the following example, we use a `buildah-cli` Task that accepts a `cmd` parameter for custom shell commands. The Task mounts the `docker-config` workspace to `/workspace/docker-config`:
+In the following example, we use a `buildah-cli` Task that accepts a `cmd` parameter for custom shell commands. The Task mounts the `registry-config` workspace to `/workspace/registry-config`:
 
 ```yaml
 apiVersion: tekton.dev/v1
@@ -81,7 +81,7 @@ spec:
   taskRef:
     name: buildah-cli
   workspaces:
-    - name: docker-config
+    - name: registry-config
       csi:
         readOnly: true
         driver: connectors-csi
@@ -91,7 +91,7 @@ spec:
   params:
     - name: cmd
       value: |
-        source /workspace/docker-config/.env
+        source /workspace/registry-config/.env
         buildah push --tls-verify=false myimage registry.example.com/library/myimage:v1
 ```
 

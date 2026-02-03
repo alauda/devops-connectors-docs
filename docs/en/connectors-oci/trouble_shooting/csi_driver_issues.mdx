@@ -15,7 +15,7 @@ This guide provides detailed steps for diagnosing and resolving common issues wi
 | Issue | Potential Causes | Impact |
 |-------|-----------------|--------|
 | Volume mount failures | Incorrect CSI configuration, driver unavailable | Workload can't start |
-| Docker config not found | Wrong mount path, missing volumes | Image pull/push operations fail |
+| config not found | Wrong mount path, missing volumes | Image pull/push operations fail |
 | Authentication failures | Token issues, configuration errors | Registry access denied |
 
 ## Checking CSI Volume Configuration
@@ -24,20 +24,20 @@ Verify the CSI volume configuration in your workload YAML:
 
 ```yaml
 volumes:
-- name: docker-config
+- name: registry-config
   csi:
     readOnly: true
     driver: connectors-csi
     volumeAttributes:
       connector.name: "<connector-name>"
-      configuration.names: "docker-config"
+      configuration.names: "registry-config"
 ```
 
 **Common configuration options**:
 
 | Configuration Name | Description | Use Case |
 |-------------------|-------------|----------|
-| `docker-config` | Standard OCI client like buildkit, buildah authentication configuration | General container operations |
+| `registry-config` | Standard OCI client like buildkit, buildah authentication configuration | General container operations |
 | `buildkitd` | BuildKit daemon configuration | For BuildKit based operations |
 
 **Common configuration issues**:
@@ -61,24 +61,6 @@ kubectl get connector <connector-name> -n <namespace> -o jsonpath='{.status.cond
 kubectl get pods -n connectors-system -l app.kubernetes.io/name=connectors-csi
 ```
 
-## Verifying Volume Mount
-
-Check if the volume mount configuration is correct:
-
-```yaml
-volumeMounts:
-- name: docker-config
-  mountPath: "/root/.docker"  # For docker-config
-```
-
-**Common mount paths for different configurations**:
-
-| Configuration | Recommended Mount Path | Description |
-|---------------|------------------------|-------------|
-| `docker-config` | `/root/.docker` or `$HOME/.docker` | OCI client like buildkit, buildah authentication configuration directory |
-| `buildkitd` | `/etc/buildkit` | BuildKit daemon configuration directory |
-
-
 ## Examining Pod Events
 
 Check Pod events for mount-related issues:
@@ -98,7 +80,7 @@ kubectl describe pod <pod-name> -n <namespace>
 
 **Example error and resolution**:
 ```
-  Warning  FailedMount  3m (x5 over 5m)  kubelet  MountVolume.SetUp failed for volume "docker-config" : 
+  Warning  FailedMount  3m (x5 over 5m)  kubelet  MountVolume.SetUp failed for volume "registry-config" :
   rpc error: code = NotFound desc = connector "oci-registry" not found
 ```
 *Resolution*: Create the connector or correct the connector name in the volume attributes.
@@ -108,11 +90,11 @@ kubectl describe pod <pod-name> -n <namespace>
 Locate the configuration files:
 
 ```bash
-# For docker-config
-kubectl exec <pod-name> -n <namespace> -- cat /root/.docker/config.json
+# For registry-config
+kubectl exec <pod-name> -n <namespace> -- cat {YOUR-MOUNT-PATH}/config.json
 
 # For buildkitd
-kubectl exec <pod-name> -n <namespace> -- cat /etc/buildkit/buildkitd.toml
+kubectl exec <pod-name> -n <namespace> -- cat {YOUR-MOUNT-PATH}/buildkitd.toml
 ```
 
 If configuration files are not found, check:
@@ -124,12 +106,12 @@ If configuration files are not found, check:
 
 ## Examining OCI Client Configuration Content
 
-### docker-config
+### registry-config
 
 Check the generated `config.json` file:
 
 ```bash
-kubectl exec <pod-name> -n <namespace> -- cat /root/.docker/config.json
+kubectl exec <pod-name> -n <namespace> -- cat {YOUR-MOUNT-PATH}/config.json
 ```
 
 **Expected configuration elements**:
@@ -149,7 +131,7 @@ kubectl exec <pod-name> -n <namespace> -- cat /root/.docker/config.json
 Check the generated `buildkitd.toml` file:
 
 ```bash
-kubectl exec <pod-name> -n <namespace> -- cat /etc/buildkit/buildkitd.toml
+kubectl exec <pod-name> -n <namespace> -- cat {YOUR-MOUNT-PATH}/buildkitd.toml
 ```
 
 **Expected configuration elements**:
@@ -176,34 +158,6 @@ Check the proxy service logs for authentication or access issues:
 
 ```bash
 kubectl logs -n connectors-system -l app.kubernetes.io/name=connectors-proxy
-```
-
-### Testing with a Diagnostic Pod
-
-Create a diagnostic pod to test OCI functionality:
-
-```yaml
-apiVersion: v1
-kind: Pod
-metadata:
-  name: oci-debug-pod
-  namespace: <namespace>
-spec:
-  containers:
-  - name: debug
-    image: docker:20.10
-    command: ["sleep", "3600"]
-    volumeMounts:
-    - name: docker-config
-      mountPath: "/root/.docker"
-  volumes:
-  - name: docker-config
-    csi:
-      driver: connectors-csi
-      readOnly: true
-      volumeAttributes:
-        connector.name: "<connector-name>"
-        configuration.names: "docker-config"
 ```
 
 ## Additional Resources

@@ -98,7 +98,7 @@ spec:
       restartPolicy: Never
       containers:
       - name: mvn
-        image: docker.io/library/maven:3.9.11-eclipse-temurin-24-alpine # Replace with your image contains maven
+        image: maven:3.9.11-eclipse-temurin-24-alpine # Replace with your image contains maven
         imagePullPolicy: IfNotPresent
         env:
         - name: MAVEN_OPTS
@@ -210,7 +210,7 @@ spec:
   restartPolicy: Never
   containers:
   - name: mvn
-    image: docker.io/library/maven:3.9.11-eclipse-temurin-24-alpine # Replace with your image contains maven
+    image: maven:3.9.11-eclipse-temurin-24-alpine # Replace with your image contains maven
     command: ["sleep", "3600"]
     env:
     - name: MAVEN_OPTS

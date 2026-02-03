@@ -5,7 +5,7 @@ sourceSHA: 9f8e0d089c0e96b63087949aeef79db7765289b641e466ede4b9588c1a0873ce
 
 # OCI Connector
 
-The OCI Connector is a platform-agnostic connector that allows you to connect to any OCI Registry, such as Docker Hub, Harbor, etc. You can use the OCI Connector to securely access private OCI repositories in CI/CD pipelines or perform OCI operations in containerized workloads without providing credentials. Additionally, you can centrally manage OCI access configurations, avoiding the need to duplicate OCI credential configurations in each namespace.
+The OCI Connector is a platform-agnostic connector that allows you to connect to any OCI Registry, such as CNCF Distribution Registry, Harbor, etc. You can use the OCI Connector to securely access private OCI repositories in CI/CD pipelines or perform OCI operations in containerized workloads without providing credentials. Additionally, you can centrally manage OCI access configurations, avoiding the need to duplicate OCI credential configurations in each namespace.
 
 This document will describe:
 
@@ -32,10 +32,10 @@ Here's how to create a basic OCI Connector:
 apiVersion: connectors.alauda.io/v1alpha1
 kind: Connector
 metadata:
-  name: dockerhub-demo
+  name: oci-registry-demo
 spec:
   connectorClassName: oci
-  address: https://index.docker.io
+  address: https://registry.example.com
   auth:
     name: tokenAuth
 ```
@@ -56,14 +56,14 @@ For example:
 apiVersion: connectors.alauda.io/v1alpha1
 kind: Connector
 metadata:
-  name: dockerhub-demo
+  name: oci-registry-demo
   annotations:
-    cpaas.io/description: "Connect to Docker Hub for team public repository access"
+    cpaas.io/description: "Connect to CNCF Distribution Registry for team public repository access"
 ```
 
 ### Address
 
-The `spec.address` specifies the access address of the OCI Registry, for example: `https://index.docker.io`.
+The `spec.address` specifies the access address of the OCI Registry, for example: `https://registry.example.com`.
 
 ### Authentication
 
@@ -80,10 +80,10 @@ For example:
 apiVersion: connectors.alauda.io/v1alpha1
 kind: Connector
 metadata:
-  name: dockerhub-demo
+  name: oci-registry-demo
 spec:
   connectorClassName: oci
-  address: https://index.docker.io
+  address: https://registry.example.com
   # . . .
   auth:
     name: tokenAuth
@@ -106,10 +106,10 @@ If the target OCI Registry does not require authentication, you can omit the aut
 apiVersion: connectors.alauda.io/v1alpha1
 kind: Connector
 metadata:
-  name: dockerhub-demo
+  name: oci-registry-demo
 spec:
   connectorClassName: oci
-  address: https://index.docker.io
+  address: https://registry.example.com
   auth:
     name: tokenAuth
 ```
@@ -149,21 +149,21 @@ For example:
 apiVersion: connectors.alauda.io/v1alpha1
 kind: Connector
 metadata:
-  name: dockerhub-demo
+  name: oci-registry-demo
   namespace: default
 spec:
-  address: https://index.docker.io
+  address: https://registry.example.com
   auth:
     name: tokenAuth
     secretRef:
-      name: dockerhub-demo
+      name: oci-registry-demo
   connectorClassName: oci
 status:
   conditions:
   # . . .
   proxy:
     httpAddress:
-      url: http://c-dockerhub-demo.default.svc.cluster.local/namespaces/oci-connector-demo/connectors/oci-connector
+      url: http://c-oci-registry-demo.default.svc.cluster.local/namespaces/oci-connector-demo/connectors/oci-connector
 ```
 
 
@@ -198,13 +198,13 @@ echo "Using proxy: http_proxy=$http_proxy, https_proxy=$https_proxy, no_proxy=$n
 When using a reverse proxy, you need to modify the target image address to the proxy address.
 
 Example:
-index.docker.io/test/abc:v1 → c-dockerhub-demo.default.svc.cluster.local/namespaces/oci-connector-demo/connectors/oci-connector/test/abc:v1
+registry.example.com/test/abc:v1 → c-oci-registry-demo.default.svc.cluster.local/namespaces/oci-connector-demo/connectors/oci-connector/test/abc:v1
 
 and mount the credential configuration files into the Pod and configure the proxy address in `insecure-registries`.
 
 The OCI Connector created based on the OCI Connector type provides the following configurations:
 
-**docker-config**: Configuration credentials required by OCI CLI like buildkit, buildah.
+**registry-config**: Configuration credentials required by OCI CLI like buildkit, buildah.
 
 - Provides the `config.json` configuration file.
 - Contains the authentication information required to access the proxy.
