@@ -22,6 +22,14 @@ The following table shows the compatibility and support matrix between the Alaud
 | v1.6.0 (LTS)                              | v4.2, v4.1, v4.0 |
 | v1.4.0                                    | v4.1, v4.0       |
 
+## v1.8.0 (WIP)
+
+### Features and Enhancements
+
+- Added `registry-config` configuration to OCI and Harbor ConnectorClasses. The legacy `docker-config` configuration is now deprecated but remains functional for backward compatibility. It will be removed in a future release. When mounting Connector configurations, use `registry-config` instead of `docker-config`.
+- Added `registry-config` workspace to OCIArtifact and HarborOCIArtifact ResourceInterfaces. The legacy `docker-credentials` workspace is now deprecated but remains functional for backward compatibility. It will be removed in a future release.
+
+### Breaking Changes
 
 ## v1.7.0
 
