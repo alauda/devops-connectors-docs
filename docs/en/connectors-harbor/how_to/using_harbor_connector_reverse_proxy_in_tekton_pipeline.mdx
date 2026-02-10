@@ -143,7 +143,7 @@ spec:
         readOnly: true
         volumeAttributes:
           connector.name: "harbor"
-          configuration.names: "config"
+          configuration.names: "registry-config"
     - name: buildkitd-config
       csi: # Mount buildkitd.toml
         driver: connectors-csi

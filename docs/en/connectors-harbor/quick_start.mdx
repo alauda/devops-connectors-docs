@@ -164,7 +164,7 @@ kubectl get job image-build -n connectors-harbor-demo
 Key parameters in the volume definition:
 - `connector.name`: The name of your OCI connector
 - `configuration.names`: Specifies which configuration to generate from the OCI ConnectorClass:
-  - `"config"`: Generates authentication config (config.json) needed for any registry operations
+  - `"registry-config"`: Generates authentication config (config.json) needed for any registry operations
   - `"buildkitd"`: Generates BuildKit daemon config for insecure registry access
   - if not specified, will be mounted [default configurations](../connectors/concepts/connectors_csi.mdx#built-in-configurations)
 - `mountPath`: Specifies where the configuration file should be mounted in the container:
