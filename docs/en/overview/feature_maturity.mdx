@@ -1,0 +1,47 @@
+---
+weight: 50
+---
+
+# Feature Maturity
+
+This page describes the current maturity level of each Connectors feature, helping you make informed decisions about which features are suitable for your environment.
+
+## Maturity Levels
+
+| Level     | Meaning                                                                                                                        |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| **Alpha** | Feature is in early development. Behavior and APIs may change without notice. Not recommended for production workloads.        |
+| **Beta**  | Feature is functional and reasonably stable. Minor changes may occur with advance notice. Suitable for non-critical workloads. |
+| **GA**    | Feature is stable and production-ready. APIs and behavior are stable across minor releases.                                    |
+
+## Feature Maturity Overview
+
+### Core Capabilities
+
+| Feature           | Maturity |
+| ----------------- | -------- |
+| Core Capabilities | Beta     |
+
+Core Capabilities covers the foundational framework that all Connector types rely on, including: lifecycle management (create, update, delete), forward and reverse proxy for secret-less tool access, and direct tool API access through the Connector Proxy.
+
+### Connector Classes
+
+| Connector Class         | Maturity |
+| ----------------------- | -------- |
+| Git Connector           | Beta     |
+| GitLab Connector        | Beta     |
+| OCI Registry Connector  | Beta     |
+| Harbor Connector        | Beta     |
+| Maven Connector         | Beta     |
+| PyPI Registry Connector | Beta     |
+| NPM Registry Connector  | Beta     |
+| Kubernetes Connector    | Beta     |
+| SonarQube Connector     | Beta     |
+
+### Advanced Features
+
+| Feature                             | Maturity | Description                                                                                                                                                               |
+| ----------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Pipeline Resource Integration       | Alpha    | Provides a standard abstraction over tool resources (such as repositories, images, and artifacts), enabling them to be discovered and used within pipeline orchestration. |
+| Custom ConnectorClass               | Alpha    | Extend Connectors with support for new tool types by defining custom ConnectorClass resources.                                                                            |
+| Kubernetes Image Pull via Connector | Alpha    | Use OCI or Harbor Connectors to pull images for Kubernetes clusters in secret-less mode.                                                                                 |
