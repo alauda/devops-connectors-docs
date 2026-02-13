@@ -1,0 +1,76 @@
+---
+weight: 30
+---
+
+# Performance Guide
+
+This guide describes the observed performance characteristics of the Connectors system under load and provides recommendations for high-concurrency environments.
+
+:::info
+The following observations are from internal testing. Actual performance may vary depending on your cluster resources and workload.
+:::
+
+- **Connector status updates**: No observable delay when managing 1,000 connectors simultaneously.
+- **Forward proxy (HTTPS)**: Introduces a small amount of additional latency at 50 concurrent requests. Latency increases gradually as concurrency rises.
+- **Forward proxy (HTTP)**: Introduces a small amount of additional latency at 50 concurrent requests. Latency increases slowly with higher concurrency.
+- **Reverse proxy**: Introduces minimal additional latency at 50 concurrent requests that grows slowly under load.
+- **All proxy modes at 100 concurrent requests**: Latency increases but the system remains stable without errors or crashes.
+- **OCI/Harbor image push/pull (HTTP forward proxy)**: No significant performance degradation observed across a wide range of concurrent operations; validated with Harbor's official benchmark tool.
+
+## Performance Configuration
+
+If you experience slow proxy requests or occasional failures under high load, apply the following configuration to increase throughput.
+
+- **Scale replicas** for the `connectors-proxy`, `connectors-controller-manager`, `connectors-api`, and plugin components.
+- **Increase `-kube-api-qps` and `-kube-api-burst`** to raise the request rate limit to the Kubernetes API.
+
+Example configuration for ConnectorsCore and ConnectorsOCI:
+
+```yaml
+apiVersion: operator.connectors.alauda.io/v1alpha1
+kind: ConnectorsCore
+metadata:
+  name: connectors-core
+  namespace: connectors-system
+spec:
+  workloads:
+  - name: connectors-proxy
+    replicas: 2
+    template:
+      spec:
+        containers:
+        - name: proxy
+          args:
+          - --metrics-bind-address=:8443
+          - -kube-api-qps=60
+          - -kube-api-burst=80
+          resources:
+            requests:
+              cpu: 100m
+              memory: 100Mi
+            limits:
+              cpu: 250m
+              memory: 250Mi
+  - name: connectors-controller-manager
+    replicas: 2
+  - name: connectors-api
+    replicas: 2
+---
+apiVersion: operator.connectors.alauda.io/v1alpha1
+kind: ConnectorsOCI
+metadata:
+  name: connectors-oci
+  namespace: connectors-system
+spec:
+  workloads:
+  - name: connectors-oci-plugin
+    replicas: 2
+    template:
+      spec:
+        containers:
+        - name: plugin
+          args:
+          - -metrics-bind-address=:8082
+          - -kube-api-qps=60
+          - -kube-api-burst=80
+```
