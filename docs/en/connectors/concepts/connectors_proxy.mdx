@@ -158,11 +158,14 @@ HTTP Proxy Environment Example:
 You can configure proxy authentication using standard HTTP proxy environment variables:
 
 ```bash
-export http_proxy=http://<connector-namespace>%2F<connector-name>:<service-account-token>@<connector-proxy-address>
-export https_proxy=http://<connector-namespace>%2F<connector-name>:<service-account-token>@<connector-proxy-address>
+export http_proxy=http://<connector1-namespace>%2F<connector1-name>,<connector2-namespace>%2F<connector2-name>:<service-account-token>@<connector-proxy-address>
+export https_proxy=http://<connector1-namespace>%2F<connector1-name>,<connector2-namespace>%2F<connector2-name>:<service-account-token>@<connector-proxy-address>
 ```
 
-> **Note**: The `%2F` is the URL-encoded form of `/` in the connector namespace/name format.
+:::warning
+- The `%2F` is the URL-encoded form of `/` in the connector namespace/name format.
+- When specifying multiple connectors, separate them with commas. There is no strict limit on how many connectors you may list, but avoid configuring an excessive number to prevent oversized request headers and related issues.
+:::
 
 #### Built-in Reverse Proxy Authentication
 

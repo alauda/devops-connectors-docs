@@ -83,8 +83,7 @@ spec:
       readOnly: true
       driver: connectors-csi
       volumeAttributes:
-        connector.name: "git-connector"
-        connector.namespace: "default"
+        connectors: "default/git-connector"
         configuration.names: "config"
 EOF
 ```
@@ -105,12 +104,12 @@ The CSI Driver automatically provides built-in configuration files that are alwa
 
 | File Name                        | Description                                                                 |
 | -------------------------------- | --------------------------------------------------------------------------- |
-| `.env`                           | Environment variables file containing `http_proxy`, `https_proxy`, and `no_proxy` in `key=value` format |
-| `http.proxy`                     | Forward proxy URL with authentication for HTTP                              |
-| `https.proxy`                    | Forward proxy URL with authentication for HTTPS                             |
+| `.env`                           | Environment variables file containing `http_proxy`, `https_proxy`, and `no_proxy` in `key=value` format. <br></br> If multiple Connector Categories are present, the proxy settings from the last ConnectorClass are applied. |
+| `http.proxy`                     | Forward proxy URL with authentication for HTTP. <br></br> If multiple Connector Categories are present, the proxy settings from the last ConnectorClass are applied.                             |
+| `https.proxy`                    | Forward proxy URL with authentication for HTTPS. <br></br> If multiple Connector Categories are present, the proxy settings from the last ConnectorClass are applied.                             |
 | `context.token`                  | Authentication token for the proxy service                                  |
 | `context.proxy.caCert`           | CA certificate for the Connectors proxy                                     |
-| `connector.status.proxyAddress`  | Proxy address (see [Connectors Proxy](./connectors_proxy.mdx))              |
+| `connector.status.proxyAddress`  | Proxy address (see [Connectors Proxy](./connectors_proxy.mdx)). <br></br> If multiple Connectors are present, the proxy information from the last ConnectorClass will be used. |
 | `ca.cert`                        | CA certificate for the Connectors proxy, same as `context.proxy.caCert`     |
 
 **Forward Proxy Usage:**
@@ -144,12 +143,13 @@ export SERVER=$(cat /{mount-path}/connector.status.proxyAddress)
 
 **Volume Attributes**
 
-| Parameter           | Required | Description                                              |
-| ------------------- | -------- | -------------------------------------------------------- |
-| connector.name      | Yes      | Connector name                                           |
-| connector.namespace | No       | Connector namespace (defaults to Pod's namespace)        |
-| configuration.names | No       | Comma-separated configuration names (e.g., `config1,config2`), the configuration names are the names of the configurations in the ConnectorClass |
-| token.expiration    | No       | Token expiration time (default: `30m`)                   |
+| Parameter              | Required | Description                                              |
+| -----------------------| -------- | -------------------------------------------------------- |
+| connector.name         | No      | Connector name **(Deprecated — use `connectors` instead)**                               |
+| connector.namespace    | No       | Connector namespace, defaults to Pod's namespace **(Deprecated — use `connectors` instead)**        |
+| configuration.names    | No       | Comma-separated configuration names (e.g., `config1,config2`), the configuration names are the names of the configurations in the ConnectorClass |
+| token.expiration       | No       | Token expiration time (default: `30m`)                   |
+| connectors             | Yes      | Comma-separated list of connectors in the format `namespace/name` or `name`; if namespace is omitted, the Pod's namespace is used. Used to specify multiple connectors. |
 
 **Examples**
 
@@ -162,7 +162,7 @@ volumes:
     driver: connectors-csi
     readOnly: true
     volumeAttributes:
-      connector.name: "my-connector"
+      connectors: "my-connector"
       configuration.names: "config1"
 ```
 
@@ -175,19 +175,158 @@ volumes:
     driver: connectors-csi
     readOnly: true
     volumeAttributes:
-      connector.name: "my-connector"
+      connectors: "my-connector"
+      configuration.names: "config1,config2"
+```
+
+Mount multiple connectors for proxy authentication:
+
+```yaml
+volumes:
+- name: config
+  csi:
+    driver: connectors-csi
+    readOnly: true
+    volumeAttributes:
+      connectors: "namespace1/connector1,namespace2/connector2"
       configuration.names: "config1,config2"
 ```
 
 **Notes:**
 - If `configuration.names` is omitted, only built-in configurations are mounted
 - When multiple configurations contain files with the same name, later configurations overwrite earlier ones
+- The `connectors` parameter is used to specify multiple connectors for mount config.
+
+## Multiple Connectors \{#multiple-connectors}
+
+The Connectors CSI Driver supports using multiple Connectors for configurations. You can specify multiple Connectors using the `connectors` volume attribute in the format `namespace/name` or `name`; if namespace is omitted, the Pod's namespace is used. Connectors should be separated by commas.
+
+```yaml
+volumes:
+- name: config
+  csi:
+    driver: connectors-csi
+    readOnly: true
+    volumeAttributes:
+      connectors: "namespace1/connector1,namespace2/connector2"
+      configuration.names: "config1,config2"
+```
+
+When multiple Connectors are specified, the CSI Driver merges configuration files based on the `configuration.names` attribute. The merging behavior is detailed in the [Configuration Merging](./connectors_csi.mdx#configuration-merging) section.
+
+:::warning
+
+There is no strict limit on how many connectors you may list; however, avoid specifying too many Connectors to prevent oversized request headers and other proxy-related issues.
+
+:::
+
+### Configuration Merging
+
+When multiple Connectors are specified, the CSI Driver will merge the configuration files from all specified Connectors based on the `configuration.names` attribute.
+
+There are several possible scenarios for processing configuration files; the cases below describe the behavior in each.
+
+**Same Configuration Name**
+
+For Connectors with the same configuration name, when multiple Connectors are specified, their configuration data will be merged into a single configuration file.
+
+Configuration templates should support rendering data for multiple Connectors so a single file can incorporate multiple connector-specific data sets.
+
+For example:
+
+``` yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: ConnectorClass
+metadata:
+  name: multi-connector
+spec:
+  configurations:
+  - name: config
+    data:
+      .multi-connector-config: |
+        {{- range .connectors }}
+        # Configuration for Connector: {{ .name }}
+        param_name = {{ .name }}
+        param_value = {{ .spec.address }}
+        {{- end }}
+```
+
+in the above example, the configuration file `.multi-connector-config` will include sections for each Connector specified in the `connectors` volume attribute.
+
+```bash
+kubectl exec -ti pod-name -- ls -l /mount-path/
+# Output:
+# - .multi-connector-config
+```
+
+:::warning
+
+If the merged connectors come from different ConnectorClasses and have configuration files with the same name, the configuration from the later ConnectorClass will override the configuration from the earlier ConnectorClass. Therefore, it is recommended to use different configuration file names in this scenario to avoid conflicts.
+
+:::
+
+**Different Configuration Names**
+
+When the specified Connectors have different configuration names, the CSI Driver will mount all configurations separately.
+
+``` yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: ConnectorClass
+metadata:
+  name: connector-a
+spec:
+  configurations:
+  - name: config-a
+    data:
+      config.xml: |
+        {{- range .connectors }}
+        # Configuration for Connector: {{ .name }}
+        param_name = {{ .name }}
+        param_value = {{ .spec.address }}
+        {{- end }}
+---
+apiVersion: connectors.alauda.io/v1alpha1
+kind: ConnectorClass
+metadata:   
+  name: connector-b
+spec:
+  configurations:
+  - name: config-b
+    data:
+      settings.json: |
+        {"connectors": [
+        {{- range .connectors }}
+          {"name": "{{ .name }}", "address": "{{ .spec.address }}"},
+        {{- end }}
+        ]}
+```
+
+When mounting with both connectors and configuration names:
+
+``` yaml
+- name: config
+  csi:
+    driver: connectors-csi
+    readOnly: true
+    volumeAttributes:
+      connectors: "namespace-a/connector-a,namespace-b/connector-b"
+      configuration.names: "config-a,config-b"
+```
+
+The mounted volume will contain both `config.xml` and `settings.json`, each populated with data from their respective Connectors.
+
+```bash
+kubectl exec -ti pod-name -- ls -l /mount-path/
+# Output:
+# - config.xml
+# - settings.json
+```
 
 ## Configuration File Rendering \{#configuration-file-rendering}
 
 The CSI Driver performs variable rendering when mounting configuration files, using [Go template](https://pkg.go.dev/text/template) syntax.
 
-### Available Variables
+### Available Variables \{#available-variables}
 
 | Variable                         | Description                                                                                                                    |
 | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
@@ -195,6 +334,9 @@ The CSI Driver performs variable rendering when mounting configuration files, us
 | `.connector.spec.*`              | Spec of the Connector, you can get all fields of the Connector Spec, eg. `.connector.spec.address` or `.connector.spec.params` |
 | `.context.token`                 | Authentication token for accessing the proxy service                                                                           |
 | `.context.proxy.caCert`          | CA certificate for accessing the connectors proxy (forward proxy); refer to [connectors-proxy](./connectors_proxy.mdx)         |
+| `.connectors`                    | List of Connectors when multiple Connectors are specified; each Connector has the same structure as `.connector`                |
+| `.connectorclass.proxyAddress`         | Proxy address of the ConnectorClass when multiple ConnectorClasses are specified. |
+
 
 ### Built-in Functions
 
@@ -265,6 +407,8 @@ The following ConnectorClass provides a file named `.gitconfig`, which automatic
         .gitconfig: |
           [http]
               extraHeader = Authorization: Basic {{ printf ":%s" .context.token | b64enc }}
-          [url "{{ .connector.status.proxyAddress }}"]
-              insteadOf = {{.connector.spec.address}}
+          {{- range .connectors }}
+          [url "{{ .status.proxyAddress }}"]
+              insteadOf = {{.spec.address}}
+          {{- end }}
   ```

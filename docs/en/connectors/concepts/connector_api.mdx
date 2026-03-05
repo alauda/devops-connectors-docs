@@ -178,3 +178,25 @@ The Connector API can be provided to UI clients, especially for dynamic form sce
 To enable this, you need to configure the OpenAPI description information through the `spec.api.openapi` field of the ConnectorClass, which works together with the dynamic form DSL to implement frontend dynamic form rendering.
 
 The dynamic form description is typically provided in the [Resource Interface](./resource_interface.mdx). For more details, refer to [Resource Interface](./resource_interface.mdx).
+
+## Connectors Operator API
+
+Connectors Operator API is a set of RESTful APIs provided by the Connectors API to allow users to obtain information about Connectors. 
+
+The API path is `{platform_address}/clusters-rewrite/{cluster_name}/connectors-operator/{api-path}`.
+
+Currently provided APIs include:
+
+- `GET /connectors-operator/featureflags`: Returns the feature flags information of the Connectors system in the current cluster
+
+  response body example:
+
+  ```json
+  {
+     "enable-connector-apis-permissions": "false",
+     "enable-connectors-approval": "false",
+     "enable-multi-connector": "false"
+  }
+  ```
+
+  Permission requirement: Requires permission to access ConnectorClass.
