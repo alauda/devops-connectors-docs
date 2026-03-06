@@ -1,0 +1,126 @@
+# Multi-Connector ResourceInterface Design
+
+## 背景与现状
+
+目前系统中支持多种 `ResourceInterface` Connector 类型，包括：Git、GitLab、Harbor、Maven、OCI 和 Sonar。
+在实际使用场景中，不同的资源类型对多凭据（Connector）的支持需求有所不同：
+
+- **Sonar**：在使用时通常只需连接单一服务，不存在 Multi Connector 场景，因此**不支持** Multi Connector。
+- **Git / GitLab**：主要用于代码仓库 Clone，通常为单一源，当前主要场景为单 Connector，因此暂**不支持** Multi Connector。
+- **Maven / Harbor / OCI**：主要用于构建和推送阶段，经常需要涉及多个制品库或镜像源，此类场景对多个 Connector 的需求强烈，因此计划**支持** Multi Connector。
+
+## 术语
+
+| 术语 | 定义 |
+| --- | --- |
+| Pipeline Integration | 在 Tekton Pipeline 中，用于定义流水线如何声明和使用 Connector 的配置。 |
+| ResourceInterface | 用于抽象并定义某类 Connector 能够提供的 workspace 和 attribute 规范。 |
+
+## 详细设计
+
+### 整体思路
+
+在设计上，我们需要在 `ResourceInterface` 层面允许针对特定的 workspace 开启 Multi Connector 支持。具体流程如下：
+
+1. **Multi Connector 支持声明**：在 `ResourceInterface` 的配置中添加特定标记，声明该类型支持 Multi Connector 合并。
+2. **Connector 声明**：在流水线的 `Pipeline Integration` 配置中，除了主 Connector，允许用户引入一组附加的 Connector 列表。
+3. **数据合并**：在流水线运行和渲染时，自动提取主 Connector 与所有附加 Connector，并将它们的信息合并注入到目标 workspace 的 `connectors` 字段中。
+4. **共享挂载**：最终通过 CSI 驱动（`connectors-csi`），实现将多个相关连的主副凭据统一挂载到同一个工作区（workspace）中。
+
+### 1. ResourceInterface 调整
+
+在 `ResourceInterface` 资源中新增 `spec.configuration.mergeConnectors` 字段。通过将该字段设置为 `true`，以标记此 `ResourceInterface` 对应的 workspace 支持接收并合并多个 Connector。
+
+示例：
+
+```yaml
+spec:
+  configuration:
+    mergeConnectors: true # 标记该 ResourceInterface 支持 Multi Connector 合并
+  workspaces:
+  - name: git-source
+    workspaceMapping:
+      name: git-source
+    value:
+      csi:
+        driver: connectors-csi
+        readOnly: true
+        volumeAttributes:
+          connectors: "{connectors}" # 运行时将被替换为逗号分隔的 Connector 列表
+          configuration.names: "gitconfig"
+          token.expiration: 30m
+```
+
+新增一个变量 `{connectors}`，用于在运行时动态替换为逗号分隔的 Connector 列表。（待定由前端确定实现方式。）
+
+在某些不需要使用 Multi Connector 的场景下，可以不配置 `mergeConnectors` 字段，关闭 Multi Connector 支持。
+
+### 2. Pipeline Integration 调整
+
+在流水线的 `Pipeline Integration` 声明中，原有的 `connectorRef` 将继续作为主 Connector 的引用。同时，在 `configuration` 中新增 `connectors` 列表字段，允许用户在此处配置附加 Connector 列表。
+
+> 注意：`configuration.connectors` 的选择需要根据 `connectorRef` 中指定的主 Connector 的类型进行过滤，确保附加 Connector 与主 Connector 类型一致。
+
+这些 Connector 将共同作用于同一个 workspace，并被统一挂载。
+
+示例：
+
+```yaml
+integrations.tekton.dev/integrations: |
+  - name: image
+    interface:
+      apiVersion: connectors.alauda.io/v1alpha1
+      category: OCIArtifact
+    connectorRef:
+      setAtRuntime: true
+      name: harbor # 主 Connector
+      namespace: ns1
+      apiVersion: connectors.alauda.io/v1alpha1
+    configuration:
+      setAtRuntime: true
+      connectors:    # 附加的 Connector 列表
+        - name: harbor1
+          namespace: ns1
+        - name: harbor2
+          namespace: ns1
+    attributes:
+      - name: artifacts
+        param: IMAGES
+        refPath:
+          - tasks.build-image.params.IMAGES   # 关联到 pipeline 中的参数
+    workspaces:
+      - name: registry-config
+        workspace: registryconfig
+        refPath:
+          - tasks.build-image.workspaces.registryconfig # 关联到 pipeline 中的 workspace，此 workspace 将包含主 Connector 和全部附加 Connector 凭据
+    params:
+      - name: project
+        setAtRuntime: false
+        value: automation
+      - name: repository
+        setAtRuntime: false
+        value: automation/qaimage
+      - name: tags
+        setAtRuntime: false
+        value: *a1
+```
+
+### 3. 运行时渲染逻辑
+
+在流水线实际运行时，系统会检查对应的 `ResourceInterface` 是否设置了 `mergeConnectors: true`。
+如果开启，渲染引擎会将主 Connector（来自 `connectorRef`）和所有的附加 Connector（来自 `configuration.connectors`）的数据进行合并，并将合并后的 Connector 列表以逗号分隔的形式渲染到 CSI 驱动的 `volumeAttributes.connectors` 字段中。
+
+示例渲染结果：
+
+```yaml
+workspaces:
+- name: registryconfig
+  csi:
+    driver: connectors-csi
+    readOnly: true
+    volumeAttributes:
+      # 包含了 ns1/harbor1, ns1/harbor2 以及主 Connector ns1/harbor 的聚合数据
+      connectors: "ns1/harbor1,ns1/harbor2,ns1/harbor" 
+      configuration.names: "registry-config"
+      token.expiration: 30m
+```
