@@ -7,19 +7,33 @@ title: Using Maven Connector in Tekton Task
 
 Using Maven Connector in Tekton Tasks enables centralized management of tool integration information and secure access to Maven registry during Tekton Task execution.
 
+This document shows how to use the multi-connector capability in one TaskRun to:
+
+- pull dependencies from a mirror Maven repository
+- publish build artifacts to a private Maven repository
+
 ## Requirements for Tekton Task
 
 Not all Tekton Tasks can use Maven Connector.
 
-Maven Connector essentially injects temporary Maven credentials through a Connector CSI Driver. It provides a configuration named `settings` that generates a `settings.xml` file with temporary authentication and `ca.cert` file for trust the connector proxy server.
+Maven Connector injects temporary Maven credentials through the Connectors CSI Driver. It provides a configuration named `settings` that generates a `settings.xml` file with temporary authentication and a `ca.cert` file to trust the connector proxy server.
 
 Therefore, Tekton Tasks must meet the following requirements to use Maven Connector:
 
 **Support mounting a `settings.xml` and `ca.cert` file via Workspace**
 
+## Multi-Connector Scenario
+
+To pull dependencies from a mirror and deploy to a private repository in the same TaskRun, prepare two Maven connectors:
+
+- `maven-mirror-connector`: configured with `useAsMirror=true` for dependency resolution
+- `maven-deploy-connector`: configured for deployment target repository
+
+Then mount both connectors in one workspace using `volumeAttributes.connectors`.
+
 ## Usage Instructions
 
-After confirming that your Tekton Task can use Maven Connector, you can add Maven Connector to the TaskRun YAML file:
+After confirming that your Tekton Task can use Maven Connector, add both connectors to the TaskRun YAML.
 
 For example:
 
@@ -29,27 +43,40 @@ kind: TaskRun
 metadata:
   name: maven-connector-demo
 spec:
-  # .  . .
+  params:
+  - name: GOALS
+    value:
+    - "deploy"
+    - "-Dmaven.resolver.transport=wagon" # See: https://maven.apache.org/guides/mini/guide-resolver-transport.html#switching-between-transports
+    - "-DaltDeploymentRepository=nexus::https://<repository-url>/repository/maven-releases" # Optional if deploy repository is configured in pom.xml
+  # other parameters...
   workspaces:
   - name: settings
     csi:
       driver: connectors-csi
       readOnly: true
       volumeAttributes:
-        connector.name: maven-connector
-        connector.namespace: ""
+        connectors: "maven-mirror-connector,maven-deploy-connector"
         configuration.names: "settings"
   - name: cert
     csi:
       driver: connectors-csi
       readOnly: true
       volumeAttributes:
-        connector.name: maven-connector
-        connector.namespace: ""
+        connectors: "maven-mirror-connector,maven-deploy-connector"
         configuration.names: "settings"
 ```
 
-For workspaces parameters, please refer to [Using Connectors CSI Driver to mount settings.xml file](../concepts/maven_connectorclass.mdx#using-connectors-csi-driver-to-mount-settingsxml-file) in Maven Connector Concepts document.
+In this example:
+
+- `maven-mirror-connector` is used for pulling dependencies from the configured mirror.
+- `maven-deploy-connector` is used when `mvn deploy` uploads artifacts to the private repository.
+- `settings.xml` and `ca.cert` are mounted from the same `settings` configuration.
+
+For workspaces parameters, please refer to:
+
+- [Using Connectors CSI Driver to mount settings.xml file](../concepts/maven_connectorclass.mdx#using-connectors-csi-driver-to-mount-settingsxml-file)
+- [Multiple Connectors in Connectors CSI](../../connectors/concepts/connectors_csi.mdx#multiple-connectors)
 
 For more information about Connectors CSI Driver, please refer to [Connectors CSI Configuration](../../connectors/concepts/connectors_csi.mdx).
 

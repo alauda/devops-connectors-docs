@@ -7,6 +7,8 @@ title: Using OCI Connector Forward Proxy in Tekton Task
 
 Using OCI Connector Forward Proxy in Tekton Tasks enables centralized management of OCI registry credentials and secure access to OCI registries during Tekton Task execution.
 
+This document also covers how to inject credentials for multiple registries in a single Tekton Task by mounting multiple OCI connectors.
+
 ## Requirements for Tekton Task \{#requirements-for-tekton-task}
 
 Not all Tekton Tasks can use OCI Connector Forward Proxy.
@@ -62,7 +64,7 @@ spec:
         readOnly: true
         driver: connectors-csi
         volumeAttributes:
-          connector.name: "oci-connector"
+          connectors: "oci-connector"
           configuration.names: "registry-config"
 ```
 
@@ -86,7 +88,7 @@ spec:
         readOnly: true
         driver: connectors-csi
         volumeAttributes:
-          connector.name: "oci-connector"
+          connectors: "oci-connector"
           configuration.names: "registry-config"
   params:
     - name: cmd
@@ -95,6 +97,38 @@ spec:
         buildah push --tls-verify=false myimage registry.example.com/library/myimage:v1
 ```
 
+### Injecting Credentials for Multiple Registries in One Task
+
+If one TaskRun needs to access multiple registries (for example, pull base image from registry A and push final image to registry B), you can mount multiple OCI connectors in the same workspace.
+
+For example:
+
+```yaml
+apiVersion: tekton.dev/v1
+kind: TaskRun
+metadata:
+  name: buildah-multi-registry
+spec:
+  taskRef:
+    name: buildah-cli
+  workspaces:
+    - name: registry-config
+      csi:
+        readOnly: true
+        driver: connectors-csi
+        volumeAttributes:
+          connectors: "oci-connector-registry-a,oci-connector-registry-b"
+          configuration.names: "registry-config"
+  params:
+    - name: cmd
+      value: |
+        source /workspace/registry-config/.env
+        buildah pull --tls-verify=false registry-a.example.com/team/base:latest
+        buildah push --tls-verify=false local-image:latest registry-b.example.com/team/app:v1
+```
+
+> **Note:** When multiple connectors are used, configuration files are merged by the CSI Driver. For details, see [Multiple Connectors](../../connectors/concepts/connectors_csi.mdx#multiple-connectors).
+
 > **Note:** The `--tls-verify=false` flag is required because the forward proxy intercepts and re-signs TLS traffic. Different CLI tools have different ways to configure insecure registries. Please refer to your CLI documentation for details.
 
 ## Further Reading
@@ -102,4 +136,5 @@ spec:
 - [Using OCI Connector Proxy in K8S Workload](./using_oci_connector_in_k8s.mdx) - Learn about the general logic of using OCI Connector proxy
 - [OCI ConnectorClass Forward Proxy](../concepts/oci_connectorclass.mdx#forward-proxy) - Learn about forward proxy configurations
 - [Connectors CSI Built-in Configurations](../../connectors/concepts/connectors_csi.mdx#built-in-configurations) - Learn about built-in configuration files
+- [Connectors CSI Multiple Connectors](../../connectors/concepts/connectors_csi.mdx#multiple-connectors) - Learn how to mount multiple connectors in one volume
 - [Using CSI Volumes in Tekton](https://tekton.dev/docs/pipelines/workspaces/#csi) - Tekton CSI workspace documentation

@@ -95,7 +95,7 @@ spec:
         imagePullPolicy: IfNotPresent
         env:
         - name: MAVEN_OPTS
-          value: -Dmaven.resolver.transport=wagon
+          value: -Dmaven.resolver.transport=wagon # See: https://maven.apache.org/guides/mini/guide-resolver-transport.html#switching-between-transports
         command:
         - "sh"
         - "-c"
@@ -129,7 +129,7 @@ spec:
           readOnly: true
           driver: connectors-csi
           volumeAttributes:
-            connector.name: "maven-mirror-connector"
+            connectors: "maven-mirror-connector"
             configuration.names: "settings"
 EOF
 ```
