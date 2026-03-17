@@ -1,0 +1,106 @@
+<mxfile>
+  <diagram id="details_policies_page" name="Connector Details - Policies">
+    <mxGraphModel dx="1455" dy="1155" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="900" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="breadcrumbs" value="Integrations / Connectors / prod-harbor" style="text;html=1;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=14;fontColor=#666666;" parent="1" vertex="1">
+          <mxGeometry x="40" y="20" width="300" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="header_bg" value="" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#e6e6e6;" parent="1" vertex="1">
+          <mxGeometry x="40" y="60" width="1120" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="title_icon" value="oci" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e3f2fd;strokeColor=#90caf9;fontColor=#0056b3;fontStyle=1" parent="1" vertex="1">
+          <mxGeometry x="60" y="80" width="40" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="title_text" value="prod-harbor" style="text;html=1;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=22;fontStyle=1" parent="1" vertex="1">
+          <mxGeometry x="120" y="85" width="200" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="actions_btn" value="Actions ∨" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#0056b3;fontColor=#0056b3;" parent="1" vertex="1">
+          <mxGeometry x="1050" y="85" width="90" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="tabs_area" value="" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=none;borderBottom=1;borderBottomColor=#e6e6e6;" parent="1" vertex="1">
+          <mxGeometry x="40" y="140" width="1120" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="tab_details" value="Details" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=14;fontColor=#666666;" parent="1" vertex="1">
+          <mxGeometry x="40" y="140" width="80" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="tab_policies" value="Access Policies" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=14;fontColor=#0056b3;fontStyle=1;borderBottom=2;borderBottomColor=#0056b3;" parent="1" vertex="1">
+          <mxGeometry x="120" y="140" width="120" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="tab_yaml" value="YAML" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=14;fontColor=#666666;" parent="1" vertex="1">
+          <mxGeometry x="370" y="140" width="80" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="content_box" value="" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#e6e6e6;shadow=0;" parent="1" vertex="1">
+          <mxGeometry x="40" y="200" width="1120" height="300" as="geometry" />
+        </mxCell>
+        <mxCell id="btn_bind_policy" value="Create" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#0056b3;strokeColor=none;fontColor=#ffffff;" parent="1" vertex="1">
+          <mxGeometry x="50" y="220" width="100" height="35" as="geometry" />
+        </mxCell>
+        <mxCell id="th_bg" value="" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f8f9fa;strokeColor=none;borderBottom=1;borderBottomColor=#cccccc;" parent="1" vertex="1">
+          <mxGeometry x="40" y="270" width="1120" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="th_name" value="Policy Name" style="text;html=1;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=12;fontColor=#666666;fontStyle=1;" parent="1" vertex="1">
+          <mxGeometry x="60" y="275" width="200" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="th_match" value="Connectors" style="text;html=1;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=12;fontColor=#666666;fontStyle=1;" parent="1" vertex="1">
+          <mxGeometry x="280" y="275" width="200" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="th_default" value="Default Permission" style="text;html=1;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=12;fontColor=#666666;fontStyle=1;" parent="1" vertex="1">
+          <mxGeometry x="500" y="275" width="200" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="th_gated" value="Gated Checks" style="text;html=1;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=12;fontColor=#666666;fontStyle=1;" parent="1" vertex="1">
+          <mxGeometry x="720" y="275" width="200" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="th_actions" value="Actions" style="text;html=1;align=right;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=12;fontColor=#666666;fontStyle=1;" parent="1" vertex="1">
+          <mxGeometry x="1040" y="275" width="100" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="tr1_bg" value="" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=none;borderBottom=1;borderBottomColor=#e6e6e6;" parent="1" vertex="1">
+          <mxGeometry x="40" y="310" width="1120" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="td1_name" value="&lt;u style=&quot;color: #0056b3; cursor: pointer;&quot;&gt;prod-deploy-policy&lt;/u&gt;" style="text;html=1;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=14;" parent="1" vertex="1">
+          <mxGeometry x="60" y="320" width="200" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="td1_default" value="-" style="text;html=1;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=14;fontColor=#999999;" parent="1" vertex="1">
+          <mxGeometry x="500" y="320" width="200" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="td1_gated" value="1 Check" style="text;html=1;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=14;fontColor=#333333;" parent="1" vertex="1">
+          <mxGeometry x="720" y="320" width="250" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="tr2_bg" value="" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=none;borderBottom=1;borderBottomColor=#e6e6e6;" parent="1" vertex="1">
+          <mxGeometry x="40" y="360" width="1120" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="td2_name" value="&lt;u style=&quot;color: #0056b3; cursor: pointer;&quot;&gt;view-only-oci&lt;/u&gt;" style="text;html=1;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=14;" parent="1" vertex="1">
+          <mxGeometry x="60" y="370" width="200" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="td2_default" value="Use connectors" style="text;html=1;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=14;fontColor=#333333;" parent="1" vertex="1">
+          <mxGeometry x="500" y="370" width="200" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="td2_gated" value="-" style="text;html=1;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=14;fontColor=#999999;" parent="1" vertex="1">
+          <mxGeometry x="720" y="370" width="200" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="6ZxfT128rhCBt3l7IDrz-1" value="⋮" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=20;fontColor=#666666;fontStyle=1;cursor:pointer;" parent="1" vertex="1">
+          <mxGeometry x="1090" y="320" width="60" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="6ZxfT128rhCBt3l7IDrz-2" value="⋮" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=20;fontColor=#666666;fontStyle=1;cursor:pointer;" parent="1" vertex="1">
+          <mxGeometry x="1090" y="370" width="60" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="6ZxfT128rhCBt3l7IDrz-3" value="Labels" style="text;html=1;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=14;fontColor=#333333;" parent="1" vertex="1">
+          <mxGeometry x="280" y="370" width="200" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="6ZxfT128rhCBt3l7IDrz-4" value="prod-harb" style="rounded=1;whiteSpace=wrap;html=1;arcSize=50;strokeColor=none;strokeWidth=1;fillColor=#6C767D;fontColor=#FFFFFF;whiteSpace=wrap;align=left;verticalAlign=middle;spacingLeft=0;fontStyle=1;fontSize=11;spacing=10;" parent="1" vertex="1">
+          <mxGeometry x="280" y="327" width="80" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="6ZxfT128rhCBt3l7IDrz-5" value="gitlab" style="rounded=1;whiteSpace=wrap;html=1;arcSize=50;strokeColor=none;strokeWidth=1;fillColor=#6C767D;fontColor=#FFFFFF;whiteSpace=wrap;align=left;verticalAlign=middle;spacingLeft=0;fontStyle=1;fontSize=11;spacing=10;" parent="1" vertex="1">
+          <mxGeometry x="365" y="327" width="80" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="6ZxfT128rhCBt3l7IDrz-6" value="" style="html=1;verticalLabelPosition=bottom;align=center;labelBackgroundColor=#ffffff;verticalAlign=top;strokeWidth=2;strokeColor=#0080F0;shadow=0;dashed=0;shape=mxgraph.ios7.icons.credit_card;" parent="1" vertex="1">
+          <mxGeometry x="330" y="377.5" width="20" height="15" as="geometry" />
+        </mxCell>
+        <mxCell id="2" value="Access Requests" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=14;fontColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="260" y="140" width="120" height="40" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

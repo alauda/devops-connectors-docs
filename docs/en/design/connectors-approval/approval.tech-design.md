@@ -24,7 +24,7 @@ spec:
     selector:
       matchLabels:
         connectors.cpaas.io/connectorclass: oci
-    names: [ "prod-harbor" ]
+      names: [ "prod-harbor" ]
 
   # 默认授予的权限
   defaultPermission:
