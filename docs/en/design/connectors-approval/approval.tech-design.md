@@ -21,27 +21,24 @@ kind: AccessPolicy
 spec:
   # 匹配的目标 Connector
   connector:
-    selector:
-      matchLabels:
-        connectors.cpaas.io/connectorclass: oci
-      names: [ "prod-harbor" ]
+    matchLabels:
+      connectors.cpaas.io/connectorclass: oci
+    matchExpressions: {}
+    names: [ "prod-harbor" ] # names 和 labels 为二选一关系，互斥验证
 
   # 默认授予的权限
   defaultPermission:
     roleTemplate:
-      rules:
-      - apiGroups:
-        - connectors.alauda.io
-        resources:
-        - connectors/apis
-        verbs:
-          - read
+      ref:
+        configmap:
+          name: connectors-use-connectors-apis # ns 为 当前 connectors 组件部署的 namespace
     bindingTemplate:
-      subjects:
-      - kind: ServiceAccount
-        name: system:serviceaccount:devops-ns1:default
-        nameSelector: {}
-        namespaceSelector: {}
+      serviceAccounts:
+      - names: [""]   # 匹配一个或者多个 SA Name. 空字符串表示匹配所有 SA
+        namespaceSelector: # 匹配 sa 所在的 namespace
+          names: [""] # names 和 labels 为二选一关系，互斥验证
+          matchLabels: {}
+          matchExpressions: {}
 
   # 通过审批检查授予的权限
   checkGrantedPermission:
@@ -49,26 +46,36 @@ spec:
       checks:
       - name: manual-approval-check
         # which check objects can be used
-        selector:
-          labels:
-            tekton.dev/pipelineRun: '{.object.pod.metadata.labels["pipelineRun"]}'
-          objectRef:
-            apiVersion: openshift-pipelines.org/v1alpha1
-            kind: ApprovalTask
-        state:
-          # 默认情况下， 按照 Check Duck Type 的 state 字段进行判断， 也可以通过 Rego 表达式，来计算判断结果。
-          # 通过 rego 来计算 check 的结果， state: pending | approved | rejected | passed
-          rego: ""
-      # permissions granted after check passed
-      permissions:
+        ref: 
+          configmap:
+            name: connectors-approvals-in-pipeline # 当前 connectors 安装的命名空间
+        spec: # spec 和 ref 二选一。 增加验证。
+          selector:
+            labels:
+              tekton.dev/pipelineRun: '{.object.pod.metadata.labels["pipelineRun"]}'
+            objectRef:
+              apiVersion: openshift-pipelines.org/v1alpha1
+              kind: ApprovalTask
+          state:
+            # 默认情况下，按照 Ready Condition 状态来计算， 也可以通过 Rego 表达式，来计算判断结果。
+            # 参考下文 state 计算
+            rego: ""
+      # role template granted after check passed
+      permission:
         roleTemplate:
-          rules:
-          - apiGroups:
-            - connectors.alauda.io
-            resources:
-            - connectors/apis/tekton.dev/v1/pipelineruns/{.object.pod.metadata.namespace}/{.object.pod.name} # 仅支持 授权到 pod ns 和 pod name
-            verbs:
-              - "*"
+          ref:
+            configmap:
+              name: connectors-use-connectors-apis-in-pod # ns 为 当前 connectors 安装的命名空间
+status:
+  matchedConnectors: # 匹配的 Connectors
+    - name: prod-harbor
+  conditions:
+    - status: "True"
+      type: ConnectorsMatched
+    - status: "True"
+      type: PermissionSynced
+    - status: "True"
+      type: Ready
 ```
 
 #### 目标 Connector
@@ -89,79 +96,164 @@ metadata:
   namespace: devops-ns1 # 目标 Connector 的 NS
 spec:
   connector: # 为空表示当前 NS 所有 connector
-    selector:
-      matchLabels: # 选择某一类的 Connector
-        connectors.alauda.io/connectorclass: oci
+    matchLabels: # 选择某一类的 Connector
+      connectors.alauda.io/connectorclass: oci
+    matchExpressions: {}
     names: [ "prod-harbor" ]
 ```
 
-#### 默认权限
+#### 默认权限 - 权限列表
 
-目标 Connector 默认开放的权限，为指定的 Subject (ServiceAccount, User, Group), 赋予 Connector 的特定 subresource 的特定 verb 权限。
+-  通过 roleTemplate.ref 指定权限内容
+-  ref 指向的 configmap 保存具体的权限内容
+
+``` yaml
+spec:
+  defaultPermission:
+    roleTemplate:
+      ref:
+        configmap:
+          name: connectors-use-connectors-apis
+```
+
+**内置默认权限模板**
+
+``` yaml
+kind: ConfigMap
+metadata:
+  name: connectors-use-connectors-apis
+  namespace: connectors-system
+  annotations:
+    cpaas.io/display-name: "Use Connectors APIs"
+data:
+  rules: |
+    - apiGroups:
+      - connectors.alauda.io
+      resources:
+      - connectors/apis
+      verbs:
+        - "*"
+```
+
+#### 默认权限 - 授权对象
+
+授权对象为 ServiceAccount, 赋予 Connector 的指定 subresource 的若干 verb 权限。
 
 例如:
   - 授权 NS SA 能够访问当前 NS 的 connectors/apis subresources 的 read 权限。 (NS Connector)
-  - 授权 Project 下 NS SA 能够访问当前 NS 的 connectors/apis subresources 的 read 权限。 (Project Connector)
-
-对应的 AccessPolicy 配置：
-
-``` yaml
-apiVersion: connectors.alauda.io/v1alpha1
-kind: AccessPolicy
-metadata:
-  name: connector-access-policy-001
-  namespace: devops-ns1
-spec:
-  connector: {}
-
-  # 默认授予的权限
-  defaultPermission:
-    roleTemplate:
-      rules:
-      - apiGroups:
-        - connectors.alauda.io
-        resources:
-        - connectors/apis
-        verbs:
-          - read
-    bindingTemplate:
-      subjects:
-      - kind: ServiceAccount
-        name: system:serviceaccount:devops-ns1:default
-        nameSelector: {}
-        namespaceSelector: {}
-```
-
-**对 Subject/Group 的支持**
+  - 授权 Project 下 所有NS 的 SA 能够访问当前 Project 的 connectors/apis subresources 的 read 权限。 (Project Connector)
+  - 授权集群 所有 NS， 均能访问当前集群级别 connector 的 connectors/apis 权限
 
 ``` yaml
-     # 当前 NS 的所有 SA
-    bindingTemplate:
-      subjects:
-      - kind: Group
-        name: "system:serviceaccounts:devops-ns1"
----
-    # 当前项目下的 NS 的 所有 SA
-    bindingTemplate:
-      subjects:
-      - kind: Group
-        name: "system:serviceaccounts"
-        namespaceSelector:
-          matchLabels:
-            cpaas.io/project: devops
+bindingTemplate:
+  serviceAccounts:
+  - names: [""]   # 匹配一个或者多个 SA Name. 空数组表示匹配所有 SA
+    namespaceSelector:
+      names: [""] # names 和 labels 互斥
+      matchLabels: {}
+      matchExpressions: {}
 ```
 
-**对 Subject/ServiceAccount 的支持**
+**NS Connector | Current NS**
 
 ``` yaml
-    # 当前 NS 的 指定 SA
-    bindingTemplate:
-      subjects:
-      - kind: ServiceAccount
-        nameSelector:
-          matchLabels:
-            tekton.dev/pipeline: deploy-prod
+bindingTemplate:
+  serviceAccounts:
+  - names: []
+    namespaceSelector:
+      names: ["xxx"] # 配置为当前 NS
 ```
+
+**Project Connector | Project Namespaces**
+
+``` yaml
+bindingTemplate:
+  serviceAccounts:
+  - names: []
+    namespaceSelector:
+      matchLabels:
+        cpaas.io/project: <name> # 配置为当前 Project 的 label
+```
+
+**Cluster Connector | All Namespaces**
+
+``` yaml
+bindingTemplate:
+  serviceAccounts:
+  - names: [] # 匹配所有 sa name
+    namespaceSelector: {} # 匹配所有 namespaces
+```
+
+**Subjects 展开**
+
+names 和 namespaceSelector 组合使用， 来确定最终的授权目标 SA 列表。
+
+- names 指定 具体 SA 的名称，每个 sa 生成一个 subject. 为空数组时, 表示匹配所有 sa.
+- namespaceSelector 指定命名空间的选择条件，用于筛选出符合条件的命名空间。为空对象表示匹配所有命名空间。
+
+namespaceSelector 不为空, names 不为空，展开为目标 ns 的 sa 数组
+
+``` yaml
+- kind: ServiceAccount
+  name: <sa-1>
+  namespace: <ns-1>
+- kind: ServiceAccount
+  name: <sa-2>
+  namespace: <ns-1>
+- kind: ServiceAccount
+  name: <sa-1>
+  namespace: <ns-2>
+- kind: ServiceAccount
+  name: <sa-2>
+  namespace: <ns-2>
+```
+
+namespaceSelector 不为空, names 为空，展开为目标 ns 的 sa group 数组
+``` yaml
+- kind: Group
+  name: system:serviceaccounts:<ns-1>
+- kind: Group
+  name: system:serviceaccounts:<ns-2>
+```
+
+namespaceSelector 为空，names 不为空，展开为 所有 ns 的指定 sa 数组
+
+``` yaml
+- kind: ServiceAccount
+  name: <sa-1>
+  namespace: <ns-1>
+- kind: ServiceAccount
+  name: <sa-1>
+  namespace: <ns-2>
+- kind: ServiceAccount
+  name: <sa-2>
+  namespace: <ns-1>
+- kind: ServiceAccount
+  name: <sa-2>
+  namespace: <ns-2>
+```
+
+namespaceSelector 为空，names 为空，展开为 所有 ns 的 sa group
+``` yaml
+- kind: Group
+  name: system:serviceaccounts
+```
+
+**授权校验**
+
+目标: 校验授权的目标 Subject 是否具备当前 NS Get Connector 的权限。只有具备 Get Connector 权限， 才能授予 Connectors-API 的权限。
+
+防范超越已有的 NS & Project 隔离体系进行授权, 如:
+
+- NS Admin 授权另外一个 NS 的 SA 访问当前 NS 的 Connector APIs
+- Project Admin 授权 另外一个 Project 下的 NS 的 SA 访问当前 Project 的 Connectors APIs
+
+``` bash
+kubectl auth can-i --as=system:serviceaccount:<目标NS>:default --as-group=system:serviceaccounts:<目标NS> get connectors -n <当前NS>
+```
+
+校验时机: Controller 中，创建 Role 和 RoleBinding 时进行校验。
+对展开的 Subject 列表进行校验，过滤掉没有权限的 subject, 使用事件进行提醒记录。
 
 ##### 对 User 的支持
 
@@ -182,7 +274,7 @@ spec:
 - 如果用户想要自己控制授予用户的权限，那么可以关闭该开关。用户自主配置。
 - 如果用户想要更精细的控制到用户的权限，可以通过手动创建 Role 和 RoleBinding 来解决。
 
-#### 审批检查匹配规则
+#### 审批检查匹配规则结果计算
 
 定义审批检查的匹配规则，匹配到的审批检查任务是通过状态后，授予目标 Connector connectors/apis 的特定 verb 权限。
 
@@ -202,50 +294,44 @@ spec:
       checks:
       - name: manual-approval-check
         # which check objects can be used
-        selector:
-          labels:
-            tekton.dev/pipelineRun: '{.pod.metadata.labels["tekton\.dev/pipelineRun"]}'
-          objectRef:
-            apiVersion: openshift-pipelines.org/v1alpha1
-            kind: ApprovalTask
-        state:
-          # 默认情况下， 按照 Check Duck Type 的 state 字段进行判断， 也可以通过 Rego 表达式，来计算判断结果。
-          # 通过 rego 来计算 check 的结果， state: pending | approved | rejected | passed
-          rego: |
-            package approval
-
-            output = {
-              "state": state
-            } {
-              state := input.status.state
-            } else = {
-              "state": "pending"
-            }
-      # permissions granted after check passed
-      permissions:
-        roleTemplate:
-          rules:
-          - apiGroups:
-            - connectors.alauda.io
-            resources:
-            - connectors/apis/tekton.dev/v1/pipelineruns/{.object.pod.metadata.namespace}/{.object.pod.metadata.name} # 仅支持授权到 pod ns 和 pod name
-            verbs:
-              - "*"
+        ref:
+          configmap:
+            name: connectors-approvals-in-pipeline
+        spec: # ref 和 spec 二选一
+          selector:
+            labels:
+              tekton.dev/pipelineRun: '{.pod.metadata.labels["tekton\.dev/pipelineRun"]}'
+            objectRef:
+              apiVersion: openshift-pipelines.org/v1alpha1
+              kind: ApprovalTask
+          state:
+            # 默认情况下， 按照 Ready/Succeeded Condition 的状态来计算检查结果。如果指定了 rego 表达式，则使用 rego 表达式。
+            rego: ""
 ```
 
-**匹配流水线中的 ApprovalTask**
+**ConfigMap 模板**
 
 ``` yaml
-# which check objects can be used
-selector:
+kind: ConfigMap
+metadata:
+  name: connectors-approvals-in-pipeline
+  annotations:
+    cpaas.io/display-name: "Manual Approval in Pipeline"
   labels:
-    tekton.dev/pipelineRun: '{.object.metadata.labels["tekton\.dev/pipelineRun"]}'
-  objectRef:
-    apiVersion: openshift-pipelines.org/v1alpha1
-    kind: ApprovalTask
+    connectors.cpaas.io/templateType: "accessPolicyCheckTemplate"
+data:
+  spec: |
+    selector:
+      labels:
+        tekton.dev/pipelineRun: '{.object.metadata.labels["tekton\.dev/pipelineRun"]}'
+      objectRef:
+        apiVersion: openshift-pipelines.org/v1alpha1
+        kind: ApprovalTask
+    state:
+      rego: ""
 ```
 
-**匹配流水线中某个 Stage 的 ApprovalTask**
+将来可以扩展: `approval-in-pipeline-stage`
 
 ``` yaml
 # which check objects can be used
@@ -263,7 +349,6 @@ selector:
 支持范围:
 
 - checks[].selector 中的 value
-- permissions 中的 resources
 
 格式和渲染数据:
 
@@ -280,8 +365,125 @@ selector:
 
 **Check Duck Type State 计算**
 
-- 默认情况下，使用 `Check Duck Type ` 定义的标准数据结构， 来获取 state 字段的值， 来获取审批检查的结果。
-- 用户也可以自定义  Rego 表达式， 来计算审批检查的结果。 例如， 通过检查 ApprovalTask 甚至一个 ConfigMap（用于模拟一个审批资源）， 来获取审批检查的结果。
+默认使用目标资源的 Ready Condition 状态来表示审批结果
+
+- True: 审批通过
+- False: 审批失败或者拒绝，最终状态。
+- UnKnown: 进行中
+
+流水线 ApprovalTask 可配置 rego 表达式 返回 result= {status: "True|False|UnKnown"}
+
+``` json
+package check
+result = {
+  input.data.status.state
+}
+```
+
+当 配置了 rego 表达式时， 则使用 rego 表达式进行计算。
+
+#### 检查授权：授予的权限
+
+通过 `checkGrantedPermission.spec.permission` 配置授予的权限
+
+``` yaml
+spec:
+  checkGrantedPermission:
+    spec:
+      # permissions granted after check passed
+      permission:
+        ref: 
+          configmap:
+            name: connectors-use-connectors-apis-in-pod
+```
+
+**模板**
+
+``` yaml
+kind: ConfigMap
+apiVersion: v1
+metadata:
+  name: connectors-use-connectors-apis-in-pod
+  annotations:
+    cpaas.io/display-name: "Use Connectors APIs in Pipeline"
+data:
+  ruls: | 
+    - apiGroups:
+      - connectors.alauda.io
+      resources:
+      - connectors/apis/v1/pod/{.object.metadata.namespace}/{.object.metadata.name}
+      verbs:
+        - "*"
+```
+
+#### Status
+
+**status.conditions**
+
+- ConnectorsMatched: 表示 Connectors 的匹配状态, 匹配结果记录在 `status.matchedConnectors` 中
+  - True: 表示正常完成匹配
+  - False: 表示匹配失败，存在错误
+  - UnKnown: 表示匹配状态未知，正在匹配中.
+- PermissionSync: 
+  - True: 表示权限同步成功
+  - False: 表示权限同步失败，存在错误
+  - UnKnown: 表示权限同步状态未知，正在同步中.
+- Ready: Top Level Condition.
+
+**status.matchedConnectors**
+
+记录匹配的 Connectors，包含匹配成功的 Connector 名称。
+
+yaml 示例:
+
+``` yaml
+kind: AccessPolicy
+metadata:
+  name: default
+spec: {}
+status:
+  matchedConnectors: 
+    - name: prod-harbor
+    - name: prod-gitlab
+  conditions:
+    - type: Ready
+      status: "True"
+      reason: ""
+      message: ""
+```
+
+#### 创建 Connector 时默认的 AccessPolicy
+
+``` yaml
+kind: AccessPolicy
+metadata:
+  namespace: <connector-namespace>
+  generateName: <connector-name>-
+spec:
+  connector:
+    names: [ "<connector-name>" ]
+  defaultPermission:
+    roleTemplate:
+      ref:
+        configmap:
+          name: connectors-use-connectors-apis
+    bindingTemplate:
+      serviceAccounts:
+      # NS Connector 授权当前 NS 下的所有 SA
+      - names: []
+        namespaceSelector:
+          names: ["<connector-namespace>"]
+          
+      # Project Connector 授权当前 Project 下的 NS 的所有 SA
+      - names: []
+        namespaceSelector:
+          matchLabels:
+            cpaas.io/project: "<project-name>"
+            
+      # Cluster Connector 授权集群所有 SA
+      - names: []
+        namespaceSelector: {}
+```
 
 #### Controller 处理流程
 
@@ -348,34 +550,81 @@ metadata:
 spec: {}
 status:
   policies:
-  - policy:
-      kind: AccessPolicy
-      metadata:
-        name: connector-access-policy-001
-        namespace: "devops-ns1"
-      spec: {} # 记录当时匹配到的 AccessPolicy 的完整信息
-    checkRefs:
+  - name: connector-access-policy # access policy name
+    policySpec: {} # 记录当时匹配到的 AccessPolicy 的完整 spec
+    matchedChecks:
     - name: manual-approval-check
       ref:
         apiVersion: openshift-pipelines.org/v1alpha1
         kind: ApprovalTask
         name: manual-approval-check-001
         namespace: "" # Context Object 所在的 NS
-      status:
-        state: pending | approved | rejected
+      condition:
+        status: "True | False | Unknown" # 记录当前 Check 的 结果
+        message: ""
+    permissionSynced:
+      status: "True | False"
+      reason: Synced | SyncFailed | Pending
+      message: ""
 ```
 
 **Status Conditions**
 
+- `Type`: Ready
+  - Status: "True" | "False" | "Unknown"
+  - Reason: 由计算出该结果的子 Condition 透传而来（例如 Pending, Failed, Matched, NotFound, SyncFailed, Revoked 等）。
+  - 顶层 Condition，由 `knative/pkg/apis` 的 `LivingConditionSet` 自动计算得出。只有当所有必要的子 Condition 都为 True 时，Ready 才为 True。若有子 Condition 不为 True，Ready 将自动继承该子 Condition 的 Reason 和 Message。CSI Driver 只需要判断 `Ready == True` 即可。
 - `Type`: ContextObjectValid:
-  - Reason: UnCompleted | Completed | NotFound
-  - Pod 处于非结束状态时，status 为 True
+  - Status: 
+    - `True`： 上下文对象有效。
+    - `False`: 上下文对象已无效。例如 Pod Completed。
+    - `UnKnown`: 上下文对象状态未知，处于计算中。
+  - Reason: 
+    - `UnCompleted`: Pod 未完成， 上下文有效
+    - `Completed`: Pod 已完成。
+    - `NotFound`: Pod 未找到。
 - `Type`: AccessPolicyMatched:
-  - Reason: NoAccessPolicyMatched | AccessPolicyMatched
+  - Status: "True" | "False"
+  - Reason: Matched | NoMatched
+
 - `Type`: AccessCheckReady:
-  - Reason: AccessCheckFailed | AccessCheckPassed | AccessCheckPending | AccessCheckRejected
-- `Type`: AccessPermissionSync
-  - Reason: AccessPermissionSyncFailed | AccessPermissionGranted | AccessPermissionRevoked
+  - Status: "True" | "False" | "Unknown"
+  - Reason: Passed | Rejected | Pending | Failed
+  - Pending 状态下，status 应为 Unknown（等待审批），而不应是 False。只有明确被拒绝或检查出错时才为 False。
+  - 建议包含 `message` 以提升可观测性（如 "Waiting for ApprovalTask manual-approval-check to be approved"）。
+
+- `Type`: ConnectorResolved:
+  - Status: "True" | "False"
+  - Reason: Resolved | NotFound
+  - Resolved: 根据 `AccessRequest.spec.connectorRef` 成功在当前 Namespace 找到了对应的 Connector 资源。
+  - NotFound: Connector 不存在或已被删除。如果 Connector 被删除，这会导致 Ready 变为 False，进而触发后续可能的权限撤销。
+
+- `Type`: PermissionSynced
+  - Status:
+    - True: 权限已同步完成
+    - False: 同步执行失败
+    - Unknown: 同步中
+  - Reason: 
+    - Synced: 授予权限已成功同步。
+    - SyncFailed: 同步执行失败。
+    - NoPermissionRequired: 不需要同步权限，同步的内容为空
+    - Pending: 同步尚未完成。
+    - PermissionCleanUp: 已同步的权限被清理。
+- `Type`: Ready
+  - Status: "True" | "False" | "Unknown"
+  - Reason: 
+    - `Pending`: 同步尚未完成，Ready 状态为 Unknown。
+
+关键状态判断：
+
+- Pending （approval）:
+  - AccessCheckReady.status == "Unknown" 
+- Rejected:
+  - AccessCheckReady.status == "False" && AccessCheckReady.reason == "Rejected"
+- Passed 且授权完成：
+  - PermissionSynced.status == "True" && PermissionSynced.reason == "Synced"
+- 其他:
+  - 根据 Ready.status 和 Ready.reason， Hover 显示 message 
 
 示例：
 
@@ -383,18 +632,25 @@ status:
 kind: AccessRequest
 status:
   conditions:
+  - type: Ready 
+    status: "True | False | Unknown"
+    reason: Pending  # 示例：继承自未就绪的 AccessCheckReady 子条件
   - type: ContextObjectValid
     status: "True" | "False"
-    reason: UnCompleted | Completed | NotFound
+    reason: Active | Completed | NotFound
+  - type: ConnectorResolved
+    status: "True" | "False"
+    reason: Resolved | NotFound
+  - type: AccessPolicyMatched
+    reason: Matched | NoMatch
   - type: AccessCheckReady
+    status: "True" | "False" | "Unknown"
+    reason: Passed | Rejected | Pending | Failed
+    message: "Waiting for ApprovalTask manual-approval-check to be approved"
+  - type: PermissionSynced
     status: "True" | "False"
-    reason: AccessCheckFailed | AccessCheckPassed | AccessCheckPending | AccessCheckRejected
-  - type: AccessPermissionSync
-    status: "True" | "False"
-    reason: AccessPermissionSyncFailed | AccessPermissionGranted | AccessPermissionRevoked
+    reason: Synced | SyncFailed | Revoked
 ```
-
-#### Controller
 
 主要 **处理流程**:
 
@@ -574,21 +830,9 @@ context object 是从 当前 Pod 向上查找 Owner 来动态获取
 
 ### Check Duck Type
 
-`Check Duck Type` 代表满足审批检查的资源类型， 例如 ApprovalTask 和 ApprovalRequest。
+`Check Duck Type` 代表代表审批检查的资源类型， 例如 ApprovalTask 和 ApprovalRequest。
 
-#### 满足的数据结构如下
-
-``` yaml
-status:
-  state: rejected | approved | pending | passed | ""
-```
-
-**state**
-
-- rejected: 拒绝，进入检查最终状态，不再进行审批检查。
-- approved|passed: 通过，进入最终状态，不再进行审批检查。
-- pending: 进入审批流程，等待审批结果。
-- 允许为空: 等同于 pending
+默认使用 Ready Condition 来判断资源是否就绪， 也可以通过 Rego 来动态配置状态的计算方式。 参考上文 Check State 的计算。
 
 ## 扩展性
 
