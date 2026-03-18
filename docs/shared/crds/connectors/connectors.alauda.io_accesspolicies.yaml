@@ -1,0 +1,469 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    cert-manager.io/inject-ca-from: connectors-system/connectors-serving-cert
+    controller-gen.kubebuilder.io/version: v0.18.0
+  labels:
+    group: connectors.alauda.io
+  name: accesspolicies.connectors.alauda.io
+spec:
+  group: connectors.alauda.io
+  names:
+    categories:
+      - alauda
+    kind: AccessPolicy
+    listKind: AccessPolicyList
+    plural: accesspolicies
+    singular: accesspolicy
+  scope: Namespaced
+  versions:
+    - additionalPrinterColumns:
+        - jsonPath: .metadata.creationTimestamp
+          name: Age
+          type: date
+      name: v1alpha1
+      schema:
+        openAPIV3Schema:
+          description: |-
+            AccessPolicy defines the access strategy for Connectors in a namespace.
+            It specifies which Connectors are covered and what permissions are granted,
+            either automatically (defaultPermission) or after approval checks pass (checkGrantedPermission).
+          properties:
+            apiVersion:
+              description: |-
+                APIVersion defines the versioned schema of this representation of an object.
+                Servers should convert recognized schemas to the latest internal value, and
+                may reject unrecognized values.
+                More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+              type: string
+            kind:
+              description: |-
+                Kind is a string value representing the REST resource this object represents.
+                Servers may infer this from the endpoint the client submits requests to.
+                Cannot be updated.
+                In CamelCase.
+                More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+              type: string
+            metadata:
+              type: object
+            spec:
+              description: AccessPolicySpec defines the desired state of AccessPolicy.
+              properties:
+                checkGrantedPermission:
+                  description: |-
+                    CheckGrantedPermission defines permissions granted only after
+                    approval checks pass.
+                  properties:
+                    spec:
+                      description: Spec contains the check rules and the permissions to grant after all checks pass.
+                      properties:
+                        checks:
+                          description: Checks is the list of approval check rules.
+                          items:
+                            description: |-
+                              CheckRule defines a check rule that must pass for a permission to be granted.
+                              it contains either a reference to a CheckRuleSpec stored in a ConfigMap or the CheckRuleSpec itself.
+                              you can specify either Ref or Spec, but not both.
+                            properties:
+                              name:
+                                description: Name is the identifier of this check rule, referenced in AccessRequest status.
+                                type: string
+                              ref:
+                                description: Ref is a reference to a CheckRuleSpec stored in a ConfigMap.
+                                properties:
+                                  configMap:
+                                    description: ConfigMap references the ConfigMap containing the CheckRuleSpec.
+                                    properties:
+                                      name:
+                                        default: ""
+                                        description: |-
+                                          Name of the referent.
+                                          This field is effectively required, but due to backwards compatibility is
+                                          allowed to be empty. Instances of this type with an empty value here are
+                                          almost certainly wrong.
+                                          More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                        type: string
+                                    type: object
+                                    x-kubernetes-map-type: atomic
+                                required:
+                                  - configMap
+                                type: object
+                              spec:
+                                description: Spec contains the check rule specification.
+                                properties:
+                                  selector:
+                                    description: Selector specifies how to find the Check Duck Type resource.
+                                    properties:
+                                      matchExpressions:
+                                        description: matchExpressions is a list of label selector requirements. The requirements are ANDed.
+                                        items:
+                                          description: |-
+                                            A label selector requirement is a selector that contains values, a key, and an operator that
+                                            relates the key and values.
+                                          properties:
+                                            key:
+                                              description: key is the label key that the selector applies to.
+                                              type: string
+                                            operator:
+                                              description: |-
+                                                operator represents a key's relationship to a set of values.
+                                                Valid operators are In, NotIn, Exists and DoesNotExist.
+                                              type: string
+                                            values:
+                                              description: |-
+                                                values is an array of string values. If the operator is In or NotIn,
+                                                the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                                the values array must be empty. This array is replaced during a strategic
+                                                merge patch.
+                                              items:
+                                                type: string
+                                              type: array
+                                              x-kubernetes-list-type: atomic
+                                          required:
+                                            - key
+                                            - operator
+                                          type: object
+                                        type: array
+                                        x-kubernetes-list-type: atomic
+                                      matchLabels:
+                                        additionalProperties:
+                                          type: string
+                                        description: |-
+                                          matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                                          map is equivalent to an element of matchExpressions, whose key field is "key", the
+                                          operator is "In", and the values array contains only "value". The requirements are ANDed.
+                                        type: object
+                                      objectRef:
+                                        description: |-
+                                          ObjectRef specifies the reference to the object to check against.
+                                          kind and apiVersion are required to distinguish different duck types
+                                        properties:
+                                          apiVersion:
+                                            description: API version of the referent.
+                                            type: string
+                                          fieldPath:
+                                            description: |-
+                                              If referring to a piece of an object instead of an entire object, this string
+                                              should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
+                                              For example, if the object reference is to a container within a pod, this would take on a value like:
+                                              "spec.containers{name}" (where "name" refers to the name of the container that triggered
+                                              the event) or if no container name is specified "spec.containers[2]" (container with
+                                              index 2 in this pod). This syntax is chosen only to have some well-defined way of
+                                              referencing a part of an object.
+                                            type: string
+                                          kind:
+                                            description: |-
+                                              Kind of the referent.
+                                              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+                                            type: string
+                                          name:
+                                            description: |-
+                                              Name of the referent.
+                                              More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                            type: string
+                                          namespace:
+                                            description: |-
+                                              Namespace of the referent.
+                                              More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/
+                                            type: string
+                                          resourceVersion:
+                                            description: |-
+                                              Specific resourceVersion to which this reference is made, if any.
+                                              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#concurrency-control-and-consistency
+                                            type: string
+                                          uid:
+                                            description: |-
+                                              UID of the referent.
+                                              More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#uids
+                                            type: string
+                                        type: object
+                                        x-kubernetes-map-type: atomic
+                                    required:
+                                      - objectRef
+                                    type: object
+                                    x-kubernetes-map-type: atomic
+                                  state:
+                                    description: |-
+                                      State configures how the check result is computed.
+                                      If empty, the default duck-type field status.state is used.
+                                    properties:
+                                      rego:
+                                        description: |-
+                                          Rego is an OPA Rego script (package "approval") that receives the full
+                                          check resource as input and must output status = {"state": "approved|rejected|pending|passed"}.
+                                          If empty, the default duck-type field status.state is used.
+                                        type: string
+                                    type: object
+                                required:
+                                  - selector
+                                type: object
+                            required:
+                              - name
+                            type: object
+                          minItems: 1
+                          type: array
+                        roleTemplate:
+                          description: RoleTemplate defines the rules for the generated Role.
+                          properties:
+                            ref:
+                              description: Ref specifies a reference to a RoleTemplate
+                              properties:
+                                configMap:
+                                  description: |-
+                                    ConfigMap specifies a local reference to a ConfigMap whose data["rules"] contains
+                                    the YAML-encoded list of rbacv1.PolicyRule entries.
+                                    Only ConfigMaps in the connectors system namespace are supported.
+                                  properties:
+                                    name:
+                                      default: ""
+                                      description: |-
+                                        Name of the referent.
+                                        This field is effectively required, but due to backwards compatibility is
+                                        allowed to be empty. Instances of this type with an empty value here are
+                                        almost certainly wrong.
+                                        More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                      type: string
+                                  type: object
+                                  x-kubernetes-map-type: atomic
+                              type: object
+                          type: object
+                      required:
+                        - checks
+                        - roleTemplate
+                      type: object
+                  required:
+                    - spec
+                  type: object
+                connector:
+                  description: |-
+                    Connector specifies which Connectors this policy applies to.
+                    If empty, the policy applies to all Connectors in the namespace.
+                  properties:
+                    matchExpressions:
+                      description: matchExpressions is a list of label selector requirements. The requirements are ANDed.
+                      items:
+                        description: |-
+                          A label selector requirement is a selector that contains values, a key, and an operator that
+                          relates the key and values.
+                        properties:
+                          key:
+                            description: key is the label key that the selector applies to.
+                            type: string
+                          operator:
+                            description: |-
+                              operator represents a key's relationship to a set of values.
+                              Valid operators are In, NotIn, Exists and DoesNotExist.
+                            type: string
+                          values:
+                            description: |-
+                              values is an array of string values. If the operator is In or NotIn,
+                              the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                              the values array must be empty. This array is replaced during a strategic
+                              merge patch.
+                            items:
+                              type: string
+                            type: array
+                            x-kubernetes-list-type: atomic
+                        required:
+                          - key
+                          - operator
+                        type: object
+                      type: array
+                      x-kubernetes-list-type: atomic
+                    matchLabels:
+                      additionalProperties:
+                        type: string
+                      description: |-
+                        matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                        map is equivalent to an element of matchExpressions, whose key field is "key", the
+                        operator is "In", and the values array contains only "value". The requirements are ANDed.
+                      type: object
+                    names:
+                      description: Names is an explicit list of resource names to match.
+                      items:
+                        type: string
+                      type: array
+                  type: object
+                  x-kubernetes-map-type: atomic
+                defaultPermission:
+                  description: |-
+                    DefaultPermission defines the Role and RoleBinding automatically granted
+                    without any approval check.
+                  properties:
+                    bindingTemplate:
+                      description: BindingTemplate defines the subjects for the generated RoleBinding.
+                      properties:
+                        serviceAccounts:
+                          description: ServiceAccounts is the list of service account templates to bind.
+                          items:
+                            description: |-
+                              ServiceAccountTemplate defines a template for binding ServiceAccounts.
+                              it extends rbacv1.Subject with dynamic label-based selectors.
+                            properties:
+                              names:
+                                description: Names is the list of service account names to bind.
+                                items:
+                                  type: string
+                                type: array
+                              namespaceSelector:
+                                description: NamespaceSelector selects Namespaces by label and/or name.
+                                properties:
+                                  matchExpressions:
+                                    description: matchExpressions is a list of label selector requirements. The requirements are ANDed.
+                                    items:
+                                      description: |-
+                                        A label selector requirement is a selector that contains values, a key, and an operator that
+                                        relates the key and values.
+                                      properties:
+                                        key:
+                                          description: key is the label key that the selector applies to.
+                                          type: string
+                                        operator:
+                                          description: |-
+                                            operator represents a key's relationship to a set of values.
+                                            Valid operators are In, NotIn, Exists and DoesNotExist.
+                                          type: string
+                                        values:
+                                          description: |-
+                                            values is an array of string values. If the operator is In or NotIn,
+                                            the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                            the values array must be empty. This array is replaced during a strategic
+                                            merge patch.
+                                          items:
+                                            type: string
+                                          type: array
+                                          x-kubernetes-list-type: atomic
+                                      required:
+                                        - key
+                                        - operator
+                                      type: object
+                                    type: array
+                                    x-kubernetes-list-type: atomic
+                                  matchLabels:
+                                    additionalProperties:
+                                      type: string
+                                    description: |-
+                                      matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                                      map is equivalent to an element of matchExpressions, whose key field is "key", the
+                                      operator is "In", and the values array contains only "value". The requirements are ANDed.
+                                    type: object
+                                  names:
+                                    description: Names is an explicit list of resource names to match.
+                                    items:
+                                      type: string
+                                    type: array
+                                type: object
+                                x-kubernetes-map-type: atomic
+                            type: object
+                          type: array
+                      type: object
+                    roleTemplate:
+                      description: RoleTemplate defines the rules to include in the generated Role.
+                      properties:
+                        ref:
+                          description: Ref specifies a reference to a RoleTemplate
+                          properties:
+                            configMap:
+                              description: |-
+                                ConfigMap specifies a local reference to a ConfigMap whose data["rules"] contains
+                                the YAML-encoded list of rbacv1.PolicyRule entries.
+                                Only ConfigMaps in the connectors system namespace are supported.
+                              properties:
+                                name:
+                                  default: ""
+                                  description: |-
+                                    Name of the referent.
+                                    This field is effectively required, but due to backwards compatibility is
+                                    allowed to be empty. Instances of this type with an empty value here are
+                                    almost certainly wrong.
+                                    More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                  type: string
+                              type: object
+                              x-kubernetes-map-type: atomic
+                          type: object
+                      type: object
+                  required:
+                    - bindingTemplate
+                    - roleTemplate
+                  type: object
+              type: object
+            status:
+              description: AccessPolicyStatus defines the observed state of AccessPolicy.
+              properties:
+                annotations:
+                  additionalProperties:
+                    type: string
+                  description: |-
+                    Annotations is additional Status fields for the Resource to save some
+                    additional State as well as convey more information to the user. This is
+                    roughly akin to Annotations on any k8s resource, just the reconciler conveying
+                    richer information outwards.
+                  type: object
+                conditions:
+                  description: Conditions the latest available observations of a resource's current state.
+                  items:
+                    description: |-
+                      Condition defines a readiness condition for a Knative resource.
+                      See: https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#typical-status-properties
+                    properties:
+                      lastTransitionTime:
+                        description: |-
+                          LastTransitionTime is the last time the condition transitioned from one status to another.
+                          We use VolatileTime in place of metav1.Time to exclude this from creating equality.Semantic
+                          differences (all other things held constant).
+                        type: string
+                      message:
+                        description: A human readable message indicating details about the transition.
+                        type: string
+                      reason:
+                        description: The reason for the condition's last transition.
+                        type: string
+                      severity:
+                        description: |-
+                          Severity with which to treat failures of this type of condition.
+                          When this is not specified, it defaults to Error.
+                        type: string
+                      status:
+                        description: Status of the condition, one of True, False, Unknown.
+                        type: string
+                      type:
+                        description: Type of condition.
+                        type: string
+                    required:
+                      - status
+                      - type
+                    type: object
+                  type: array
+                matchedConnectors:
+                  description: MatchedConnectors records the Connector names matched by spec.connector.
+                  items:
+                    description: |-
+                      LocalObjectReference contains enough information to let you locate the
+                      referenced object inside the same namespace.
+                    properties:
+                      name:
+                        default: ""
+                        description: |-
+                          Name of the referent.
+                          This field is effectively required, but due to backwards compatibility is
+                          allowed to be empty. Instances of this type with an empty value here are
+                          almost certainly wrong.
+                          More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                        type: string
+                    type: object
+                    x-kubernetes-map-type: atomic
+                  type: array
+                observedGeneration:
+                  description: |-
+                    ObservedGeneration is the 'Generation' of the Service that
+                    was last processed by the controller.
+                  format: int64
+                  type: integer
+              type: object
+          type: object
+      served: true
+      storage: true
+      subresources:
+        status: {}
+
