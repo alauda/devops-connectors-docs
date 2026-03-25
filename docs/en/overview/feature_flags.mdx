@@ -1,0 +1,125 @@
+---
+weight: 45
+title: Feature Flags
+---
+
+# Feature Flags
+
+Connectors uses feature flags to control optional or gradually introduced capabilities. The flags are stored in the `connectors-config` ConfigMap created by the `ConnectorsCore` component.
+
+This page describes the feature flags currently defined for the `ConnectorsCore` component.
+
+## Where Feature Flags Are Stored
+
+The `ConnectorsCore` component creates a `connectors-config` ConfigMap in the namespace where the component is installed. The default namespace is `connectors-system`.
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: connectors-config
+  namespace: connectors-system # example namespace
+data:
+  enable-connector-apis-permissions: "false"
+  enable-connector-proxy-permissions: "false"
+  enable-connectors-approval: "false"
+  enable-multi-connector: "false"
+```
+
+All values are string booleans (`"true"` or `"false"`). Because the flags are stored in one shared ConfigMap, they apply to the current Connectors installation rather than to a single Connector.
+
+## View Current Feature Flags
+
+You can inspect the ConfigMap directly:
+
+```bash
+kubectl -n <connectors-namespace> get configmap connectors-config -o yaml
+```
+
+You can also query the Connectors Operator API:
+
+```bash
+curl -H "Authorization: Bearer ${K8S_TOKEN}" \
+  "https://platform.example.com/clusters-rewrite/${CLUSTER_NAME}/connectors-operator/featureflags"
+```
+
+This API requires permission to access `ConnectorClass`. For the endpoint details, see [Connector API](../connectors/concepts/connector_api.mdx#connectors-operator-api).
+
+## Update a Feature Flag
+
+To enable a feature, patch the `connectors-config` ConfigMap and set the corresponding value to `"true"`.
+
+Example:
+
+```bash
+kubectl -n <connectors-namespace> patch configmap connectors-config \
+  --type merge \
+  -p '{"metadata":{"annotations":{"skip-sync":"true"}},"data":{"enable-multi-connector":"true"}}'
+```
+
+The `skip-sync: "true"` annotation prevents `connectors-operator` from reverting the manual ConfigMap change during reconciliation.
+
+## Built-in Feature Flags
+
+| Flag | Default | Description |
+| ---- | ------- | ----------- |
+| `enable-connector-apis-permissions` | `"false"` | Enables permission checks for access to tool APIs exposed through the Connectors API. |
+| `enable-connector-proxy-permissions` | `"false"` | Enables permission control for traffic handled through Connectors Proxy. |
+| `enable-connectors-approval` | `"false"` | Enables the Connectors approval workflow for gated access to Connectors Proxy. This flag should be enabled together with `enable-connector-proxy-permissions`. |
+| `enable-multi-connector` | `"false"` | Enables mounting and rendering configuration for multiple Connectors in a single CSI volume. |
+
+## Feature Flag Details
+
+### `enable-connector-apis-permissions`
+
+When this flag is enabled, the system applies RBAC-based permission checks to access performed through the Connectors API. This separates the permission to read a `Connector` resource from the permission to use that Connector to access the target tool API.
+
+This capability is useful when you want users or workloads to discover Connectors but still control whether they can perform read or write operations against the integrated tool.
+
+Related reading:
+
+- [Connector API](../connectors/concepts/connector_api.mdx)
+- [Connector Resource Levels and Permissions](../connectors/concepts/connector_scope_permissions.mdx)
+
+### `enable-connector-proxy-permissions`
+
+When this flag is enabled, permission control is applied to requests handled through `Connectors Proxy`. This is relevant when workloads or tools access external systems through proxy-based secretless connectivity.
+
+Use this flag when proxy access itself must be governed by platform permissions. This flag is also required when `enable-connectors-approval` is enabled, because the approval feature protects the use of `Connectors Proxy`.
+
+Related reading:
+
+- [Connectors Proxy](../connectors/concepts/connectors_proxy.mdx)
+- [Connectors CSI Driver](../connectors/concepts/connectors_csi.mdx)
+- [Release Notes](./release_notes.mdx)
+
+### `enable-connectors-approval`
+
+When this flag is enabled, Connectors can participate in approval-gated access workflows for `Connectors Proxy`. This feature is intended to protect proxy-based connector usage, especially when workloads access external tools through proxy endpoints.
+
+Enable `enable-connector-proxy-permissions` together with this flag. Without proxy permission control, the approval feature cannot protect the target proxy usage path.
+
+This feature is designed for scenarios such as production artifact promotion, deployment to protected clusters, or any environment where proxy-based connector usage must be approved before access is granted.
+
+Related reading:
+
+- [Connectors Proxy](../connectors/concepts/connectors_proxy.mdx)
+- [Connectors CSI Driver](../connectors/concepts/connectors_csi.mdx)
+
+### `enable-multi-connector`
+
+When this flag is enabled, the Connectors CSI Driver can mount configuration rendered from multiple Connectors in a single volume. This allows one workload to consume multiple tool integrations together, and the driver merges rendered configuration according to the configured `configuration.names`.
+
+This is useful for workflows such as a Tekton task that needs one Connector for reading dependencies and another Connector for publishing artifacts.
+
+Related reading:
+
+- [Multiple Connectors in Connectors CSI](../connectors/concepts/connectors_csi.mdx#multiple-connectors)
+- [Using Maven Connector in Tekton Task](../connectors-maven/how_to/using-in-tekton-task.mdx)
+
+## Next Steps
+
+- [Connector API](../connectors/concepts/connector_api.mdx)
+- [Connectors Proxy](../connectors/concepts/connectors_proxy.mdx)
+- [Connectors CSI Driver](../connectors/concepts/connectors_csi.mdx)
+- [Feature Maturity](./feature_maturity.mdx)
