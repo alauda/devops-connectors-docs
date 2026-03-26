@@ -24,6 +24,34 @@ The following table shows the compatibility and support matrix between the Alaud
 | v1.6.0 (LTS)                              | v4.2, v4.1, v4.0 |
 | v1.4.0                                    | v4.1, v4.0       |
 
+## v1.10.0 （WIP）
+
+### Features and Enhancements
+
+- Support permission control for Connectors Proxy capabilities via AccessPolicy.
+- The permission validation model for the Connectors API and Proxy has been updated. 
+  - When calling the Connectors API, the user must have the connectors/apis permission. 
+  - When calling the Connectors Proxy, the user must have the connectors/proxy permission.
+- Add `ca.crt` to the Connectors-CSI built-in configuration as a replacement for `ca.cert`.
+
+**Deprecation Notice**
+
+- `ca.cert` will be deprecated soon in the Connectors-CSI built-in configuration. Please use `ca.crt` instead. For more details, see: [Connectors CSI Built-In Configurations](../connectors/concepts/connectors_csi.mdx#built-in-configurations)
+
+**Security updates**
+
+Updated base images, dependencies, and resolved security vulnerabilities
+
+### Breaking Changes
+
+### Fixed Issues
+
+{/* release-notes-for-bugs?template=fixed&project=DEVOPS&version=v1.10.0 */}
+
+### Known Issues
+  
+{/* release-notes-for-bugs?template=unfixed&project=DEVOPS&version=v1.10.0 */}
+
 ## v1.9.0
 
 ### Features and Enhancements

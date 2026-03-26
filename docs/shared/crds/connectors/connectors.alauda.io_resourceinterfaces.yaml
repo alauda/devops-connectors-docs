@@ -121,9 +121,22 @@ spec:
                     type: object
                   type: array
                 configurations:
-                  additionalProperties:
-                    type: string
-                  description: Configurations defines the additional configuration for this ResourceInterface, which will be passed to the PipelineIntegration instance as annotations.
+                  description: |-
+                    Configuration defines the additional configuration for this ResourceInterface, which will be passed to the PipelineIntegration instance as annotations.
+                    Each key maps to a configuration entry containing a value and optional metadata.
+                  properties:
+                    multipleMergeConnectors:
+                      description: |-
+                        MultipleMergeConnectors defines the configuration for enabling multiple connectors merge in PipelineIntegration.
+                        When this configuration is enabled, multiple connectors will be merged when creating PipelineIntegration.
+                      properties:
+                        description:
+                          description: Description provides a human-readable description of this configuration entry.
+                          type: string
+                        enabled:
+                          description: Enabled indicates whether this configuration is enabled.
+                          type: boolean
+                      type: object
                   type: object
                 params:
                   description: |-

@@ -110,7 +110,8 @@ The CSI Driver automatically provides built-in configuration files that are alwa
 | `context.token`                  | Authentication token for the proxy service                                  |
 | `context.proxy.caCert`           | CA certificate for the Connectors proxy                                     |
 | `connector.status.proxyAddress`  | Proxy address (see [Connectors Proxy](./connectors_proxy.mdx)). <br></br> If multiple Connectors are present, the proxy information from the last ConnectorClass will be used. |
-| `ca.cert`                        | CA certificate for the Connectors proxy, same as `context.proxy.caCert`     |
+| `ca.cert`                        | CA certificate for the Connectors proxy, same as `context.proxy.caCert`, it will be deprecated soon; use `ca.crt` instead.   |
+| `ca.crt`                         | CA certificate for the Connectors proxy, same as `context.proxy.caCert`     |
 
 **Forward Proxy Usage:**
 

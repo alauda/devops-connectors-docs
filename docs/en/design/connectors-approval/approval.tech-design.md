@@ -30,8 +30,8 @@ spec:
   defaultPermission:
     roleTemplate:
       ref:
-        configmap:
-          name: connectors-use-connectors-apis # ns 为 当前 connectors 组件部署的 namespace
+        configMap:
+          name: connectors-use-connectors-proxy # ns 为 当前 connectors 组件部署的 namespace
     bindingTemplate:
       serviceAccounts:
       - names: [""]   # 匹配一个或者多个 SA Name. 空字符串表示匹配所有 SA
@@ -47,7 +47,7 @@ spec:
       - name: manual-approval-check
         # which check objects can be used
         ref: 
-          configmap:
+          configMap:
             name: connectors-approvals-in-pipeline # 当前 connectors 安装的命名空间
         spec: # spec 和 ref 二选一。 增加验证。
           selector:
@@ -64,8 +64,8 @@ spec:
       permission:
         roleTemplate:
           ref:
-            configmap:
-              name: connectors-use-connectors-apis-in-pod # ns 为 当前 connectors 安装的命名空间
+            configMap:
+              name: connectors-use-connectors-proxy-in-pod # ns 为 当前 connectors 安装的命名空间
 status:
   matchedConnectors: # 匹配的 Connectors
     - name: prod-harbor
@@ -107,13 +107,15 @@ spec:
 -  通过 roleTemplate.ref 指定权限内容
 -  ref 指向的 configmap 保存具体的权限内容
 
+例如:
+
 ``` yaml
 spec:
   defaultPermission:
     roleTemplate:
       ref:
-        configmap:
-          name: connectors-use-connectors-apis
+        configMap:
+          name: connectors-use-connectors-proxy
 ```
 
 **内置默认权限模板**
@@ -121,7 +123,7 @@ spec:
 ``` yaml
 kind: ConfigMap
 metadata:
-  name: connectors-use-connectors-apis
+  name: connectors-use-connectors-proxy
   namespace: connectors-system
   annotations:
     cpaas.io/display-name: "Use Connectors APIs"
@@ -130,19 +132,21 @@ data:
     - apiGroups:
       - connectors.alauda.io
       resources:
-      - connectors/apis
+      - connectors/proxy
       verbs:
         - "*"
 ```
 
 #### 默认权限 - 授权对象
 
-授权对象为 ServiceAccount, 赋予 Connector 的指定 subresource 的若干 verb 权限。
+授权对象为 ServiceAccount, 赋予 Connector 的指定 subresource 的权限。
 
 例如:
-  - 授权 NS SA 能够访问当前 NS 的 connectors/apis subresources 的 read 权限。 (NS Connector)
-  - 授权 Project 下 所有NS 的 SA 能够访问当前 Project 的 connectors/apis subresources 的 read 权限。 (Project Connector)
-  - 授权集群 所有 NS， 均能访问当前集群级别 connector 的 connectors/apis 权限
+  - 授权 NS SA 能够访问当前 NS 的 connectors/proxy subresources 权限。 (NS Connector)
+  - 授权 Project 下 所有NS 的 SA 能够访问当前 Project 的 connectors/proxy subresources 的 权限。 (Project Connector)
+  - 授权集群 所有 NS， 均能访问当前集群级别 connector 的 connectors/proxy 权限
+
+例如:
 
 ``` yaml
 bindingTemplate:
@@ -248,6 +252,8 @@ namespaceSelector 为空，names 为空，展开为 所有 ns 的 sa group
 - NS Admin 授权另外一个 NS 的 SA 访问当前 NS 的 Connector APIs
 - Project Admin 授权 另外一个 Project 下的 NS 的 SA 访问当前 Project 的 Connectors APIs
 
+例如:
+
 ``` bash
 kubectl auth can-i --as=system:serviceaccount:<目标NS>:default --as-group=system:serviceaccounts:<目标NS> get connectors -n <当前NS>
 ```
@@ -276,7 +282,7 @@ kubectl auth can-i --as=system:serviceaccount:<目标NS>:default --as-group=syst
 
 #### 审批检查匹配规则结果计算
 
-定义审批检查的匹配规则，匹配到的审批检查任务是通过状态后，授予目标 Connector connectors/apis 的特定 verb 权限。
+定义审批检查的匹配规则，匹配到的审批检查任务是通过状态后，授予目标 Connector connectors/proxy 的特定 verb 权限。
 
 ``` yaml
 apiVersion: connectors.alauda.io/v1alpha1
@@ -295,7 +301,7 @@ spec:
       - name: manual-approval-check
         # which check objects can be used
         ref:
-          configmap:
+          configMap:
             name: connectors-approvals-in-pipeline
         spec: # ref 和 spec 二选一
           selector:
@@ -393,8 +399,8 @@ spec:
       # permissions granted after check passed
       permission:
         ref: 
-          configmap:
-            name: connectors-use-connectors-apis-in-pod
+          configMap:
+            name: connectors-use-connectors-proxy-in-pod
 ```
 
 **模板**
@@ -403,7 +409,7 @@ spec:
 kind: ConfigMap
 apiVersion: v1
 metadata:
-  name: connectors-use-connectors-apis-in-pod
+  name: connectors-use-connectors-proxy-in-pod
   annotations:
     cpaas.io/display-name: "Use Connectors APIs in Pipeline"
 data:
@@ -411,7 +417,7 @@ data:
     - apiGroups:
       - connectors.alauda.io
       resources:
-      - connectors/apis/v1/pod/{.object.metadata.namespace}/{.object.metadata.name}
+      - connectors/proxy/v1/pod/{.object.metadata.namespace}/{.object.metadata.name}
       verbs:
         - "*"
 ```
@@ -465,8 +471,8 @@ spec:
   defaultPermission:
     roleTemplate:
       ref:
-        configmap:
-          name: connectors-use-connectors-apis
+        configMap:
+          name: connectors-use-connectors-proxy
     bindingTemplate:
       serviceAccounts:
       # NS Connector 授权当前 NS 下的所有 SA
@@ -708,7 +714,7 @@ rules:
 - apiGroups:
   - connectors.alauda.io
   resources:
-  - connectors/apis/v1/pod/devops-ns1/deploy-prod-xxx # 关联 context Object 进行授权范围的限制
+  - connectors/proxy/v1/pod/devops-ns1/deploy-prod-xxx # 关联 context Object 进行授权范围的限制
   resourceNames: [ "prod-harbor" ] # 关联当前 Connector 的 Name
   verbs:
   - "*"
@@ -752,7 +758,7 @@ roleRef: # 创建的 Role
 **处理流程**
 
 - 遍历挂载的目标 Connector
-- 判断是否具备 connectors/apis subresources 的 "*" 权限
+- 判断是否具备 connectors/proxy subresources 的 "*" 权限
 - 如果满足权限, 则正常挂载
 - 如果不满足权限要求，则匹配或创建 AccessRequest。
 - 已有 AccessRequest
@@ -771,7 +777,7 @@ spec:
     namespace: devops-ns1 # 访问的目标connector
     verb: "*"
     group: connectors.alauda.io
-    resource: connectors/apis/v1/pod/devops-ns1/deploy-prod-xxx # 关联 context Object 进行授权范围的限制, ns 为 pod 的 ns
+    resource: connectors/proxy/v1/pod/devops-ns1/deploy-prod-xxx # 关联 context Object 进行授权范围的限制, ns 为 pod 的 ns
     name: prod-harbor # 关联当前 Connector 的 Name
   user: system:serviceaccount:devops-ns1:pipeline-sa # 当前 pod 的 sa
 ```
@@ -820,13 +826,13 @@ spec:
 
 context object 是从 当前 Pod 向上查找 Owner 来动态获取
 
-- resources: `connectors/apis/{context-object-apiVersion}/{context-object-kind}/{context-object-namespace}/{context-object-name}`
+- resources: `connectors/proxy/{context-object-apiVersion}/{context-object-kind}/{context-object-namespace}/{context-object-name}`
 
 **现在**
 
 直接获取当前 Pod 信息，作为 Context Object，进行权限校验。
 
-- resources: `connectors/apis/v1/pod/{.object.pod.metadata.namespace}/{.object.pod.metadata.name}`
+- resources: `connectors/proxy/v1/pod/{.object.pod.metadata.namespace}/{.object.pod.metadata.name}`
 
 ### Check Duck Type
 
