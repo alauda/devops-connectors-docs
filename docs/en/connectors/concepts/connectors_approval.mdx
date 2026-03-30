@@ -1,0 +1,168 @@
+---
+created: '2026-03-26'
+title: Connectors Approval & Permission Gating
+weight: 60
+---
+
+# Connectors Approval & Permission Gating
+
+## Overview
+
+`Connectors Approval & Permission Gating` protects the moment a workload actually uses a Connector, especially when access goes through `Connectors Proxy`. It adds policy-based checks and temporary permission grants on top of the normal Connector permission model.
+
+This capability is useful when a team should be able to discover a Connector, but a sensitive operation such as promotion to a production registry must wait for approval.
+
+The feature depends on both `enable-connectors-approval` and `enable-connector-proxy-permissions`. For flag details, see [Feature Flags](../../overview/feature_flags.mdx).
+
+If these feature flags are not enabled together, the approval-specific flow is not active.
+
+- If `enable-connector-proxy-permissions` is disabled, the system does not apply the proxy capability permission layer, so approval cannot gate proxy usage.
+- If `enable-connectors-approval` is disabled, the system does not create or evaluate the approval-specific runtime flow.
+
+In that case, workloads use the normal Connector access model instead of approval-gated proxy access.
+
+:::info
+Read this document after [Connectors Permission Model](./permission_model.mdx).
+
+This document explains the capability at the system level:
+
+- why approval is added on top of proxy access
+- how `AccessPolicy` and `AccessRequest` work together
+- what a typical approval-gated runtime flow looks like
+
+For resource-level details, continue with [AccessPolicy](./access_policy.mdx) and then [AccessRequest](./access_request.mdx).
+:::
+
+## Where It Fits in the Permission Model
+
+This feature does not replace the normal Connector visibility and scope rules described in [Connector Resource Levels and Permissions](./connector_scope_permissions.mdx). Instead, it adds an extra gate around runtime use.
+
+In practice, that means two things can be true at the same time:
+
+- A user can read a Connector, or use limited APIs that are already allowed by the normal permission model through `Connectors API`
+- The same workload can still be blocked from using the Connector through `Connectors Proxy` until approval checks pass.
+
+This separation is useful when browsing or selecting a Connector is acceptable, but performing the real operation behind that Connector should be controlled more strictly.
+
+## The Two Core Resources
+
+| Resource | Role in the flow |
+| --- | --- |
+| `AccessPolicy` | A long-lived rule that defines which Connectors are covered, what access is granted by default, and what access requires checks. |
+| `AccessRequest` | A runtime record for one workload's attempt to use one Connector, including matched policies, check results, and temporary permission status. |
+
+`AccessPolicy` answers "what approval and permission rule should apply here?"
+
+`AccessRequest` answers "can this workload use the Connector right now?"
+
+This separation is intentional:
+
+- stay in this document if you want the overall capability and the end-to-end flow
+- continue to [AccessPolicy](./access_policy.mdx) if you need to design the long-lived rule
+- continue to [AccessRequest](./access_request.mdx) if you need to inspect one runtime request or troubleshoot status
+
+## Understanding the Access Model
+
+In this capability, administrators define the access model in `AccessPolicy`, and the system evaluates each runtime use through `AccessRequest`.
+
+At a high level, there are two common ways to allow workloads to use a Connector through `Connectors Proxy`:
+
+- `defaultPermission`: matched workloads can use the Connector immediately
+- `checkGrantedPermission`: matched workloads can use the Connector only after the required checks pass
+
+This means the same Connector capability can be used in different ways depending on the risk level:
+
+- for a shared internal tool, an administrator may grant `defaultPermission` so approved namespaces or ServiceAccounts can use it directly
+- for a production registry or production cluster, an administrator can require checks before the workload is allowed to use the Connector
+
+At runtime, a workload usually reaches the target tool by mounting Connector configuration through the [Connectors CSI Driver](./connectors_csi.mdx) and then calling the Connector's proxy endpoint. If the matched policy requires approval, the system keeps the workload pending until the checks pass and then grants temporary proxy permission for that workload.
+
+## What Is Actually Gated
+
+This feature is designed to gate `Connectors Proxy` usage rather than the ability to read the `Connector` object itself.
+
+That distinction matters because proxy access is usually the point where the system injects tool credentials or allows sensitive operations against the target system.
+
+Typical examples include:
+
+- deploying workload to a protected k8s cluster
+- promoting an artifact to production registry
+- running a workload that should use a shared Connector only after a check passes
+
+The granted permission is scoped to the specific workload context, which reduces credential reuse risk compared with broad, long-lived access.
+
+## Policy and Request Relationship
+
+`AccessPolicy` is reusable. One policy can apply to one Connector, a group of Connectors, or all Connectors in a namespace.
+
+`AccessRequest` is runtime-specific. It is tied to one target Connector, one requesting subject, and one context object. The request records which policies matched and whether the required checks have passed, so the system can decide whether to sync the gated permission for that workload.
+
+Together, they separate long-lived access design from short-lived runtime authorization:
+
+- Use `AccessPolicy` to define the approval and permission model.
+- Use `AccessRequest` to evaluate one actual use of a Connector.
+
+## Tekton Pipeline Example
+
+A common scenario is a Tekton pipeline that promotes an artifact to a production Harbor registry through a Connector such as `prod-harbor`.
+
+To use this pattern, users prepare the pipeline as follows:
+
+- An administrator defines an `AccessPolicy` for the sensitive Connector, such as `prod-harbor`.
+- The pipeline definition includes an `ApprovalTask` before the promotion task.
+- The promotion task mounts the Connector through CSI and then uses the protected proxy path to access the target tool.
+
+Here, the protected proxy path means the `Connectors Proxy` access path that the workload uses to reach the target tool through the Connector.
+
+After that, the system handles the approval-aware access flow automatically:
+
+- The system creates an `AccessRequest` for the Pod running the promotion task.
+- By default, the `AccessRequest` looks for an `ApprovalTask` in the same `PipelineRun`.
+- If that `ApprovalTask` is approved, the system grants temporary proxy permission and the promotion task continues.
+- If the `ApprovalTask` is missing or not approved, the workload stays pending and cannot complete the promotion.
+
+This pattern lets teams keep the Connector available in the platform while still requiring an explicit approval step before a sensitive promotion action can use it.
+
+A typical `AccessPolicy` for this pattern looks like this:
+
+```yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: AccessPolicy
+metadata:
+  name: prod-harbor-approval
+  namespace: devops
+spec:
+  connector:
+    names:
+      - prod-harbor
+  checkGrantedPermission:
+    spec:
+      checks:
+        - name: manual-approval
+          ref:
+            configMap:
+              name: connectors-approvals-in-pipeline
+      roleTemplate:
+        ref:
+          configMap:
+            name: connectors-use-connectors-proxy-in-pod
+```
+
+In this example, the policy targets one sensitive Connector and grants proxy access to the Pod only after the current pipeline's `ApprovalTask` is approved.
+
+The two referenced ConfigMaps are built-in templates provided by the Connectors components:
+
+- `connectors-approvals-in-pipeline` defines the default check rule that matches an `ApprovalTask` in the same `PipelineRun`
+- `connectors-use-connectors-proxy-in-pod` defines the temporary proxy permission granted to the Pod after approval
+
+## Typical Use Cases
+
+- Production artifact promotion that must wait for human approval
+- Deploying a workload to a production cluster only after approval
+- Deployments to protected environments where proxy access must be controlled
+- Shared Connectors that should only be usable by specific workload runs after approval
+
+## What's Next
+
+- [AccessPolicy](./access_policy.mdx)
+- [AccessRequest](./access_request.mdx)

@@ -17,6 +17,12 @@ The Connectors CSI Driver is a storage driver implemented based on the Container
 
 All configuration data comes from the [ConnectorClass configuration](./connectorclass.mdx#configurations) associated with the Connector.
 
+:::info
+Use this document to understand how workloads mount Connector-rendered configuration and consume proxy-related runtime data.
+
+This document focuses on mounting and rendering behavior. For proxy traffic and authentication, see [Connectors Proxy](./connectors_proxy.mdx). For permission gating and approval-triggered runtime access, see [Connectors Approval & Permission Gating](./connectors_approval.mdx).
+:::
+
 ## Quick Start
 
 ### 1. Create a ConnectorClass
@@ -413,3 +419,9 @@ The following ConnectorClass provides a file named `.gitconfig`, which automatic
               insteadOf = {{.spec.address}}
           {{- end }}
   ```
+
+## Next Steps
+
+- [Connectors Proxy](./connectors_proxy.mdx)
+- [Connectors Approval & Permission Gating](./connectors_approval.mdx)
+- [Connector Resource Levels and Permissions](./connector_scope_permissions.mdx)

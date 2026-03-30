@@ -1,0 +1,400 @@
+---
+created: '2026-03-25'
+title: AccessPolicy
+weight: 80
+---
+
+# AccessPolicy
+
+## Overview
+
+`AccessPolicy` is a namespace-scoped resource that controls who can use Connectors through `Connectors Proxy`.
+
+It defines three things:
+
+- which Connectors are covered by the policy
+- whether proxy access is granted by default or granted only after checks pass
+- which subjects are covered by that access model
+
+In the Connectors Approval model, `AccessPolicy` is the policy definition, while the actual runtime request is tracked separately by `AccessRequest`.
+
+:::info
+Read this document after [Connectors Approval & Permission Gating](./connectors_approval.mdx).
+
+This document focuses on the long-lived rule that administrators design:
+
+- which Connectors are covered
+- who should get default proxy access
+- which checks must pass before temporary proxy access is granted
+
+It does not repeat the full runtime lifecycle of one workload. For that, continue with [AccessRequest](./access_request.mdx).
+:::
+
+:::info
+In this model, **use a connector** means using the connector's secretless access path through `Connectors Proxy`, either directly or through `Connectors CSI Driver`.
+
+`AccessPolicy` does **not** control `Connectors API` access. `Connectors API` uses separate `connectors/apis` permissions, which are typically used for UI resource discovery or other API-based integrations.
+:::
+
+## Availability
+
+`AccessPolicy` is part of the Connectors Approval capability.
+
+Before using it, enable:
+
+- `enable-connectors-approval`
+- `enable-connector-proxy-permissions`
+
+For more information, see [Feature Flags](../../overview/feature_flags.mdx#enable-connectors-approval).
+
+## Understanding AccessPolicy
+
+### What "Use a Connector" Means
+
+`AccessPolicy` is focused on proxy access, not on reading Connector objects or browsing resources through `Connectors API`.
+
+Typical examples of using a connector include:
+
+- a workload sends requests to the Connector's proxy address
+- a Pod mounts Connector configuration through [Connectors CSI Driver](./connectors_csi.mdx), and then uses the target tool through the proxy
+- a pipeline workload gets temporary permission to use a sensitive Connector only after approval
+
+Typical examples that are **outside** `AccessPolicy` scope include:
+
+- reading the `Connector` object itself
+- browsing branches, tags, or other UI-oriented resources through [Connectors API](./connector_api.mdx)
+- granting `Connectors APIs` permissions to platform users
+
+### How AccessPolicy Works
+
+`AccessPolicy` sits between Connector definitions and runtime access:
+
+- `Connector`: defines how to reach a target tool and how to authenticate to it
+- `AccessPolicy`: selects Connectors and defines who may access the target tools through the Connectors Proxy provided by those Connectors
+- `AccessRequest`: records one runtime access attempt that needs approval-oriented evaluation
+- generated `Role` and `RoleBinding`: materialized RBAC objects created by the system from the policy templates
+
+If you first need the end-to-end picture of how these pieces fit together, see [Connectors Approval & Permission Gating](./connectors_approval.mdx). This document stays focused on policy design and policy matching.
+
+At a high level, the flow is:
+
+1. A workload tries to use a Connector through `Connectors Proxy` or through [Connectors CSI Driver](./connectors_csi.mdx).
+2. The system evaluates the matched `AccessPolicy`.
+3. If the policy uses `defaultPermission` and the workload's ServiceAccount is covered, access is allowed.
+4. If the policy uses `checkGrantedPermission`, the system tracks the runtime attempt in `AccessRequest` and grants the configured proxy permission only after the checks pass.
+
+For the resource schema of runtime requests, see [AccessRequest API Reference](../../apis/kubernetes_apis/connectors/accessrequest.mdx).
+
+### Two Access Models
+
+For one Connector, `AccessPolicy` usually uses one of these two proxy access models:
+
+- `Granting Default Proxy Access` with `defaultPermission`: the matched ServiceAccounts can access the target tool through the Connector proxy immediately
+- `Granting Access After Approval` with `checkGrantedPermission`: the runtime request must pass checks before proxy permission is granted
+
+In practice, this means access through one Connector is usually either always allowed within a known scope or approval-gated for sensitive usage. The next two sections explain these two models first, and the later [Common Configuration Patterns](#common-configuration-patterns) section shows how to scope them to Connectors and ServiceAccounts.
+
+## Granting Default Proxy Access
+
+`spec.defaultPermission` is the part of the policy that grants proxy access immediately, without any approval check.
+
+This is the usual choice when:
+
+- the Connector is low-risk inside a namespace or project
+- all workloads in one scope should access the target tool through the Connector proxy directly
+- you want a stable, non-temporary permission model
+
+In most cases, the built-in `connectors-use-connectors-proxy` template is the right starting point. It is a role template installed by the core Connectors component and grants `connectors/proxy` permission for the matched Connector.
+
+When a Connector should always be usable inside a namespace, project, or cluster scope, this is usually the only permission section you need in the policy.
+
+To shape which Connectors and ServiceAccounts this model covers, see [Common Configuration Patterns](#common-configuration-patterns).
+
+### Example
+
+The following policy gives `builder` and `deployer` immediate proxy access to all OCI Connectors in `devops`:
+
+```yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: AccessPolicy
+metadata:
+  name: oci-default-access
+  namespace: devops
+spec:
+  connector:
+    matchLabels:
+      connectors.alauda.io/connectorclass: oci
+  defaultPermission:
+    roleTemplate:
+      ref:
+        configMap:
+          name: connectors-use-connectors-proxy
+    bindingTemplate:
+      serviceAccounts:
+        - names:
+            - builder
+            - deployer
+          namespaceSelector:
+            names:
+              - devops
+```
+
+## Granting Access After Approval
+
+`spec.checkGrantedPermission` grants proxy permission only after all configured checks pass.
+
+This is the usual choice when:
+
+- the Connector is sensitive
+- access should be granted only for one runtime activity
+- approval is part of a delivery or promotion workflow
+
+The most common built-in combination is:
+
+- `checks[].ref.configMap.name: connectors-approvals-in-pipeline`
+- `roleTemplate.ref.configMap.name: connectors-use-connectors-proxy-in-pod`
+
+That combination means:
+
+- find the approval resource associated with the runtime object
+- wait until the approval result is positive
+- grant pod-bound proxy permission only to that specific runtime context
+
+`connectors-approvals-in-pipeline` is a built-in check template installed by the core Connectors component. In a pipeline scenario, it uses the runtime `Pod` context to locate the related Tekton `ApprovalTask` by `tekton.dev/pipelineRun`.
+
+`connectors-use-connectors-proxy-in-pod` is a built-in role template installed by the core Connectors component. It grants `connectors/proxy/v1/pod/{.object.metadata.namespace}/{.object.metadata.name}`, which binds the permission to one specific Pod context recorded at runtime.
+
+You still use the same Connector selection patterns from [Common Configuration Patterns](#common-configuration-patterns); the difference is that access is granted per runtime context after checks succeed.
+
+### Example
+
+The following policy applies to the `prod-harbor` Connector. It gives no default access. Instead, it waits for the built-in pipeline approval check and then grants pod-bound proxy permission.
+
+```yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: AccessPolicy
+metadata:
+  name: prod-harbor-approval
+  namespace: devops
+spec:
+  connector:
+    names:
+      - prod-harbor
+  checkGrantedPermission:
+    spec:
+      checks:
+        - name: manual-approval
+          ref:
+            configMap:
+              name: connectors-approvals-in-pipeline
+      roleTemplate:
+        ref:
+          configMap:
+            name: connectors-use-connectors-proxy-in-pod
+```
+
+## Common Configuration Patterns \{#common-configuration-patterns}
+
+### Selecting the Connectors to Protect
+
+An `AccessPolicy` only matches Connectors in the same namespace as the policy itself.
+
+The target Connectors are defined in `spec.connector`:
+
+- leave it empty to match all Connectors in the namespace
+- use `names` to target specific Connectors
+- use `matchLabels` or `matchExpressions` to target groups of Connectors
+
+This is the main mechanism for mapping one policy to one Connector, a subset of Connectors, or all Connectors in one scope.
+
+#### Example
+
+- Match all Connectors in current namespace.
+
+  ```yaml
+  apiVersion: connectors.alauda.io/v1alpha1
+  kind: AccessPolicy
+  metadata:
+    name: allow-team-a-proxy
+    namespace: team-a
+  spec:
+    connector: {}
+  ```
+
+- Match one specific Connector by name.
+
+  ```yaml
+  apiVersion: connectors.alauda.io/v1alpha1
+  kind: AccessPolicy
+  metadata:
+    name: prod-harbor-policy
+    namespace: devops
+  spec:
+    connector:
+      names:
+        - prod-harbor
+  ```
+
+- Match several explicitly named Connectors in one namespace.
+
+  ```yaml
+  apiVersion: connectors.alauda.io/v1alpha1
+  kind: AccessPolicy
+  metadata:
+    name: release-connectors
+    namespace: devops
+  spec:
+    connector:
+      names:
+        - prod-harbor
+        - prod-gitlab
+  ```
+
+- Match every Connector of one ConnectorClass in the namespace.
+
+  ```yaml
+  apiVersion: connectors.alauda.io/v1alpha1
+  kind: AccessPolicy
+  metadata:
+    name: all-oci-connectors
+    namespace: devops
+  spec:
+    connector:
+      matchLabels:
+        connectors.alauda.io/connectorclass: oci
+  ```
+
+- Match a subset of Connectors by custom labels such as environment or usage.
+
+  ```yaml
+  apiVersion: connectors.alauda.io/v1alpha1
+  kind: AccessPolicy
+  metadata:
+    name: prod-release-connectors
+    namespace: devops
+  spec:
+    connector:
+      matchExpressions:
+        - key: env
+          operator: In
+          values:
+            - prod
+        - key: usage
+          operator: In
+          values:
+            - release
+  ```
+
+### Choosing Which ServiceAccounts Get Default Access
+
+When you use `defaultPermission`, `bindingTemplate.serviceAccounts` defines which ServiceAccounts can use the matched Connector through `Connectors Proxy`.
+
+Each item combines:
+
+- `names`: the ServiceAccount names to bind
+- `namespaceSelector`: which namespaces those ServiceAccounts come from
+
+Use an empty `names` list when you want all ServiceAccounts from the selected namespaces.
+
+#### Example
+
+- Allow all ServiceAccounts in the current namespace. This is the common pattern for a namespace-level Connector.
+
+  ```yaml
+  defaultPermission:
+    roleTemplate:
+      ref:
+        configMap:
+          name: connectors-use-connectors-proxy
+    bindingTemplate:
+      serviceAccounts:
+        - names: []
+          namespaceSelector:
+            names:
+              - devops
+  ```
+
+- Allow only selected ServiceAccounts in one namespace, such as `builder` and `deployer` in `devops`.
+
+  ```yaml
+  defaultPermission:
+    roleTemplate:
+      ref:
+        configMap:
+          name: connectors-use-connectors-proxy
+    bindingTemplate:
+      serviceAccounts:
+        - names:
+            - builder
+            - deployer
+          namespaceSelector:
+            names:
+              - devops
+  ```
+
+- Allow all ServiceAccounts in one project. This is useful when the Connector is shared at the project level and project namespaces are labeled with `cpaas.io/project`.
+
+  ```yaml
+  defaultPermission:
+    roleTemplate:
+      ref:
+        configMap:
+          name: connectors-use-connectors-proxy
+    bindingTemplate:
+      serviceAccounts:
+        - names: []
+          namespaceSelector:
+            matchLabels:
+              cpaas.io/project: devops
+  ```
+
+- Allow one named ServiceAccount across all namespaces in one project, for example `builder` in the `devops` project.
+
+  ```yaml
+  defaultPermission:
+    roleTemplate:
+      ref:
+        configMap:
+          name: connectors-use-connectors-proxy
+    bindingTemplate:
+      serviceAccounts:
+        - names:
+            - builder
+          namespaceSelector:
+            matchLabels:
+              cpaas.io/project: devops
+  ```
+
+- Allow all ServiceAccounts in the cluster. This is useful for a cluster-shared Connector. In that case, the `AccessPolicy` must be created in the same namespace as the shared Connector.
+
+  ```yaml
+  defaultPermission:
+    roleTemplate:
+      ref:
+        configMap:
+          name: connectors-use-connectors-proxy
+    bindingTemplate:
+      serviceAccounts:
+        - names: []
+          namespaceSelector: {}
+  ```
+
+## Status
+
+`AccessPolicy.status` helps operators confirm that the policy has been applied as intended.
+
+Important status fields include:
+
+- `matchedConnectors`: the Connectors currently matched by `spec.connector`
+- `conditions`: reconciliation status for the policy
+
+This status is useful for checking whether the expected Connectors were selected before investigating runtime access behavior.
+
+## What's Next
+
+- Learn how one runtime request is evaluated in [AccessRequest](./access_request.mdx)
+- Learn the schema in [AccessPolicy API Reference](../../apis/kubernetes_apis/connectors/accesspolicy.mdx)
+- Revisit the overall flow in [Connectors Approval & Permission Gating](./connectors_approval.mdx)
+- Learn how proxy traffic works in [Connectors Proxy](./connectors_proxy.mdx)
+- Learn how workloads consume Connectors through [Connectors CSI Driver](./connectors_csi.mdx)
+- Learn the separate API access model in [Connector API](./connector_api.mdx)

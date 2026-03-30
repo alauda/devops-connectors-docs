@@ -148,6 +148,8 @@ data:
 
 例如:
 
+示例:
+
 ``` yaml
 bindingTemplate:
   serviceAccounts:

@@ -28,10 +28,15 @@ The following table shows the compatibility and support matrix between the Alaud
 
 ### Features and Enhancements
 
-- Support permission control for Connectors Proxy capabilities via AccessPolicy.
-- The permission validation model for the Connectors API and Proxy has been updated. 
-  - When calling the Connectors API, the user must have the connectors/apis permission. 
-  - When calling the Connectors Proxy, the user must have the connectors/proxy permission.
+- Added an additional `connectors/apis` permission validation for Connector API access. 
+  - When `enable-connector-apis-permissions` is enabled, the system performs an additional `connectors/apis` permission check for Connectors API requests that browse tool data. This change separates Connector discovery from actual Connector API usage. 
+  - For more details, see [Connectors Permission Model](../connectors/concepts/permission_model.mdx#connectors-api-permissions) and [Connector API](../connectors/concepts/connector_api.mdx).
+- Added an additional `connectors/proxy` permission validation for Connectors Proxy access.
+  - When `enable-connector-proxy-permissions` is enabled, the system performs an additional `connectors/proxy` permission check before workloads or CLIs use proxy-based Connector access. This change separates Connector discovery from actual runtime use.
+  - For more details, see [Connectors Permission Model](../connectors/concepts/permission_model.mdx) and [Connectors Proxy](../connectors/concepts/connectors_proxy.mdx).
+- Added approval-gated access control for protected Connectors Proxy usage.
+  - When `enable-connectors-approval` is enabled together with `enable-connector-proxy-permissions`, administrators can use `AccessPolicy` and `AccessRequest` to require approval before a workload is allowed to use protected Connector proxy access.
+  - For more details, see [Connectors Approval & Permission Gating](../connectors/concepts/connectors_approval.mdx).
 - Add `ca.crt` to the Connectors-CSI built-in configuration as a replacement for `ca.cert`.
 
 **Deprecation Notice**

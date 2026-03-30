@@ -41,6 +41,11 @@ Authentication complies with Kubernetes authentication standards and is complete
 
 When making the final request to the tool, the Secret information specified by the Connector will be used for authentication.
 
+By default, when `enable-connector-apis-permissions` is disabled, read permission on the `Connector` is enough to call `Connectors API`.
+When `enable-connector-apis-permissions` is enabled, the system performs an additional `connectors/apis` permission check for the target Connector. This is the extra capability permission that separates Connector discovery from actual API usage.
+
+For the overall model and the meaning of `connectors/apis`, see [Connectors Permission Model](./permission_model.mdx#connectors-api-permissions).
+
 For more information about Kubernetes API authentication, refer to the [Kubernetes Authentication documentation](https://kubernetes.io/docs/reference/access-authn-authz/authentication).
 
 ## Accessing Original Tool API
@@ -203,3 +208,10 @@ Currently provided APIs include:
   Permission requirement: Requires permission to access ConnectorClass.
 
   For the meaning of each feature flag and how to configure them, see [Feature Flags](../../overview/feature_flags.mdx).
+
+## Next Steps
+
+- [Connectors Permission Model](./permission_model.mdx)
+- [Connector Resource Levels and Permissions](./connector_scope_permissions.mdx)
+- [Connectors Proxy](./connectors_proxy.mdx)
+- [Feature Flags](../../overview/feature_flags.mdx)

@@ -51,7 +51,20 @@ For tools requiring specialized authentication mechanisms, custom proxy implemen
 
 **Example**: The OCI ConnectorClass utilizes a custom OCI Plugin Proxy supporting OCI protocol with Bearer Token authorization for registries like Harbor and CNCF Distribution Registry.
 
-More information: [Connectors Proxy](../concepts/connectors_proxy.mdx)
+- More information: [Connectors Proxy](../concepts/connectors_proxy.mdx)
+
+### Permission Control for Connectors Proxy
+
+`Connectors Proxy` represents real runtime access to the target tool. In practice, this affects whether a workload can clone from a repository, pull or push artifacts, or otherwise use the Connector in a secretless runtime path.
+
+Permission control for `Connectors Proxy` takes effect only when the `enable-connector-proxy-permissions` feature flag is enabled.
+By default, when this feature flag is disabled, a client only needs `get` permission on the `Connector` resource to use that Connector through `Connectors Proxy`.
+
+Because `Connectors Proxy` represents real runtime access to the target tool, proxy access is usually treated as the more sensitive part of the permission model. A client may be allowed to see a Connector, but still be unable to use its proxy endpoint.
+
+`Connectors Approval` is built on top of this proxy permission control. Its role is to further decide whether a workload may be granted `Connectors Proxy` usage for a protected Connector.
+
+For a more detailed explanation of how this fits into the overall permission split, see [Connectors Permission Model](../concepts/permission_model.mdx). 
 
 ## Connectors API
 
@@ -72,6 +85,32 @@ This API is very useful in practical applications, such as:
 
 The implementation of the `Connectors API` is based on the underlying capabilities provided by the `ConnectorClass API`.
 
+### Permission Control for Connectors API
+
+`Connectors API` is commonly used for read-oriented discovery scenarios, especially in platform UI flows. Typical examples include listing branches, tags, projects, repositories, or other selector data from the target tool.
+
+Permission control for `Connectors API` takes effect only when the `enable-connector-apis-permissions` feature flag is enabled.
+By default, when this feature flag is disabled, a client only needs `get` permission on the `Connector` resource to use that Connector through `Connectors API`.
+
+When `enable-connector-apis-permissions` is enabled, a user may be able to discover a `Connector`, but still be unable to browse tool data through `Connectors API` if their role does not allow that capability.
+
+In Alauda Container Platform (ACP), built-in user-facing roles typically already include the read-oriented `Connectors API` permissions needed for common UI scenarios such as branch, tag, project, and repository selection.
+
+This separation allows the platform to keep Connector discovery convenient while still controlling which users may query tool data through the API path. For a more detailed explanation, see [Permissions for Connectors API](../concepts/permission_model.mdx#connectors-api-permissions).
+
+## Connectors Permission Model
+
+The Connectors system separates resource permissions from capability permissions.
+
+- Resource permissions on `Connector` and `ConnectorClass` control who can discover or manage integration definitions.
+- Capability permissions control who can use those definitions through `Connectors API` or `Connectors Proxy`.
+
+This split allows a platform to make Connectors discoverable without automatically granting runtime access to the underlying tool.
+
+Within this model, `Connectors Approval` only applies when a workload uses a Connector through `Connectors Proxy`. In other words, it controls whether the workload may actually use that Connector to complete runtime actions such as clone, pull, push, or deployment, and grants that access only after the required checks pass.
+
+For a detailed explanation of how users experience this model and how built-in Alauda Container Platform (ACP) permissions affect it, see [Connectors Permission Model](../concepts/permission_model.mdx).
+
 ## ConnectorClass API
 
 `ConnectorClass API` defines the APIs provided by specific types of tools.
@@ -90,6 +129,32 @@ To facilitate easier utilization of Connectors-Proxy capabilities by K8S workloa
 The Connectors CSI Driver can mount the rendered contents of the configuration file templates maintained within the ConnectorClass into the workload. The configuration file can include information for accessing the `Connectors Proxy`, enabling users to utilize Connectors Proxy capabilities with minimal modifications to their original scripts.
 
 For more information, refer to [connectors csi driver](../concepts/connectors_csi.mdx)
+
+## Connectors Approval & Permission Gating
+
+`Connectors Approval & Permission Gating` extends the standard Connector permission model for sensitive operations. It uses `AccessPolicy` to define who can use Connectors through `Connectors Proxy`, either by granting `defaultPermission` immediately or by granting proxy access only after approval-related checks pass.
+
+The feature depends on both `enable-connectors-approval` and `enable-connector-proxy-permissions`.
+
+If these feature flags are not enabled together, the approval-specific flow is not active.
+
+- If `enable-connector-proxy-permissions` is disabled, the system does not apply the proxy capability permission layer, so approval cannot gate proxy usage.
+- If `enable-connectors-approval` is disabled, the system does not create or evaluate the approval-specific runtime flow.
+
+In that case, workloads use the normal Connector access model instead of approval-gated proxy access.
+
+If users do not want to gate the use of a Connector, they can still create an `AccessPolicy` with `defaultPermission`, so matched workloads can use the Connector through `Connectors Proxy` without waiting for approval checks.
+
+`Connectors Approval & Permission Gating` is built around two complementary resources:
+
+- `AccessPolicy`, which defines which Connectors are covered, what access is granted by default, and what proxy access requires checks
+- `AccessRequest`, which records one workload's attempt to use a Connector and tracks matched policies, check results, and temporary permission status
+
+A common flow is that a Pod or pipeline task mounts a Connector through the Connectors CSI Driver, the system evaluates the matching `AccessPolicy`, creates or updates an `AccessRequest` for that workload, waits for the required checks, grants `Connectors Proxy` access for the workload, and later revokes it when the workload completes.
+
+`Connectors Approval & Permission Gating` is intended for scenarios such as artifact promotion to a production registry or other protected tool operations, where discovery and actual use should be controlled separately.
+
+For a step-by-step explanation of this capability, see [Connectors Approval & Permission Gating](../concepts/connectors_approval.mdx), then [AccessPolicy](../concepts/access_policy.mdx), and finally [AccessRequest](../concepts/access_request.mdx).
 
 ## ResourceInterface
 

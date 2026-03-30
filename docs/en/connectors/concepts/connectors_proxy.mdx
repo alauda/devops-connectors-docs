@@ -136,6 +136,12 @@ When using Connectors Proxy, clients must provide proper authentication credenti
 
 The proxy server validates the provided ServiceAccount token to ensure it has the necessary permissions for the specified Connector before processing requests and injects the authentication credentials into the request when valid.
 
+By default, when `enable-connector-proxy-permissions` is disabled, read permission on the `Connector` is enough to use `Connectors Proxy`.
+
+When `enable-connector-proxy-permissions` is enabled, the system performs an additional `connectors/proxy` permission check for the target Connector. This is the extra capability permission that separates Connector discovery from real runtime use through the proxy path.
+
+For the overall model and the meaning of `connectors/proxy`, see [Connectors Permission Model](./permission_model.mdx).
+
 For detailed information about ServiceAccount tokens and RBAC configuration, see the [Kubernetes Authentication documentation](https://kubernetes.io/docs/reference/access-authn-authz/authentication/#service-account-tokens).
 
 #### Built-in Forward Proxy Authentication \{#built-in-forward-proxy-authentication}
@@ -291,3 +297,9 @@ This combination enables support for custom authentication mechanisms when using
 ## References
 
 - [Kubernetes Authentication documentation](https://kubernetes.io/docs/reference/access-authn-authz/authentication/#service-account-tokens)
+
+## Next Steps
+
+- [Connectors Permission Model](./permission_model.mdx)
+- [Connectors Approval & Permission Gating](./connectors_approval.mdx)
+- [Connectors CSI Driver](./connectors_csi.mdx)

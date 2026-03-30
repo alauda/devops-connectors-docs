@@ -1,0 +1,163 @@
+---
+created: '2026-03-26'
+title: AccessRequest
+weight: 90
+---
+
+# AccessRequest
+
+## Overview
+
+`AccessRequest` is a namespace-scoped runtime record for approval-gated proxy access to a Connector.
+
+It binds together:
+
+- the subject that is asking for access
+- the target `Connector`
+- the runtime context object that the access is for
+
+In the Connectors Approval model, `AccessPolicy` defines the rule, while `AccessRequest` tracks one actual access attempt.
+
+In most cases, users do not create `AccessRequest` manually. It is created automatically when a workload tries to use a Connector through [Connectors CSI Driver](./connectors_csi.mdx) without already having the required `connectors/proxy` permission.
+
+:::info
+Read this document after [Connectors Approval & Permission Gating](./connectors_approval.mdx) and [AccessPolicy](./access_policy.mdx).
+:::
+
+:::info
+In this document, **use a Connector** means using the Connector's secretless access path through `Connectors Proxy`, typically from a workload that consumes Connector configuration through [Connectors CSI Driver](./connectors_csi.mdx).
+
+It does **not** mean reading the `Connector` object itself or calling [Connectors API](./connector_api.mdx).
+
+An `AccessRequest` belongs to the Connector namespace, because it tracks access to one specific Connector.
+
+The requesting subject and the runtime context object can be in another namespace. This is common when a shared Connector is used by workloads from project or tenant namespaces.
+:::
+
+## Availability
+
+`AccessRequest` is part of the Connectors Approval capability.
+
+Before using this workflow, enable:
+
+- `enable-connectors-approval`
+- `enable-connector-proxy-permissions`
+
+For more information, see [Feature Flags](../../overview/feature_flags.mdx#enable-connectors-approval).
+
+## Understanding AccessRequest
+
+### What It Represents
+
+An `AccessRequest` records one concrete runtime request, not a reusable policy.
+
+Its key fields are:
+
+- `spec.subject`: who is requesting access. In approval-gated CSI scenarios, this is typically the workload ServiceAccount.
+- `spec.connectorRef`: which Connector is being requested. The referenced Connector is always in the same namespace as the `AccessRequest`.
+- `spec.context.objectRef`: which runtime object this request is bound to. Currently only `Pod` is supported.
+
+This resource is intentionally runtime-oriented:
+
+- it tracks approval progress for one workload context
+- it grants temporary permission only after checks pass
+- it becomes irrelevant after that workload context ends
+
+### How It Relates to AccessPolicy
+
+`AccessPolicy` answers these questions:
+
+- which Connectors require approval-gated access
+- which checks must pass
+- which permission should be granted after approval
+
+`AccessRequest` answers a different question:
+
+- for this specific subject, Connector, and Pod context, has access been approved and synced yet
+
+That is the main boundary between the two documents:
+
+- [AccessPolicy](./access_policy.mdx) explains the reusable rule
+- `AccessRequest` explains one runtime evaluation of that rule
+
+When an `AccessRequest` first matches policies, the controller stores snapshots of the matched `AccessPolicy.spec` entries into `status.policies`. This keeps an in-flight request stable even if the original policy changes later.
+
+For the policy schema, see [AccessPolicy API Reference](../../apis/kubernetes_apis/connectors/accesspolicy.mdx).
+
+### How It Is Created and Processed
+
+The typical flow is:
+
+1. A workload tries to use a Connector through `Connectors Proxy` or [Connectors CSI Driver](./connectors_csi.mdx).
+2. If the workload already has the required `connectors/proxy` permission for that Connector and Pod context, no `AccessRequest` is needed.
+3. If that permission is missing, the CSI flow creates or reuses an `AccessRequest`.
+4. The controller validates the Pod context, resolves the target Connector, and matches `AccessPolicy` resources with `checkGrantedPermission`.
+5. The controller finds matching check resources, such as an `ApprovalTask`, and records their results in `status.policies[].matchedChecks`.
+6. After all matched checks pass, the system creates a temporary `Role` and `RoleBinding` for the requesting subject.
+7. When the Pod completes, is deleted, or the Connector is no longer valid, the temporary permission is cleaned up.
+
+This means `AccessRequest` is the runtime bridge between approval status and actual RBAC permission syncing.
+
+## Example
+
+The following example shows the shape of one request:
+
+```yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: AccessRequest
+metadata:
+  name: prod-harbor-build-pod-7x9k2
+  namespace: connectors-shared
+spec:
+  subject:
+    kind: ServiceAccount
+    name: builder
+    namespace: cicd
+  connectorRef:
+    name: prod-harbor
+  context:
+    objectRef:
+      apiVersion: v1
+      kind: Pod
+      name: build-pod-7x9k2
+      namespace: cicd
+```
+
+This example shows an important pattern:
+
+- the `AccessRequest` is stored in the Connector namespace: `connectors-shared`
+- the requesting ServiceAccount is in the workload namespace: `cicd`
+- the request is bound to one Pod, not to every future Pod that uses the same ServiceAccount
+
+## Reading Status
+
+`AccessRequest.status` tells you where the runtime approval flow is currently blocked or completed.
+
+Important conditions include:
+
+- `ContextObjectValid`: whether the bound Pod still exists and is still active
+- `ConnectorResolved`: whether the referenced Connector still exists
+- `AccessPolicyMatched`: whether any approval-oriented `AccessPolicy` matched this request
+- `AccessCheckReady`: whether the matched checks are passed, pending, or rejected
+- `AccessPermissionSync`: whether the temporary permission has been synced, is still pending, or has already been cleaned up
+- `Ready`: the overall result derived from the conditions above
+
+Common interpretations:
+
+- Approval is still waiting: `AccessCheckReady = Unknown` with reason `Pending`
+- Access is granted and usable: `Ready = True` and `AccessPermissionSync = True` with reason `Synced`
+- Access is rejected: `AccessCheckReady = False` with reason `Rejected`
+- Permission was cleaned up after runtime ended: `AccessPermissionSync = True` with reason `PermissionCleanUp`
+
+## Operational Notes
+
+- `AccessRequest.spec` is immutable after creation. If the subject, Connector, or context changes, the system uses a different request.
+- `AccessRequest` usually exists only for approval-gated access. If no approval policy matches, it does not become a reusable permission record.
+- The generated permission is scoped both to the requested Connector and to the runtime Pod context, which helps enforce least privilege.
+
+## What's Next
+
+- Revisit the overall flow in [Connectors Approval & Permission Gating](./connectors_approval.mdx)
+- Revisit the policy design in [AccessPolicy](./access_policy.mdx)
+- Learn the schema in [AccessRequest API Reference](../../apis/kubernetes_apis/connectors/accessrequest.mdx)
+- Learn how approval rules are defined in [AccessPolicy API Reference](../../apis/kubernetes_apis/connectors/accesspolicy.mdx)

@@ -1,0 +1,171 @@
+---
+created: '2026-03-25'
+title: Connectors Permission Model
+weight: 60
+---
+
+# Connectors Permission Model
+
+Connectors separates permissions for discovering integration objects from permissions for using those integrations to access the target tool.
+
+From a user perspective, the permission model has three layers:
+
+- Can I discover this Connector?
+- Can I browse data from the target tool through the platform?
+- Can my workload actually use this Connector to access the target tool?
+
+These layers are intentionally controlled separately. This allows the platform to keep Connector discovery convenient while still protecting real tool usage in workloads.
+
+## Overview
+
+The Connectors permission model can be understood through three questions:
+
+| Question | Typical user action |
+| -------- | ------------------- |
+| Can I discover this integration? | View `ConnectorClass` and `Connector` in the UI. |
+| Can I browse data from the target tool? | List branches, tags, projects, repositories, or other selector data. |
+| Can I actually use the tool in a workload? | Clone, pull, push, or let a workload use the Connector at runtime. |
+
+These questions are intentionally controlled separately. A user may be allowed to discover a Connector, but still be blocked from browsing data from the tool or using it in a workload.
+
+## User Capabilities
+
+### Discovering Connector Types and Instances
+
+`ConnectorClass` defines a tool type and its capabilities. `Connector` represents one concrete integration instance.
+
+For users, this usually means:
+
+- If they can read `ConnectorClass`, they can discover what connector types are available in the cluster.
+- If they can read `Connector`, they can discover that a specific integration exists and select it in platform workflows.
+- If they can manage `Connector` or `ConnectorClass`, they can change integration behavior, so these permissions are usually limited to administrators.
+
+Connector visibility is also affected by scope. A namespace-scoped Connector is only available inside its namespace, while project-scoped and cluster-scoped Connectors are shared more broadly. For more about scope, see [Connector Resource Levels and Permissions](./connector_scope_permissions.mdx).
+
+### Browsing Tool Data Through Connectors API \{#connectors-api-permissions}
+
+`Connectors API` is the path typically used by the platform UI to read data from the target tool.
+
+Common examples include:
+
+- Listing Git branches before a clone
+- Listing image tags before selecting an artifact version
+- Listing projects, repositories, or similar selector data
+
+When `enable-connector-apis-permissions` is disabled, read permission on the `Connector` is enough to call `Connectors API`.
+
+When `enable-connector-apis-permissions` is enabled, the platform keeps Connector discovery and Connectors API usage separate by performing an additional `connectors/apis` permission check for the target Connector.
+
+In practice:
+
+- Being able to see a `Connector` is not always enough.
+- They may still be unable to browse branches, tags, or repositories if their role does not allow `Connectors API` usage for that Connector.
+- In Alauda Container Platform (ACP), built-in user-facing roles typically already include the read-oriented `Connectors API` permissions needed for common UI scenarios.
+
+This design lets the platform support convenient read-only discovery without automatically granting broader runtime access to the tool.
+
+For more about the request flow itself, see [Connector API](./connector_api.mdx).
+
+### Using a Connector in a Workload Through Connectors Proxy
+
+`Connectors Proxy` is typically used when a workload or CLI needs to actually use the target tool with the Connector's stored credentials.
+
+Common examples include:
+
+- Git clone through a proxy endpoint
+- Pulling or pushing artifacts through an OCI or Harbor proxy
+- Letting a workload use configuration rendered by the CSI driver
+
+When `enable-connector-proxy-permissions` is disabled, read permission on the `Connector` is enough to use `Connectors Proxy`.
+
+When `enable-connector-proxy-permissions` is enabled, the platform keeps Connector discovery and proxy usage separate by performing an additional `connectors/proxy` permission check for the target Connector.
+
+In practice:
+
+- Being able to see a production Connector is still not enough.
+- A workload may still be unable to clone, pull, push, or access the protected system until it is granted permission to use `Connectors Proxy`.
+- This permission is usually treated more carefully than `Connectors API`, because it represents real use of the target tool.
+
+For more about proxy behavior, see [Connectors Proxy](./connectors_proxy.mdx) and [Connectors CSI Driver](./connectors_csi.mdx).
+
+### Where Connectors Approval Fits
+
+`Connectors Approval` is not the permission model itself. It is an extra control layer built on top of `Connectors Proxy`.
+
+When both `enable-connectors-approval` and `enable-connector-proxy-permissions` are enabled:
+
+- The platform can require approval before a workload is allowed to use a protected Connector.
+- `AccessPolicy` defines which Connectors use approval-based control.
+- `AccessRequest` records one concrete request from a workload to a Connector.
+
+From a user perspective, this means Connectors Approval mainly affects whether a workload may actually use a Connector to complete actions such as clone, pull, push, or deployment. It does not replace the basic visibility and management permissions of `ConnectorClass` and `Connector`.
+
+If you already understand the three layers above and want the approval-specific flow, continue with [Connectors Approval & Permission Gating](./connectors_approval.mdx). For API details, see [AccessPolicy](/apis/kubernetes_apis/connectors/accesspolicy) and [AccessRequest](/apis/kubernetes_apis/connectors/accessrequest).
+
+## Example: One Connector, Different User Experiences
+
+Consider a project-scoped production Harbor Connector:
+
+- A developer may be able to see the Connector in the UI.
+- The same developer may also be able to list image tags through `Connectors API`, because Alauda Container Platform (ACP) commonly grants read-oriented API permissions for selection scenarios.
+- But a build workload may still be unable to push an image through `Connectors Proxy`.
+- If approval is required for that Connector, the workload must pass the required checks before proxy usage is granted.
+
+This is the core idea of the permission model: discovery, browsing, and actual runtime usage are related, but they are not the same permission.
+
+## Advanced: How the Platform Maps These Capabilities
+
+The user-facing capabilities above are implemented with Kubernetes RBAC.
+
+### Resource Permissions
+
+Resource permissions control whether users can discover or manage integration objects:
+
+- `connectorclasses`
+- `connectors`
+
+These permissions determine whether users can see connector types and connector instances at all.
+
+### Capability Permissions
+
+Capability permissions control whether users can use those integration objects through specific Connectors components:
+
+- `connectors/apis` maps to `Connectors API`
+- `connectors/proxy` maps to `Connectors Proxy`
+
+These capability permissions are enforced only when the corresponding feature flags are enabled.
+
+- If the feature flags are disabled, read permission on the `Connector` remains enough for the `Connectors API` or `Connectors Proxy`.
+- If the feature flags are enabled, the platform performs the additional `connectors/apis` or `connectors/proxy` checks described above.
+
+This is why a user may have read access to a `Connector`, but still be blocked when the platform tries to browse tool data or when a workload tries to use the Connector at runtime.
+
+### Built-in Alauda Container Platform (ACP) Roles
+
+Alauda Container Platform (ACP) provides built-in roles from two places:
+
+- `connectors-operator` provides baseline roles for `ConnectorClass` and `Connector` access.
+- Connector extensions provide additional read-only `Connectors API` permissions for common operations such as listing branches, tags, projects, or repositories.
+
+In practice, this means Alauda Container Platform (ACP) can usually support common read-only UI scenarios out of the box, while still treating `Connectors Proxy` usage as a more sensitive capability.
+
+## Summary
+
+The Connectors permission model separates three user capabilities:
+
+- discovering Connector types and Connector instances
+- browsing tool data through `Connectors API`
+- using a Connector in real workload execution through `Connectors Proxy`
+
+This separation is what allows the platform to keep everyday UI scenarios simple while still protecting runtime access to sensitive external systems.
+
+## Next Steps
+
+- [Connectors Approval & Permission Gating](./connectors_approval.mdx)
+- [AccessPolicy](./access_policy.mdx)
+- [AccessRequest](./access_request.mdx)
+- [Connector Resource Levels and Permissions](./connector_scope_permissions.mdx)
+- [Connectors API](./connector_api.mdx)
+- [Connectors Proxy](./connectors_proxy.mdx)
+- [Feature Flags](../../overview/feature_flags.mdx)
+- [Architecture](../architecture/index.mdx)
