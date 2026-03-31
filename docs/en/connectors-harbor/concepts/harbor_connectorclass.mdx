@@ -91,6 +91,7 @@ For example:
 For security best practices, we recommend creating credentials with minimal required permissions. When additional privileges are needed, create separate Connectors with more privileged secret and use namespace isolation to control which users can access each Connector.
 
 ### Proxy and Configuration Capabilities \{#proxy_and_configuration_capabilities}
+<a id="proxy"></a>
 
 The Harbor Connector provides proxy capabilities to enable secure access to Harbor registries.
 
@@ -121,7 +122,7 @@ status:
       url: http://c-harbor-connector.default.svc.cluster.local
 ```
 
-#### Forward Proxy
+#### Forward Proxy \{#forward-proxy}
 
 You can mount proxy information into Pods using CSI, and then use the proxy information through environment variables or configuration files.
 
@@ -197,4 +198,3 @@ insecure-entitlements = [ "network.host", "security.insecure" ]
 - [General Introduction to Using the Harbor Connector Proxy in K8S Workload](../how_to/using_harbor_connector_in_k8s.mdx)
 - [Building Images Using Harbor Connector in K8S Job](../how_to/using_harbor_connector_in_k8s_job.mdx)
 - [Building Images Using Harbor Connector in Tekton Pipeline](../how_to/using_harbor_connector_forward_proxy_in_tekton_pipeline.mdx)
-

@@ -70,7 +70,7 @@ The `skip-sync: "true"` annotation prevents `connectors-operator` from reverting
 
 ## Feature Flag Details
 
-### `enable-connector-apis-permissions`
+### `enable-connector-apis-permissions` \{#enable-connector-apis-permissions}
 
 When this flag is enabled, the system applies RBAC-based permission checks to access performed through the Connectors API. This separates the permission to read a `Connector` resource from the permission to use that Connector to access the target tool API.
 
@@ -82,7 +82,7 @@ Related reading:
 - [Connector API](../connectors/concepts/connector_api.mdx)
 - [Connector Resource Levels and Permissions](../connectors/concepts/connector_scope_permissions.mdx)
 
-### `enable-connector-proxy-permissions`
+### `enable-connector-proxy-permissions` \{#enable-connector-proxy-permissions}
 
 When this flag is enabled, permission control is applied to requests handled through `Connectors Proxy`. This is relevant when workloads or tools access external systems through proxy-based secretless connectivity.
 
@@ -95,7 +95,7 @@ Related reading:
 - [Connectors CSI Driver](../connectors/concepts/connectors_csi.mdx)
 - [Release Notes](./release_notes.mdx)
 
-### `enable-connectors-approval`
+### `enable-connectors-approval` \{#enable-connectors-approval}
 
 When this flag is enabled, Connectors can participate in approval-gated access workflows for `Connectors Proxy`. This feature is intended to protect proxy-based connector usage, especially when workloads access external tools through proxy endpoints.
 
@@ -110,7 +110,7 @@ Related reading:
 - [Connectors Proxy](../connectors/concepts/connectors_proxy.mdx)
 - [Connectors CSI Driver](../connectors/concepts/connectors_csi.mdx)
 
-### `enable-multi-connector`
+### `enable-multi-connector` \{#enable-multi-connector}
 
 When this flag is enabled, the Connectors CSI Driver can mount configuration rendered from multiple Connectors in a single volume. This allows one workload to consume multiple tool integrations together, and the driver merges rendered configuration according to the configured `configuration.names`.
 
