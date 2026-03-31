@@ -107,14 +107,14 @@ spec:
 -  通过 roleTemplate.ref 指定权限内容
 -  ref 指向的 configmap 保存具体的权限内容
 
-``` yaml
-spec:
-  defaultPermission:
-    roleTemplate:
-      ref:
-        configmap:
-          name: connectors-use-connectors-apis
-```
+   ``` yaml
+   spec:
+     defaultPermission:
+       roleTemplate:
+         ref:
+           configmap:
+             name: connectors-use-connectors-apis
+   ```
 
 **内置默认权限模板**
 
@@ -144,15 +144,15 @@ data:
   - 授权 Project 下 所有NS 的 SA 能够访问当前 Project 的 connectors/apis subresources 的 read 权限。 (Project Connector)
   - 授权集群 所有 NS， 均能访问当前集群级别 connector 的 connectors/apis 权限
 
-``` yaml
-bindingTemplate:
-  serviceAccounts:
-  - names: [""]   # 匹配一个或者多个 SA Name. 空数组表示匹配所有 SA
-    namespaceSelector:
-      names: [""] # names 和 labels 互斥
-      matchLabels: {}
-      matchExpressions: {}
-```
+    ``` yaml
+    bindingTemplate:
+      serviceAccounts:
+      - names: [""]   # 匹配一个或者多个 SA Name. 空数组表示匹配所有 SA
+        namespaceSelector:
+          names: [""] # names 和 labels 互斥
+          matchLabels: {}
+          matchExpressions: {}
+    ```
 
 **NS Connector | Current NS**
 
@@ -248,9 +248,9 @@ namespaceSelector 为空，names 为空，展开为 所有 ns 的 sa group
 - NS Admin 授权另外一个 NS 的 SA 访问当前 NS 的 Connector APIs
 - Project Admin 授权 另外一个 Project 下的 NS 的 SA 访问当前 Project 的 Connectors APIs
 
-``` bash
-kubectl auth can-i --as=system:serviceaccount:<目标NS>:default --as-group=system:serviceaccounts:<目标NS> get connectors -n <当前NS>
-```
+  ``` bash
+  kubectl auth can-i --as=system:serviceaccount:<目标NS>:default --as-group=system:serviceaccounts:<目标NS> get connectors -n <当前NS>
+  ```
 
 校验时机: Controller 中，创建 Role 和 RoleBinding 时进行校验。
 对展开的 Subject 列表进行校验，过滤掉没有权限的 subject, 使用事件进行提醒记录。
