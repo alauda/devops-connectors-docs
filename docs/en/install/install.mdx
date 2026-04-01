@@ -522,6 +522,36 @@ To add support for integration with SonarQube and SonarCloud platforms, install 
    kubectl get connectorclass sonarqube
    ```
 
+### Install ConnectorsNexus (Optional)
+
+To add support for integration with Nexus repositories, install the ConnectorsNexus component:
+
+1. Create the ConnectorsNexus custom resource:
+
+   ```bash
+   cat <<EOF | kubectl apply -f -
+   apiVersion: operator.connectors.alauda.io/v1alpha1
+   kind: ConnectorsNexus
+   metadata:
+     name: connectors-nexus
+     namespace: connectors-system
+   spec: {}
+   EOF
+   ```
+
+2. Monitor the deployment progress:
+
+   ```bash
+   kubectl get connectorsnexus -n connectors-system
+   ```
+
+3. Verify that the Nexus ConnectorClass is ready:
+
+   ```bash
+   kubectl get connectorclass nexus
+   ```
+
+
 ## Uninstall Connectors
 
 To uninstall the Connectors system, remove components in the reverse order of installation.
@@ -555,6 +585,9 @@ To uninstall the Connectors system, remove components in the reverse order of in
 
    # Delete ConnectorsSonarQube
    kubectl delete connectorssonarqube --all -n connectors-system
+
+   # Delete ConnectorsNexus
+   kubectl delete connectorsnexus --all -n connectors-system
    ```
 
 2. Delete the core component:

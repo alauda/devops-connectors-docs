@@ -1,0 +1,27 @@
+---
+weight: 10
+---
+
+# Introduction
+
+## What is Nexus Connector
+
+Nexus Connector is a specialized connector component that enables secure and convenient integration with Nexus repositories, allowing users to interact with Nexus Maven, NPM, and PyPI registries secretlessly in clients like `mvn`, `npm`, `yarn`, and `pip`.
+
+Once Nexus Connector Component is deployed, users can:
+
+- Create Nexus connectors to integrate with Nexus repositories
+- Perform Maven, NPM, and PyPI operations in CI/CD pipelines or Kubernetes workloads without directly handling credentials
+
+## Application Scenarios
+
+The Nexus Connector allows you to perform package operations securely by:
+
+- Managing credentials centrally rather than hardcoding them in clients
+- Automatically injecting authentication during package operations
+
+This approach is particularly useful for:
+
+- `CI/CD pipelines` or `Kubernetes jobs` requiring access to Nexus-hosted Maven, NPM, or PyPI registries
+- Teams sharing Nexus registry access without sharing credentials
+- Environments requiring centralized management of Nexus credentials without distributing them to each client

@@ -1,0 +1,327 @@
+---
+weight: 20
+---
+
+# Nexus Connector
+
+The Nexus connector is a platform-agnostic connector that you can use to connect to Nexus repositories.
+
+You can use the Nexus Connector to securely perform Maven, NPM, and PyPI operations in CICD pipelines or Kubernetes workloads without credentials.
+
+Additionally, you can centralize the management of Nexus access configurations across namespaces, avoiding the need to repeat Nexus credentials in each namespace.
+
+## Overview
+
+This document covers:
+
+- **Integration Requirements**: Prerequisites for target Nexus repositories
+- **Creating a Nexus connector**
+- **Advanced Features**: Proxy capabilities and configuration files for Maven, NPM, and PyPI
+
+## Integration Requirements
+
+**Nexus Repository Prerequisites**
+
+- The Nexus server must be accessible from the cluster.
+- Supported repository types: Maven (hosted/proxy/group), NPM (hosted/proxy/group), PyPI (hosted/proxy/group).
+
+**Client Prerequisites**
+
+For Maven clients, you must trust the connector proxy server's certificate before executing `mvn` operations:
+
+```sh
+keytool -importcert -noprompt \
+  -trustcacerts \
+  -keystore $JAVA_HOME/lib/security/cacerts \
+  -storepass changeit \
+  -alias corp-ca \
+  -file /opt/maven/ca.cert
+```
+
+The `mvn` client must also use the wagon transport:
+
+```sh
+MAVEN_OPTS=-Dmaven.resolver.transport=wagon
+```
+
+## Creating a Nexus Connector
+
+Here's how to create a basic Nexus Connector:
+
+```yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: nexus-connector
+spec:
+  connectorClassName: nexus
+  address: https://nexus.example.com
+  auth:
+    name: basicAuth
+```
+
+## Fields Reference
+
+**spec.connectorClassName**:
+
+`nexus` (constant), specifies the ConnectorClass name for Nexus integration.
+
+**spec.address**:
+
+Target Nexus server address, for example: `https://nexus.example.com`. This is the root address of the Nexus server, not a specific repository URL.
+
+**spec.auth**:
+
+Specifies the authentication method for the Nexus server.
+
+- `spec.auth.name`: should be `basicAuth` for Nexus connector.
+- `spec.auth.secretRef`: specifies the Secret containing authentication information. The secret should be created in the same namespace as the connector. If your Nexus server does not require authentication, you can omit this field.
+
+**Optional Metadata fields**:
+
+- `cpaas.io/description`: Description information for the connector, for example:
+
+  ```yaml
+  apiVersion: connectors.alauda.io/v1alpha1
+  kind: Connector
+  metadata:
+    name: nexus-connector
+    annotations:
+      cpaas.io/description: "Connect to team Nexus server"
+  ```
+
+## Capabilities of Nexus Connector
+
+### Authentication
+
+The Nexus connector supports the following authentication types:
+
+- `basicAuth`: Username and password-based authentication, corresponding secret type: `kubernetes.io/basic-auth`
+
+#### Using Basic Authentication
+
+```yaml
+apiVersion: v1
+stringData:
+  username: your-nexus-username
+  password: your-nexus-password
+kind: Secret
+metadata:
+  name: nexus-secret
+type: kubernetes.io/basic-auth
+```
+
+If the secret is not correct, the `status.conditions` field in the connector will show the error message.
+
+For comprehensive status information, see [Connector Status Documentation](../../connectors/concepts/connector.mdx#status-information).
+
+#### Credential Permissions Required \{#credential_permissions_required}
+
+The required permissions depend on how you intend to use the connector:
+
+- **Download only**: The credential only requires read permissions for the target repository.
+- **Upload/Deploy**: The credential must have both read and write permissions for the target repository.
+
+For security best practices, create credentials with minimal required permissions.
+
+### Proxy and Configuration Files
+
+To provide clients with the ability to access Nexus repositories without credentials, the Nexus connector provides a proxy server that automatically injects authentication information.
+
+The Nexus ConnectorClass provides the following configuration files that can be mounted into Pods via the Connectors CSI Driver:
+
+| Configuration Name | Generated File    | Use Case                      |
+| ------------------ | ----------------- | ----------------------------- |
+| `settings`         | `settings.xml`, `ca.cert` | Maven operations via proxy   |
+| `npmrc`            | `.npmrc`          | NPM package operations        |
+| `yarnrc`           | `.yarnrc.yml`     | Yarn package operations       |
+| `pipconf`          | `pip.conf`        | PyPI package download         |
+| `pypirc`           | `.pypirc`         | PyPI package publish          |
+
+#### Proxy Address
+
+Upon Connector creation, the system automatically provisions a proxy service for the target Nexus server.
+
+The proxy endpoint is recorded in `status.proxy.httpAddress`:
+
+```yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: nexus-connector
+spec:
+  # connector spec fields
+status:
+  conditions:
+    # status conditions
+  proxy:
+    httpAddress:
+      url: http://c-nexus-connector.default.svc.cluster.local
+```
+
+#### Maven: settings.xml configuration \{#maven-settings-configuration}
+
+The `settings` configuration provides a `settings.xml` file and a `ca.cert` file mounted via the Connectors CSI Driver.
+
+Example of the generated `settings.xml`:
+
+```xml
+<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0 https://maven.apache.org/xsd/settings-1.0.0.xsd">
+
+  <proxies>
+    <proxy>
+      <id>connectors-proxy</id>
+      <active>true</active>
+      <protocol>http</protocol>
+      <host>c-nexus-connector.connectors-nexus-demo.svc.cluster.local</host>
+      <port>80</port>
+      <username>connectors-nexus-demo/nexus-connector</username>
+      <password>eyJhbGciOiJEnEZaTQ</password>
+      <nonProxyHosts>localhost</nonProxyHosts>
+    </proxy>
+  </proxies>
+</settings>
+```
+
+**Optional parameter**: `mirrorRepository` — the Nexus repository to use as a Maven mirror. When set, the generated `settings.xml` will include a `<mirrors>` section pointing to `{address}/repository/{mirrorRepository}`.
+
+To mount the `settings` configuration:
+
+```yaml
+spec:
+  volumes:
+  - name: settings
+    csi:
+      readOnly: true
+      driver: connectors-csi
+      volumeAttributes:
+        connector.name: "nexus-connector"
+        configuration.names: "settings"
+        configuration.params: '{"settings": {"mirrorRepository": "maven-public"}}' # optional
+```
+
+#### NPM: .npmrc configuration \{#npm-npmrc-configuration}
+
+The `npmrc` configuration provides a `.npmrc` file for NPM package operations.
+
+**Required parameter**: `registry` — the Nexus NPM proxy repository name (e.g., `npm-proxy`).
+
+**Optional parameter**: `strictSSL` — whether to require SSL (default: `"true"`).
+
+```yaml
+spec:
+  volumes:
+  - name: npmrc
+    csi:
+      readOnly: true
+      driver: connectors-csi
+      volumeAttributes:
+        connector.name: "nexus-connector"
+        configuration.names: "npmrc"
+        configuration.params: '{"npmrc": {"registry": "npm-proxy"}}'
+```
+
+#### Yarn: .yarnrc.yml configuration \{#yarn-yarnrc-configuration}
+
+The `yarnrc` configuration provides a `.yarnrc.yml` file for Yarn package operations.
+
+**Required parameter**: `registry` — the Nexus NPM proxy repository name.
+
+**Optional parameter**: `strictSSL` — whether to require SSL (default: `"true"`).
+
+```yaml
+spec:
+  volumes:
+  - name: yarnrc
+    csi:
+      readOnly: true
+      driver: connectors-csi
+      volumeAttributes:
+        connector.name: "nexus-connector"
+        configuration.names: "yarnrc"
+        configuration.params: '{"yarnrc": {"registry": "npm-proxy"}}'
+```
+
+#### PyPI Download: pip.conf configuration \{#pypi-pipconf-configuration}
+
+The `pipconf` configuration provides a `pip.conf` file for downloading PyPI packages.
+
+**Required parameter**: `repository` — the Nexus PyPI proxy repository name (e.g., `pypi-proxy`).
+
+```yaml
+spec:
+  volumes:
+  - name: pipconf
+    csi:
+      readOnly: true
+      driver: connectors-csi
+      volumeAttributes:
+        connector.name: "nexus-connector"
+        configuration.names: "pipconf"
+        configuration.params: '{"pipconf": {"repository": "pypi-proxy"}}'
+```
+
+#### PyPI Publish: .pypirc configuration \{#pypi-pypirc-configuration}
+
+The `pypirc` configuration provides a `.pypirc` file for publishing PyPI packages.
+
+**Required parameter**: `deployRepository` — the Nexus PyPI hosted repository name (e.g., `pypi-hosted`).
+
+```yaml
+spec:
+  volumes:
+  - name: pypirc
+    csi:
+      readOnly: true
+      driver: connectors-csi
+      volumeAttributes:
+        connector.name: "nexus-connector"
+        configuration.names: "pypirc"
+        configuration.params: '{"pypirc": {"deployRepository": "pypi-hosted"}}'
+```
+
+#### Using Connectors CSI Driver \{#using-connectors-csi-driver}
+
+CSI volume attribute parameters:
+
+- `csi.readOnly`: Fixed value `true`
+- `csi.driver`: Fixed as `connectors-csi`
+- `csi.volumeAttributes`:
+  - `connector.name`: Name of the Nexus Connector
+  - `connector.namespace`: Namespace of the Nexus Connector; if not specified, the Pod's namespace is used
+  - `configuration.names`: The configuration to mount (e.g., `settings`, `npmrc`, `yarnrc`, `pipconf`, `pypirc`)
+  - `configuration.params`: JSON string with runtime parameters for each named configuration (see below)
+
+Multiple configurations can be mounted together by separating names with commas:
+
+```yaml
+configuration.names: "settings,npmrc"
+configuration.params: '{"settings": {"mirrorRepository": "maven-public"}, "npmrc": {"registry": "npm-proxy"}}'
+```
+
+#### configuration.params for Nexus \{#configuration-params-nexus}
+
+For the format, validation rules, and default-injection behavior of `configuration.params`, see [configuration.params](../../connectors/concepts/connectors_csi.mdx#configuration-params) in the Connectors CSI Driver documentation.
+
+The parameters accepted by each Nexus configuration are:
+
+| Configuration | Parameter | Required | Default | Description |
+| ------------- | --------- | -------- | ------- | ----------- |
+| `settings`    | `mirrorRepository` | No | `""` | Nexus Maven repository to use as mirror in `settings.xml` |
+| `npmrc`       | `registry`  | Yes | — | Nexus NPM proxy repository name |
+| `npmrc`       | `strictSSL` | No  | `"true"` | Whether to require SSL (`"true"` or `"false"`) |
+| `yarnrc`      | `registry`  | Yes | — | Nexus NPM proxy repository name |
+| `yarnrc`      | `strictSSL` | No  | `"true"` | Whether to require SSL (`"true"` or `"false"`) |
+| `pipconf`     | `repository` | Yes | — | Nexus PyPI proxy repository name |
+| `pypirc`      | `deployRepository` | Yes | — | Nexus PyPI hosted repository name for publishing |
+
+## Further Reading
+
+- [Nexus Connector Quick Start](../quick_start.mdx)
+
+## References
+
+- [Concepts of Connector](../../connectors/concepts/connector.mdx)
+- [Connector Proxy](../../connectors/concepts/connectors_proxy.mdx)
+- [Connector CSI Driver](../../connectors/concepts/connectors_csi.mdx)
+- [Kubernetes CSI Volume](https://kubernetes.io/docs/concepts/storage/volumes/#csi)

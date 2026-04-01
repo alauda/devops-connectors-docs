@@ -155,6 +155,7 @@ export SERVER=$(cat /{mount-path}/connector.status.proxyAddress)
 | connector.name         | No      | Connector name **(Deprecated — use `connectors` instead)**                               |
 | connector.namespace    | No       | Connector namespace, defaults to Pod's namespace **(Deprecated — use `connectors` instead)**        |
 | configuration.names    | No       | Comma-separated configuration names (e.g., `config1,config2`), the configuration names are the names of the configurations in the ConnectorClass |
+| configuration.params   | No       | JSON string of runtime parameters for named configurations (see [configuration.params](#configuration-params)) |
 | token.expiration       | No       | Token expiration time (default: `30m`)                   |
 | connectors             | Yes      | Comma-separated list of connectors in the format `namespace/name` or `name`; if namespace is omitted, the Pod's namespace is used. Used to specify multiple connectors. |
 
@@ -203,6 +204,48 @@ volumes:
 - If `configuration.names` is omitted, only built-in configurations are mounted
 - When multiple configurations contain files with the same name, later configurations overwrite earlier ones
 - The `connectors` parameter is used to specify multiple connectors for mount config.
+
+## configuration.params \{#configuration-params}
+
+`configuration.params` lets callers pass runtime parameters into configuration templates at mount time. Each configuration in a ConnectorClass can declare a set of named parameters; `configuration.params` supplies values for those parameters when creating the CSI volume.
+
+### Format
+
+The value is a JSON object **keyed by configuration name**, where each value is an object of key-value pairs:
+
+```
+configuration.params: '{"<configName>": {"key": "value", ...}, ...}'
+```
+
+Example — passing `mirrorRepository` to the `settings` configuration and `registry` to the `npmrc` configuration in one mount:
+
+```yaml
+volumeAttributes:
+  configuration.names: "settings,npmrc"
+  configuration.params: '{"settings": {"mirrorRepository": "maven-public"}, "npmrc": {"registry": "npm-proxy"}}'
+```
+
+Scoping by configuration name keeps parameters stable regardless of how many connectors are mounted or what they are named. Connector-specific values belong in `Connector.spec.params`, accessible in templates via `.connectors[i].spec.params`.
+
+### How Defaults Work
+
+When a ConnectorClass configuration declares a parameter with a default value and the caller omits it, the CSI Driver injects the default automatically before rendering the template. No explicit value is required in `configuration.params`.
+
+Example — `strictSSL` has a default of `"true"`, so it can be omitted:
+
+```yaml
+# This is equivalent to passing '{"npmrc": {"registry": "npm-proxy", "strictSSL": "true"}}'
+configuration.params: '{"npmrc": {"registry": "npm-proxy"}}'
+```
+
+### Available Variables in Templates
+
+After processing, supplied (and defaulted) parameters are available in the configuration template as `.configurations.<paramName>`:
+
+```
+{{ .configurations.mirrorRepository }}
+{{ .configurations.registry }}
+```
 
 ## Multiple Connectors \{#multiple-connectors}
 
