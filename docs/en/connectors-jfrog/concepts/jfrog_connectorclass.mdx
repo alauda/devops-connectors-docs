@@ -1,0 +1,286 @@
+---
+weight: 20
+---
+
+# JFrog Connector
+
+The JFrog connector is a platform-agnostic connector that you can use to connect to JFrog Artifactory instances.
+
+You can use the JFrog Connector to securely access private Maven, NPM, and PyPI repositories hosted in JFrog Artifactory in CICD pipelines, or use it in Kubernetes workloads to perform package operations without credentials.
+
+Additionally, you can centralize the management of JFrog Artifactory access configurations across namespaces, avoiding the need to repeat credentials in each namespace.
+
+## Overview
+
+This document covers:
+
+- **Integration Requirements**: Prerequisites for target JFrog Artifactory instances
+- **Creating a JFrog connector**
+- **Advanced Features**: Proxy capabilities and configuration files for Maven, NPM, and PyPI
+
+## Integration Requirements
+
+**JFrog Artifactory Prerequisites**
+
+- JFrog Artifactory instance accessible from the Kubernetes cluster
+- User credentials with appropriate repository permissions
+
+## Creating a simple JFrog connector
+
+Here's how to create a basic JFrog Connector:
+
+```yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: jfrog-connector
+spec:
+  connectorClassName: jfrog
+  address: https://jfrog.example.com
+```
+
+## Fields Reference
+
+**spec.connectorClassName**:
+
+`jfrog` (constant), specifies the ConnectorClass name for JFrog Artifactory integration.
+
+**spec.address**:
+
+JFrog Artifactory base URL, for example: `https://jfrog.example.com`.
+
+**spec.auth(optional)**:
+
+Specifies the authentication method for the JFrog Artifactory instance.
+
+- `spec.auth.name`: should be `basicAuth` for JFrog connector.
+
+- `spec.auth.secretRef`: specifies the secret that contains the authentication information of the JFrog Artifactory instance. The secret should be created in the same namespace as the connector.
+
+**Optional Metadata fields**:
+
+- `cpaas.io/description`: Description information for the JFrog connector, for example:
+
+  ```yaml
+  apiVersion: connectors.alauda.io/v1alpha1
+  kind: Connector
+  metadata:
+    name: jfrog-connector
+    annotations:
+      cpaas.io/description: "Connect to team JFrog Artifactory instance"
+  ```
+
+## Capabilities of JFrog Connector
+
+### Authentication
+
+The JFrog connector supports the following authentication types:
+
+- `basicAuth`: Username and password-based authentication, corresponding secret type: `kubernetes.io/basic-auth`
+
+For example:
+
+```yaml
+apiVersion: v1
+stringData:
+  username: your-jfrog-username
+  password: your-jfrog-password
+kind: Secret
+metadata:
+  name: jfrog-secret
+type: kubernetes.io/basic-auth
+```
+
+For comprehensive status information, see [Connector Status Documentation](../../connectors/concepts/connector.mdx#status-information).
+
+#### Credential Permissions Required \{#credential_permissions_required}
+
+The required permissions for the configured credential depend on how you intend to use it.
+
+For example:
+- **Download operations**: If you only need to download dependencies, the credential only requires read permissions for the target repository.
+- **Deploy operations**: If you need to publish artifacts, the credentials must have both read and write permissions for the target repository.
+
+For security best practices, we recommend creating credentials with minimal required permissions. When additional privileges are needed, create separate Connectors with more privileged secrets and use namespace isolation to control which users can access each Connector.
+
+### JFrog Connector Proxy and Configuration Files
+
+To provide clients with the ability to access JFrog Artifactory without credentials, the JFrog connector provides a proxy server to automatically inject authentication information.
+
+Upon Connector creation, the system automatically provisions a proxy service for the target JFrog Artifactory instance.
+
+The proxy endpoint is recorded in `status.proxy.httpAddress`:
+
+```yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: jfrog-connector
+spec:
+  # connector spec fields
+status:
+  conditions:
+    # status conditions
+  proxy:
+    httpAddress:
+      url: http://c-jfrog-connector.default.svc.cluster.local
+```
+
+The JFrog ConnectorClass provides the following configuration files that can be mounted via Connectors CSI Driver:
+
+| Configuration Name | Generated File | Use Case |
+| ------------------ | -------------- | -------- |
+| `settings` | `settings.xml` | Maven operations via proxy |
+| `npmrc` | `.npmrc` | NPM package operations |
+| `yarnrc` | `.yarnrc.yml` | Yarn package operations |
+| `pipconf` | `pip.conf` | PyPI package download |
+| `pypirc` | `.pypirc` | PyPI package publish |
+
+### Maven Configuration: settings.xml \{#maven-settings-xml}
+
+The JFrog connector provides a `settings.xml` configuration file for Maven that routes artifact downloads through the connector proxy to the JFrog Artifactory Maven repository.
+
+**Configuration Parameters**:
+
+- `mirrorRepository` (optional): The JFrog Artifactory repository key to use as the Maven mirror. If omitted, the generated `settings.xml` will not include a `<mirrors>` section.
+
+Example CSI volume definition:
+
+```yaml
+volumes:
+- name: maven-settings
+  csi:
+    readOnly: true
+    driver: connectors-csi
+    volumeAttributes:
+      connector.name: "jfrog-connector"
+      configuration.names: "settings"
+      configuration.params: '{"settings":{"mirrorRepository":"libs-release"}}'
+```
+
+Example generated `settings.xml`:
+
+```xml
+<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0" ...>
+  <proxies>
+    <proxy>
+      <id>connectors-proxy</id>
+      <active>true</active>
+      <protocol>http</protocol>
+      <host>connectors-proxy-service.connectors-system.svc.cluster.local</host>
+      <port>80</port>
+      <username>NAMESPACE/CONNECTOR_NAME</username>
+      <password>TOKEN</password>
+      <nonProxyHosts>localhost</nonProxyHosts>
+    </proxy>
+  </proxies>
+  <mirrors>
+    <mirror>
+      <id>jfrog-connector-mirror</id>
+      <url>https://jfrog.example.com/artifactory/libs-release</url>
+      <mirrorOf>*</mirrorOf>
+    </mirror>
+  </mirrors>
+</settings>
+```
+
+### NPM Configuration: .npmrc and .yarnrc.yml \{#npmrc-configuration-file}
+
+The JFrog connector provides `.npmrc` and `.yarnrc.yml` configuration files for NPM/Yarn that route requests through the connector proxy to a JFrog Artifactory NPM repository.
+
+**Configuration Parameters**:
+
+- `repository`: The JFrog Artifactory NPM repository key, used to build the NPM/Yarn registry URL
+- `strictSSL` (optional): If set, the connector writes this value to `.npmrc` (`strict-ssl`) and `.yarnrc.yml` (`enableStrictSsl`)
+
+Example CSI volume definition:
+
+```yaml
+volumes:
+- name: npmrc
+  csi:
+    readOnly: true
+    driver: connectors-csi
+    volumeAttributes:
+      connector.name: "jfrog-connector"
+      configuration.names: "npmrc"
+      configuration.params: '{"npmrc":{"repository":"npm-local"}}'
+- name: yarnrc
+  csi:
+    readOnly: true
+    driver: connectors-csi
+    volumeAttributes:
+      connector.name: "jfrog-connector"
+      configuration.names: "yarnrc"
+      configuration.params: '{"yarnrc":{"repository":"npm-local"}}'
+```
+
+### PyPI Configuration: pip.conf and .pypirc \{#pip-conf-configuration-file}
+
+The JFrog connector provides `pip.conf` and `.pypirc` configuration files for PyPI tools that route requests through the connector proxy to a JFrog Artifactory PyPI repository.
+
+**Configuration Parameters**:
+
+- `repository`: The JFrog Artifactory PyPI repository key (for `pip.conf`)
+- `deployRepository`: The JFrog Artifactory PyPI repository key for publishing (for `.pypirc`)
+
+Example CSI volume definition:
+
+```yaml
+volumes:
+- name: pipconf
+  csi:
+    readOnly: true
+    driver: connectors-csi
+    volumeAttributes:
+      connector.name: "jfrog-connector"
+      configuration.names: "pipconf"
+      configuration.params: '{"pipconf":{"repository":"pypi-local"}}'
+- name: pypirc
+  csi:
+    readOnly: true
+    driver: connectors-csi
+    volumeAttributes:
+      connector.name: "jfrog-connector"
+      configuration.names: "pypirc"
+      configuration.params: '{"pypirc":{"deployRepository":"pypi-local"}}'
+```
+
+### Using Connectors CSI Driver to Mount Configuration Files \{#using-connectors-csi-driver}
+
+CSI volume parameter descriptions:
+
+- `csi.readOnly`: Fixed value `true`
+- `csi.driver`: The Connector CSI Driver, fixed as `connectors-csi`
+- `csi.volumeAttributes`: CSI Volume attributes
+  - `connector.name`: Name of the JFrog Connector
+  - `connector.namespace`: Namespace of the JFrog Connector; if not specified, the Pod's namespace is used
+  - `configuration.names`: Configuration name. Supported values: `settings` (Maven), `npmrc`, `yarnrc`, `pipconf`, `pypirc`
+  - `configuration.params`: JSON string with runtime parameters for each named configuration
+
+#### configuration.params for JFrog \{#configuration-params-jfrog}
+
+For the general format, validation flow, and merge behavior of `configuration.params`, see [configuration.params](../../connectors/concepts/connectors_csi.mdx#configuration-params) in the Connectors CSI Driver documentation.
+
+In the current JFrog ConnectorClass manifest, `configurations[].params` schema/defaults are not explicitly declared. The configuration templates read the following keys from `configuration.params`:
+
+| Configuration | Parameter | Template behavior |
+| ------------- | --------- | ----------------- |
+| `settings` | `mirrorRepository` | If set, generates Maven mirror URL `<address>/artifactory/{mirrorRepository}` in `settings.xml` |
+| `npmrc` | `repository` | Generates NPM registry/auth URL `<address>/artifactory/api/npm/{repository}` in `.npmrc` |
+| `npmrc` | `strictSSL` | If set, writes `strict-ssl` in `.npmrc` |
+| `yarnrc` | `repository` | Generates Yarn registry URL `<address>/artifactory/api/npm/{repository}` in `.yarnrc.yml` |
+| `yarnrc` | `strictSSL` | If set, writes `enableStrictSsl` in `.yarnrc.yml` |
+| `pipconf` | `repository` | Generates PyPI index URL `<address>/artifactory/api/pypi/{repository}/simple/` in `pip.conf` |
+| `pypirc` | `deployRepository` | Generates PyPI publish URL `http://<proxy-host>/artifactory/api/pypi/{deployRepository}/` in `.pypirc` |
+
+## Further Reading
+
+- [Using JFrog Connectors in Kubernetes](../quick_start.mdx)
+
+## References
+
+- [Concepts of Connector](../../connectors/concepts/connector.mdx)
+- [Connector Proxy](../../connectors/concepts/connectors_proxy.mdx)
+- [Connector CSI Driver](../../connectors/concepts/connectors_csi.mdx)
+- [Kubernetes CSI Volume](https://kubernetes.io/docs/concepts/storage/volumes/#csi)

@@ -1,0 +1,214 @@
+---
+weight: 30
+---
+
+# Quick Start
+
+This document will help you quickly understand how to create a JFrog connector to connect to a JFrog Artifactory instance and perform Maven build operations securely without directly handling credentials.
+
+We will create a JFrog connector and use it to perform `mvn` build with a Maven mirror pointed to a JFrog Artifactory Maven repository.
+
+## Estimated Reading Time
+
+15 minutes
+
+## Prerequisites
+
+- Kubernetes cluster with Connectors system installed (Operator, ConnectorsCore and ConnectorsJFrog components). See the [Installation Guide](../install/install.mdx) for details on installing these components.
+- JFrog Artifactory URL and credentials
+- Basic knowledge of Kubernetes and Maven
+- A Maven repository configured in your JFrog Artifactory instance
+
+## Process Overview
+
+| Step | Operation                                          | Description                                                     |
+| ---- | -------------------------------------------------- | --------------------------------------------------------------- |
+| 1    | Create Namespace                                   | Set up a dedicated namespace for the demonstration              |
+| 2    | Configure JFrog Credentials & Connector            | Create authentication secret and JFrog connector resource       |
+| 3    | Create a Maven Job using the JFrog Maven mirror    | Create a job that performs `mvn` build via the connector        |
+
+## Steps to Operate
+
+### Step 1: Create Namespace
+
+Create a dedicated namespace for this demonstration:
+
+```bash
+kubectl create ns connectors-jfrog-demo
+```
+
+### Step 2: Create JFrog Credentials and Connector
+
+Create both the Secret containing JFrog credentials and the JFrog connector resource.
+
+For more detailed information about creating and configuring connectors, please refer to the [Connectors Quick Start Guide](../../connectors/quick_start).
+
+```bash
+cat <<EOF | kubectl apply -n connectors-jfrog-demo -f -
+kind: Secret
+apiVersion: v1
+metadata:
+  name: jfrog-secret
+type: kubernetes.io/basic-auth
+stringData:
+  username: your-jfrog-username # Replace with your JFrog username
+  password: your-jfrog-password # Replace with your JFrog password or API key
+---
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: jfrog-connector
+spec:
+  connectorClassName: jfrog
+  address: https://jfrog.example.com # Replace with your JFrog Artifactory URL
+  auth:
+    name: basicAuth
+    secretRef:
+      name: jfrog-secret
+EOF
+```
+
+Verify that the connector is in "Ready" status:
+
+```bash
+kubectl get connector jfrog-connector -n connectors-jfrog-demo
+```
+
+The output should show:
+
+```
+NAME               CLASS   ADDRESS                        READY   REASON   AGE
+jfrog-connector   jfrog   https://jfrog.example.com     True             10s
+```
+
+### Step 3: Create a Maven Job Using the JFrog Maven Mirror
+
+Create a job that uses the connector to perform Maven operations with the JFrog Artifactory repository as a mirror:
+
+```bash
+cat <<'EOF' | kubectl apply -n connectors-jfrog-demo -f -
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: maven-build
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: maven-demo
+        image: maven:3.9-eclipse-temurin-17
+        imagePullPolicy: IfNotPresent
+        command:
+        - "sh"
+        - "-c"
+        - |
+          set -ex
+          git clone --depth 1 https://github.com/spring-projects/spring-petclinic.git demo
+          cd demo
+          mvn --settings /root/.m2/settings.xml dependency:resolve -q
+        volumeMounts:
+        - name: maven-settings
+          mountPath: /root/.m2/settings.xml
+          subPath: settings.xml
+      volumes:
+      - name: maven-settings
+        csi:
+          readOnly: true
+          driver: connectors-csi
+          volumeAttributes:
+            connector.name: "jfrog-connector"
+            configuration.names: "settings"
+            configuration.params: '{"settings":{"mirrorRepository":"libs-release"}}'
+EOF
+```
+
+Key settings:
+
+**volumes[].volumeAttributes**
+
+- `connector.name`: The name of your JFrog connector
+- `configuration.names`: Set to `settings`, which generates a Maven `settings.xml` file configured with the JFrog Artifactory proxy
+- `configuration.params`: JSON string keyed by configuration name. In this quick start it uses `settings.mirrorRepository` to generate the Maven mirror URL.
+- Other keys consumed by the current JFrog ConnectorClass templates are `npmrc.repository`, `npmrc.strictSSL`, `yarnrc.repository`, `yarnrc.strictSSL`, `pipconf.repository`, and `pypirc.deployRepository`.
+
+## What happens under the hood \{#what-happens-under-the-hood}
+
+The JFrog connector works by:
+
+1. Creating a proxy service that sits between your client and the JFrog Artifactory instance
+2. Injecting authentication information when requests pass through the proxy
+3. Providing configuration files (`settings.xml`, `.npmrc`, `pip.conf`, etc.) for clients to perform package operations through the proxy
+
+To demonstrate this mechanism, inspect the generated `settings.xml` file:
+
+```bash
+cat <<EOF | kubectl apply -n connectors-jfrog-demo -f -
+apiVersion: v1
+kind: Pod
+metadata:
+  name: inspect-jfrog-settings
+spec:
+  restartPolicy: Never
+  containers:
+  - name: inspect
+    image: busybox
+    command: ["sleep", "3600"]
+    volumeMounts:
+    - name: maven-settings
+      mountPath: /root/.m2/settings.xml
+      subPath: settings.xml
+  volumes:
+  - name: maven-settings
+    csi:
+      readOnly: true
+      driver: connectors-csi
+      volumeAttributes:
+        connector.name: "jfrog-connector"
+        configuration.names: "settings"
+        configuration.params: '{"settings":{"mirrorRepository":"libs-release"}}'
+EOF
+```
+
+View the generated `settings.xml`:
+
+```bash
+kubectl exec -it inspect-jfrog-settings -n connectors-jfrog-demo -- cat /root/.m2/settings.xml
+```
+
+The output shows a Maven `settings.xml` with the proxy configured to authenticate via the connector:
+
+```xml
+<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0" ...>
+  <proxies>
+    <proxy>
+      <id>connectors-proxy</id>
+      <active>true</active>
+      <protocol>http</protocol>
+      <host>connectors-proxy-service.connectors-system.svc.cluster.local</host>
+      <port>80</port>
+      <username>connectors-jfrog-demo/jfrog-connector</username>
+      <password>TOKEN</password>
+      <nonProxyHosts>localhost</nonProxyHosts>
+    </proxy>
+  </proxies>
+  <mirrors>
+    <mirror>
+      <id>jfrog-connector-mirror</id>
+      <url>https://jfrog.example.com/artifactory/libs-release</url>
+      <mirrorOf>*</mirrorOf>
+    </mirror>
+  </mirrors>
+</settings>
+```
+
+## Further Reading
+
+After successfully performing Maven build operations using the JFrog connector, you can:
+
+- Learn more about [Concepts of JFrog Connectors](./concepts/jfrog_connectorclass.mdx)
+
+## References
+
+- [JFrog Connector Installation Guide](../install/install.mdx)

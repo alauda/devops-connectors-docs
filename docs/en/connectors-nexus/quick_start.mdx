@@ -138,6 +138,7 @@ spec:
           volumeAttributes:
             connector.name: "nexus-connector"
             configuration.names: "settings"
+            configuration.params: '{"settings":{"mirrorRepository":"maven-public"}}' # optional
 EOF
 ```
 
@@ -164,6 +165,7 @@ keytool -importcert -noprompt \
 
 - `connector.name`: The name of your Nexus connector
 - `configuration.names`: Set to `settings`, which references the Maven configuration template defined in the Nexus ConnectorClass. This template generates a `settings.xml` file with the appropriate proxy and authentication settings.
+- `configuration.params`: JSON string for runtime configuration parameters. For `configuration.names: "settings"`, you can set `settings.mirrorRepository` (optional). If omitted, the ConnectorClass default (`""`) is used and no Maven mirror is injected into `settings.xml`.
 
 ### Step 4: Verify Operation
 
