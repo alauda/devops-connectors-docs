@@ -98,7 +98,7 @@ To enable clients to access Harbor registries without directly handling credenti
 
 Clients with access to the connector can use this proxy server to access Harbor registries without needing to configure credentials on the client side.
 
-#### Proxy Address
+#### Proxy Address \{#proxy}
 
 When creating a Harbor connector, the system will automatically create a Service for proxying access to the Harbor registry.
 
@@ -121,7 +121,7 @@ status:
       url: http://c-harbor-connector.default.svc.cluster.local
 ```
 
-#### Forward Proxy
+#### Forward Proxy \{#forward-proxy}
 
 You can mount proxy information into Pods using CSI, and then use the proxy information through environment variables or configuration files.
 
