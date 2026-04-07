@@ -2,7 +2,14 @@
 
 ## Overview
 
-The Connectors Operator implements a plugin-based RBAC system that provides granular permission control for connector resources. System roles are distributed as ClusterRoles that automatically aggregate into the platform's default roles, enabling seamless integration with the existing permission model.
+The Connectors Operator implements a plugin-based RBAC system that provides granular permission control for connector resources. System roles are distributed as `ClusterRole` objects that automatically aggregate into the platform's default roles, so Connectors resources follow the existing ACP permission model.
+
+In addition to baseline roles for `ConnectorClass`, `Connector`, and `ResourceInterface`, the operator also provides approval-related roles for:
+
+- `AccessPolicy`, which defines long-lived approval and proxy-access rules
+- `AccessRequest`, which records one runtime approval request for a workload
+
+These two resources are intentionally modeled differently. `AccessPolicy` is an administrator-facing policy resource, while `AccessRequest` is a runtime record with a narrower end-user permission model.
 
 ## Architecture
 
@@ -23,6 +30,71 @@ The roles are integrated into the final deployment manifests through:
 ## Available Roles
 
 The operator provides role definitions for the following resources across different scopes:
+
+### AccessPolicy
+- **Cluster / kube-public scope**
+  - **Scope**: Cluster-wide
+  - **View Role**: `cpaas:connectors-accesspolicies:cluster:view`
+    - Read-only permissions (`get`, `list`, `watch`) on `accesspolicies`
+    - Aggregates to: namespace-admin, namespace-developer, platform-auditor, project-admin, kube-public scope
+  - **Admin Role**: `cpaas:connectors-accesspolicies:cluster:admin`
+    - Full permissions on `accesspolicies`
+    - Aggregates to: cluster-admin, platform-admin, cluster scope
+- **Project Namespace scope**
+  - **Scope**: Project Namespace
+  - **Admin Role**: `cpaas:connectors-accesspolicies:project-ns:admin`
+    - Full permissions on project-scoped `accesspolicies`
+    - Aggregates to: project-admin, project-ns scope
+  - **View Role**: `cpaas:connectors-accesspolicies:project-ns:view`
+    - Read-only permissions
+    - Aggregates to: namespace-admin, namespace-developer, platform-auditor, project-ns scope
+- **Business Namespace scope**
+  - **Scope**: Business Namespace
+  - **Admin Role**: `cpaas:connectors-accesspolicies:business-ns:admin`
+    - Full permissions on business-namespace `accesspolicies`
+    - Aggregates to: namespace-admin, project-admin, business-ns scope
+  - **View Role**: `cpaas:connectors-accesspolicies:business-ns:view`
+    - Read-only permissions
+    - Aggregates to: namespace-developer, platform-auditor, business-ns scope
+
+This matches the intended approval policy model:
+
+- platform-admin: full access everywhere
+- platform-auditor: read-only
+- project-admin: full access in project namespace and its business namespaces, plus read-only in `kube-public`
+- namespace-admin: full access in current business namespace, plus read-only in project namespace and `kube-public`
+- namespace-developer: read-only in current business namespace, project namespace, and `kube-public`
+
+### AccessRequest
+- **Cluster scope**
+  - **View Role**: `cpaas:connectors-accessrequests:cluster:view`
+    - Read-only permissions (`get`, `list`, `watch`) on `accessrequests`
+    - Aggregates to: platform-auditor cluster scopes
+  - **Admin Role**: `cpaas:connectors-accessrequests:cluster:admin`
+    - Full permissions on `accessrequests`
+    - Aggregates to: cluster-admin, platform-admin, cluster scopes
+- **Project Namespace scope**
+  - **View Role**: `cpaas:connectors-accessrequests:project-ns:view`
+    - Read-only permissions
+    - Aggregates to: platform-auditor, project-ns scope
+  - **Admin Role**: `cpaas:connectors-accessrequests:project-ns:admin`
+    - `get`, `list`, `watch`, `delete`
+    - Aggregates to: project-admin, project-ns scope
+- **Business Namespace scope**
+  - **View Role**: `cpaas:connectors-accessrequests:business-ns:view`
+    - Read-only permissions
+    - Aggregates to: platform-auditor, namespace-developer, business-ns scope
+  - **Admin Role**: `cpaas:connectors-accessrequests:business-ns:admin`
+    - `get`, `list`, `watch`, `delete`
+    - Aggregates to: namespace-admin, project-admin, business-ns scope
+
+The `AccessRequest` model is intentionally narrower than `AccessPolicy`:
+
+- platform-admin: full access
+- platform-auditor: read-only
+- project-admin: `get`, `list`, `watch`, `delete` in project namespace and its business namespaces
+- namespace-admin: `get`, `list`, `watch`, `delete` only in the current business namespace
+- namespace-developer: `get`, `list`, `watch` only in accessible business namespaces
 
 ### ConnectorClasses
 - **Scope**: Business Namespace
@@ -101,6 +173,7 @@ A user with the `namespace-developer` role will automatically gain view permissi
 - ConnectorClasses
 - Connectors (in their namespace)
 - ResourceInterfaces
+- AccessPolicies in their business namespace, project namespace, and `kube-public`
+- AccessRequests in accessible business namespaces only
 
 No additional role bindings are required.
-
