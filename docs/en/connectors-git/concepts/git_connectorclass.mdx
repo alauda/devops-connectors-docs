@@ -104,7 +104,7 @@ metadata:
 type: kubernetes.io/basic-auth
 ```
 
-**Note**: The `password` field is not restricted to actual user passwords. You can use other types of credentials such as Personal Access Tokens (PAT) or API keys, as long as they meet the permission requirements outlined in the [Secret Permissions Required](#secret_permissions_required) section.
+**Note**: The `password` field is not restricted to actual user passwords. You can use other types of credentials such as Personal Access Tokens (PAT) or API keys, as long as they meet the permission requirements outlined in the [Credential Permissions Required](#credential_permissions_required) section.
 
 If the Git server does not require authentication, you can omit the `secretRef` field:
 
@@ -119,8 +119,6 @@ spec:
   auth:
     name: basicAuth
 ```
-
-<a id="secret_permissions_required"></a>
 
 #### Credential Permissions Required \{#credential_permissions_required}
 
