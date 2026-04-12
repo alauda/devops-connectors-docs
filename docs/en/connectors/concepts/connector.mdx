@@ -201,7 +201,7 @@ Note that once the ConnectorClass specifies authentication detection params, par
 
 ## Proxy Address \{#connector_proxy}
 
-If the `Connector` points to a `ConnectorClass` that has configured [proxy capability](./connectorclass.mdx#proxy), the system will allocate a proxy address for each `Connector`. 
+If the `Connector` points to a `ConnectorClass` that has configured [proxy capability](./connectorclass.mdx#connectorclass_proxy), the system will allocate a proxy address for each `Connector`. 
 
 Clients can use this proxy address to access the tool in a secretless manner.
 
@@ -241,7 +241,7 @@ status:
       url: http://c-harbor.default.svc.cluster.local/namespaces/default/connectors/harbor
 ```
 
-## Status Information
+## Status Information \{#status-information}
 
 The status information of the Connector is recorded in the `status` field, containing proxy address, API address, and conditions:
 
