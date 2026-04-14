@@ -251,6 +251,10 @@ After processing, supplied (and defaulted) parameters are available in the confi
 
 The Connectors CSI Driver supports using multiple Connectors for configurations. You can specify multiple Connectors using the `connectors` volume attribute in the format `namespace/name` or `name`; if namespace is omitted, the Pod's namespace is used. Connectors should be separated by commas.
 
+:::info
+Before using multiple Connectors in one CSI volume, enable the `enable-multi-connector` feature flag in `connectors-config`. For details, see [Feature Flags](../../overview/feature_flags.mdx#enable-multi-connector).
+:::
+
 ```yaml
 volumes:
 - name: config

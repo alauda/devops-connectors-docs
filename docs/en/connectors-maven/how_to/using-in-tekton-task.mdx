@@ -31,6 +31,10 @@ To pull dependencies from a mirror and deploy to a private repository in the sam
 
 Then mount both connectors in one workspace using `volumeAttributes.connectors`.
 
+:::info
+This scenario requires enabling the `enable-multi-connector` feature flag in `connectors-config`. For details, see [Feature Flags](../../overview/feature_flags.mdx#enable-multi-connector).
+:::
+
 ## Usage Instructions
 
 After confirming that your Tekton Task can use Maven Connector, add both connectors to the TaskRun YAML.
