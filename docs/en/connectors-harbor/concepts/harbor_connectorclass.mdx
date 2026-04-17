@@ -148,6 +148,61 @@ export NO_PROXY=$no_proxy
 echo "Using proxy: http_proxy=$http_proxy, https_proxy=$https_proxy, no_proxy=$no_proxy"
 ```
 
+#### Harbor CLI configuration
+
+Use `harbor-cli-config` when you want a workload to run `harbor-cli` commands through the Harbor Connector without putting the original Harbor username or password into the Pod.
+
+After you mount `harbor-cli-config`, your workload gets a ready-to-use Harbor CLI setup:
+
+- `config.yaml` for Harbor CLI
+- `.env` for the connector proxy environment
+- `HARBOR_ENCRYPTION_KEY`, which Harbor CLI needs when reading the generated config
+
+For a single Harbor Connector, mount it like this:
+
+```yaml
+volumes:
+- name: harbor-cli
+  csi:
+    readOnly: true
+    driver: connectors-csi
+    volumeAttributes:
+      connector.name: "harbor-connector"
+      configuration.names: "harbor-cli-config"
+```
+
+For multiple Harbor Connectors, request them in one mount. The generated `config.yaml` includes one Harbor CLI context for each selected Connector, so you can switch between them with `harbor context switch`.
+
+```yaml
+volumes:
+- name: harbor-cli
+  csi:
+    readOnly: true
+    driver: connectors-csi
+    volumeAttributes:
+      connectors: "harbor-connector,harbor-connector-2"
+      configuration.names: "harbor-cli-config"
+```
+
+::: info
+The multiple connectors feature depends on `enable-multi-connector` feature flag. For flag details, see [Feature Flags](../../overview/feature_flags.mdx).
+:::
+
+Before running `harbor-cli`, load the proxy environment, trust the proxy CA, and export the mounted encryption key:
+
+```bash
+set -a; source /mnt/harbor-cli/.env; set +a
+export HARBOR_CLI_CONFIG=/mnt/harbor-cli/config.yaml
+export HARBOR_ENCRYPTION_KEY=$(cat /mnt/harbor-cli/HARBOR_ENCRYPTION_KEY)
+
+harbor-cli project list --name my-project
+
+harbor-cli context switch default/harbor-connector-2
+harbor-cli project list --name my-project
+```
+
+`HARBOR_ENCRYPTION_KEY` is only used so Harbor CLI can read the generated config. It is not the original Harbor secret, and the generated password value in `config.yaml` is not used as the real credential for Harbor access. Real access still goes through the connector proxy.
+
 #### Reverse Proxy
 
 When using a reverse proxy, you need to modify the target image address to the proxy address.
