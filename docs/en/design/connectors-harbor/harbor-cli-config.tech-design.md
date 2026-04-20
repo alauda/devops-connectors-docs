@@ -17,6 +17,8 @@ Official `harbor-cli` uses `config.yaml`. Lookup order:
 3. `$XDG_CONFIG_HOME/harbor-cli/config.yaml`
 4. `$HOME/.config/harbor-cli/config.yaml`
 
+example:
+
 ```yaml
 current-credential-name: <context-name>
 credentials:

@@ -1,0 +1,485 @@
+---
+weight: 25
+title: Harbor Connector Automatic Creation Tekton Task
+---
+
+# Harbor Connector Automatic Creation Tekton Task
+
+Set the variables, then run the command below:
+
+- `REGISTRY`: the registry host that stores the `devops/harbor-connector-automatic-creation` image.
+- `TARGET_NS`: the namespace where you want to install the Task. The tool-image ConfigMaps are installed in `kube-public`.
+
+{/* BEGIN GENERATED TASK YAML */}
+```bash
+export REGISTRY=<your-registry>
+export TARGET_NS=<target-namespace>
+
+cat <<'EOF' | envsubst '${REGISTRY} ${TARGET_NS}' | kubectl apply -f -
+apiVersion: v1
+data:
+  image: ${REGISTRY}/devops/harbor-connector-automatic-creation:v0.0.18
+  name: Harbor CLI v0.0.18
+kind: ConfigMap
+metadata:
+  annotations:
+    operator.tekton.dev/preserve-namespace: "true"
+    operator.tekton.dev/resource-policy: keep
+  labels:
+    catalog.tekton.dev/source: system
+    catalog.tekton.dev/tool-image-harbor-cli: 0.0.18
+    catalog.tekton.dev/tool-image-run-script: harbor-cli-0.0.18
+    operator.tekton.dev/tool-image: harbor-cli
+  name: catalog-tool-image-harbor-cli-0.0.18
+  namespace: kube-public
+---
+apiVersion: v1
+data:
+  image: ${REGISTRY}/devops/harbor-connector-automatic-creation:latest
+  name: Harbor CLI latest (v0.0.18)
+kind: ConfigMap
+metadata:
+  annotations:
+    operator.tekton.dev/preserve-namespace: "true"
+  labels:
+    catalog.tekton.dev/source: system
+    catalog.tekton.dev/tool-image-harbor-cli: latest
+    catalog.tekton.dev/tool-image-run-script: harbor-cli-latest
+    operator.tekton.dev/tool-image: harbor-cli
+  name: catalog-tool-image-harbor-cli-latest
+  namespace: kube-public
+---
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  annotations:
+    style.tekton.dev/descriptors: |
+      - path: params.harborCliImage
+        x-descriptors:
+          - urn:alm:descriptor:label:en:Harbor CLI Image
+          - 'urn:alm:descriptor:description:en:Tool image used by this Task to run harbor-cli, kubectl, and the helper scripts that create Harbor projects, robot accounts, connector Secrets, and Harbor Connector resources'
+          - 'urn:alm:descriptor:tooltip:en:Use an image that already contains the required Harbor and Kubernetes CLI tools and can run as a non-root user, such as UID 65532'
+          - urn:alm:descriptor:com.tectonic.ui:select:image
+          - urn:alm:descriptor:expression:props.options:api:/kubernetes/${context.cluster}/api/v1/namespaces/kube-public/configmaps?labelSelector=catalog.tekton.dev%2Ftool-image-harbor-cli
+          - urn:alm:descriptor:props:select:allowCreate
+          - urn:alm:descriptor:expression:props.options:path:items
+          - urn:alm:descriptor:expression:props.options:label:path:data.name
+          - urn:alm:descriptor:expression:props.options:value:path:data.image
+          - urn:alm:descriptor:com.tectonic.ui:validation:required
+      - path: params.imagePullPolicy
+        x-descriptors:
+          - urn:alm:descriptor:label:en:Image Pull Policy
+          - 'urn:alm:descriptor:description:en:Controls when Kubernetes pulls the Harbor CLI image used by this Task'
+          - urn:alm:descriptor:com.tectonic.ui:select
+          - urn:alm:descriptor:com.tectonic.default:Always
+          - urn:alm:descriptor:props:select:allowCreate
+          - urn:alm:descriptor:props:select:options:Always
+          - urn:alm:descriptor:props:select:options:IfNotPresent
+          - urn:alm:descriptor:props:select:options:Never
+      - path: params.connector
+        x-descriptors:
+          - urn:alm:descriptor:label:en:Connector
+          - 'urn:alm:descriptor:description:en:Target Harbor Connector resource to create or update, in <namespace>/<name> format, for example connectors-management/project-a-harbor'
+          - 'urn:alm:descriptor:tooltip:en:Use <namespace>/<name>, for example connectors-management/project-a-harbor. The namespace is also used for the connector Secret'
+          - urn:alm:descriptor:com.tectonic.ui:text
+          - urn:alm:descriptor:com.tectonic.ui:validation:required
+      - path: params.secret
+        x-descriptors:
+          - urn:alm:descriptor:label:en:Connector Secret
+          - 'urn:alm:descriptor:description:en:Name of the Kubernetes Secret that stores Harbor credentials for the connector in the connector namespace. Leave empty to let the Task create or update a Kubernetes Secret named <connector-name>-secret automatically'
+          - 'urn:alm:descriptor:tooltip:en:Leave empty to let the Task create or update a Kubernetes Secret named <connector-name>-secret automatically'
+          - urn:alm:descriptor:com.tectonic.ui:text
+      - path: params.harborProjects
+        x-descriptors:
+          - urn:alm:descriptor:label:en:Harbor Projects
+          - 'urn:alm:descriptor:description:en:List of Harbor project names to create or update. Add one Harbor project name per item'
+          - 'urn:alm:descriptor:tooltip:en:Add one Harbor project name per item. The Task creates missing projects and reuses existing ones'
+          - urn:alm:descriptor:com.tectonic.ui:tagsInput
+          - urn:alm:descriptor:com.tectonic.ui:validation:required
+      - path: params.permissions
+        x-descriptors:
+          - urn:alm:descriptor:label:en:Project Permissions
+          - 'urn:alm:descriptor:description:en:Robot account permissions for the Harbor projects, matched one-to-one and in the same order as Harbor Projects. Provide one entry for each project using <resource>:<verb1>,<verb2>, for example repository:pull,push . More about harbor permission, please see https://goharbor.io/docs/2.13.0/administration/robot-accounts/#permission-references-a-namepermission-referencesa'
+          - 'urn:alm:descriptor:tooltip:en:Provide one entry for each project using <resource>:<verb1>,<verb2>, for example repository:pull,push'
+          - urn:alm:descriptor:com.tectonic.ui:tagsInput
+          - urn:alm:descriptor:com.tectonic.ui:validation:required
+      - path: params.robotAccount
+        x-descriptors:
+          - urn:alm:descriptor:label:en:Robot Account
+          - 'urn:alm:descriptor:description:en:Name of the Harbor robot account that the Task should reuse or create. Leave empty to let the Task generate a Harbor robot account named connector-<connector-namespace>-<connector-name>'
+          - 'urn:alm:descriptor:tooltip:en:Leave empty to let the Task generate a Harbor robot account named connector-<connector-namespace>-<connector-name>'
+          - urn:alm:descriptor:com.tectonic.ui:text
+      - path: params.robotAccountDuration
+        x-descriptors:
+          - urn:alm:descriptor:label:en:Robot Account Duration
+          - 'urn:alm:descriptor:description:en:Validity period of the Harbor robot account in days. Use -1 for no expiration'
+          - 'urn:alm:descriptor:tooltip:en:Set the robot account validity period in days. Use -1 to create a robot account that never expires'
+          - urn:alm:descriptor:com.tectonic.ui:text
+      - path: params.imagePullSecrets
+        x-descriptors:
+          - urn:alm:descriptor:label:en:Image Pull Secrets
+          - 'urn:alm:descriptor:description:en:List of Kubernetes image pull Secret references to create from the generated Harbor robot credentials. Add one Kubernetes Secret reference in <namespace>/<name> format per item'
+          - 'urn:alm:descriptor:tooltip:en:Add one Kubernetes Secret reference in <namespace>/<name> format per item. Each Secret is created or updated in that namespace'
+          - urn:alm:descriptor:com.tectonic.ui:tagsInput
+      - path: params.verbose
+        x-descriptors:
+          - urn:alm:descriptor:label:en:Verbose Logs
+          - 'urn:alm:descriptor:description:en:Show detailed logs for Harbor and Kubernetes reconciliation steps'
+          - urn:alm:descriptor:com.tectonic.ui:booleanSwitch
+          - urn:alm:descriptor:props:booleanSwitch:true:true
+          - urn:alm:descriptor:props:booleanSwitch:false:false
+    style.tekton.dev/displayParams: harborCliImage,harborProjects,permissions,robotAccountDuration,connector,imagePullSecrets
+    tekton.dev/categories: CLI
+    tekton.dev/displayName: Harbor Connector Automatic Creation
+    tekton.dev/icon: data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB3aWR0aD0iODBweCIgaGVpZ2h0PSI2MHB4IiB2aWV3Qm94PSIwIDAgODAgNjAiIHZlcnNpb249IjEuMSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIiB4bWxuczp4bGluaz0iaHR0cDovL3d3dy53My5vcmcvMTk5OS94bGluayI+CiAgICA8dGl0bGU+SGFyYm9yPC90aXRsZT4KICAgIDxnIGlkPSLljp/nlJ/lupTnlKgt6KGo5Y2V5Yib5bu6IiBzdHJva2U9Im5vbmUiIHN0cm9rZS13aWR0aD0iMSIgZmlsbD0ibm9uZSIgZmlsbC1ydWxlPSJldmVub2RkIj4KICAgICAgICA8ZyBpZD0iSGFyYm9yIj4KICAgICAgICAgICAgPHJlY3QgaWQ9IuefqeW9oiIgZmlsbD0iI0Q4RDhEOCIgb3BhY2l0eT0iMCIgeD0iMCIgeT0iMCIgd2lkdGg9IjgwIiBoZWlnaHQ9IjYwIj48L3JlY3Q+CiAgICAgICAgICAgIDxwYXRoIGQ9Ik00MCw2LjM5NDg4NDYyZS0xNCBDNTYuNTY4NTQyNSw2LjM5NDg4NDYyZS0xNCA3MCwxMy40Mjk3MTE2IDcwLDI5Ljk5NjEwMDUgQzcwLDQ2LjU2MjQ4OTQgNTYuNTY4NTQyNSw1OS45OTIyMDEgNDAsNTkuOTkyMjAxIEMyMy40MzE0NTc1LDU5Ljk5MjIwMSAxMCw0Ni41NjI0ODk0IDEwLDI5Ljk5NjEwMDUgQzEwLDEzLjQyOTcxMTYgMjMuNDMxNDU3NSw2LjM5NDg4NDYyZS0xNCA0MCw2LjM5NDg4NDYyZS0xNCBaIE00MCw1Ljk5OTIyMDEyIEMyNi43NDUxNjYsNS45OTkyMjAxMiAxNiwxNi43NDI5ODk0IDE2LDI5Ljk5NjEwMDUgQzE2LDM4LjU2OTM2MDMgMjAuNTc0Mzc0LDQ2LjQ5MTM3OSAyOCw1MC43NzgwMDg5IEMzNS40MjU2MjU4LDU1LjA2NDYzODkgNDQuNTc0Mzc0Miw1NS4wNjQ2Mzg5IDUyLDUwLjc3ODAwODkgQzU5LjQyNTYyNiw0Ni40OTEzNzkgNjQsMzguNTY5MzYwMyA2NCwyOS45OTYxMDA1IEM2NCwxNi43NDI5ODk0IDUzLjI1NDgzNCw1Ljk5OTIyMDEyIDQwLDUuOTk5MjIwMTIgWiIgaWQ9IuW9oueKtiIgZmlsbD0iIzY5NjU2NiIgZmlsbC1ydWxlPSJub256ZXJvIj48L3BhdGg+CiAgICAgICAgICAgIDxwYXRoIGQ9Ik0zOC45ODYsMjMuODY0Mjk3NyBMNTYuOTc3LDUuMjkxOTEyMDYgQzU4LjMzNzgsNi4yMTYzOTE4OCA1OS41MjI4LDcuMTQ1NjcxMDggNjAuNTMyLDguMDc3OTQ5ODkgQzYxLjU0MTIsOS4wMTA4Mjg2NCA2Mi41MzI0LDEwLjA5MzY4NzkgNjMuNTA1NiwxMS4zMjY1Mjc2IEwzOC45ODYsMjMuODY0ODk3NSBMMzguOTg2LDIzLjg2NDI5NzcgWiBNNDAsMjUuMDk1OTM3NSBMNjYuODk4NiwxNi43NTcwMjE2IEM2Ny42MTIsMTguMTU1NDM5OCA2OC4xNjgyLDE5LjQ0OTQ3MTUgNjguNTY2NiwyMC42Mzg1MTcgQzY4Ljk2Njg4MjksMjEuODMyMDgxMyA2OS4yNTY2OTk4LDIzLjA1OTg3NzcgNjkuNDMyNCwyNC4zMDY0NDAyIEw0MCwyNS4wOTU5Mzc1IFogTTM5LjUwOTgsMjYuNTU4NTQ3NCBMNjkuOTc0OCwyOC45MDcyNDIxIEM3MC4wMzEyLDI5LjkzMTMwODkgNjkuOTgzMiwzMS4yMTA5NDI2IDY5LjgzMjYsMzIuNzQ3MzQyOCBDNjkuNjgxNCwzNC4yODM3NDMxIDY5LjQ2NjYsMzUuNjcyNTYyNSA2OS4xODc2LDM2LjkxMzgwMTIgTDM5LjUwOTgsMjYuNTU5MTQ3MyBMMzkuNTA5OCwyNi41NTg1NDc0IFoiIGlkPSLlvaLnirYiIGZpbGw9IiM4M0I4RTIiIGZpbGwtcnVsZT0ibm9uemVybyI+PC9wYXRoPgogICAgICAgICAgICA8cGF0aCBkPSJNMjcuMDcsMjIuMzg0ODkgTDI3LjA3LDIwLjc1NjEwMTcgTDMyLjI0OCwxNS41Nzk5NzQ2IEwzMi4yNDgsMTUuMTA5NjM1OCBDMzIuMjQ3OTMyOSwxNC44OTY3NTk5IDMyLjM2MTQ3NzEsMTQuNzAwMDI1NyAzMi41NDU4NDU4LDE0LjU5MzU2ODQgQzMyLjczMDIxNDUsMTQuNDg3MTExMSAzMi45NTczODU1LDE0LjQ4NzExMTEgMzMuMTQxNzU0MiwxNC41OTM1Njg0IEMzMy4zMjYxMjI5LDE0LjcwMDAyNTcgMzMuNDM5NjY3MSwxNC44OTY3NTk5IDMzLjQzOTYsMTUuMTA5NjM1OCBMMzMuNDM5NiwxNS41Nzk5NzQ2IEwzOC42MTcsMjAuNzU2MTAxNyBMMzguNjE3LDIyLjM4NDg5IEwzNy43ODksMjIuMzg0ODkgTDM3Ljc4OSwyOC4xNDQ3NDEyIEwzOC42MTcsMjguMTQ0NzQxMiBMMzguNjE3LDMwLjk2MDc3NTEgTDM3Ljc4OSwzMC45NjA3NzUxIEwzOS41MzUsNjAgQzM2Ljg0MTYsNTkuODU5MDE4MyAzNC40OTMyLDU5LjU0MTY1OTYgMzIuNDg5OCw1OS4wNDc5MjM4IEMzMC40ODcsNTguNTU0Nzg3OSAyOC40ODksNTcuODAxMjg1OCAyNi40OTcsNTYuNzg4MDE3NiBMMjguNDM1LDMwLjk2MTM3NSBMMjcuMDcsMzAuOTYxMzc1IEwyNy4wNywyOC4xNDQ3NDEyIEwyOC4wMTY4LDI4LjE0NDc0MTIgTDI4LjAxNjgsMjIuMzg0ODkgTDI3LjA3LDIyLjM4NDg5IFoiIGlkPSLot6/lvoQiIGZpbGw9IiM0RkE0MzQiIGZpbGwtcnVsZT0ibm9uemVybyI+PC9wYXRoPgogICAgICAgICAgICA8cGF0aCBkPSJNMjguMTUxMiwzNC43MDI0ODg3IEwzOC4yODcsMzkuMjQzODk4MyBMMzguMzgsNDAuODAwNjk1OSBMMjguMDQ4LDM2LjExNjUwNDkgTDI4LjE1MTIsMzQuNzAyNDg4NyBaIE0yNy44ODk2LDM4LjE4MDIzNjYgTDM4LjUxOTgsNDIuOTU1NjE1OCBMMzguNjA2OCw0NC41NTkyMDczIEwyNy43ODI4LDM5LjY2ODY0MzEgTDI3Ljg4OTYsMzguMTgwMjM2NiBaIE0yNy41OTI2LDQyLjIwMjExMzcgTDM4Ljc3MzYsNDcuMjk1NDUxNiBMMzguODg3Niw0OC45MzA4MzkgTDI3LjQ1MSw0My43OTkxMDYxIEwyNy41OTI2LDQyLjIwMjExMzcgWiBNMjcuMjc5NCw0Ni4yODA5ODM1IEwzOS4wMjU2LDUxLjYwODI5MDkgTDM5LjEyNTIsNTMuMjQ0Mjc4MiBMMjcuMTU4OCw0Ny45NDk5NjY1IEwyNy4yNzk0LDQ2LjI4MDk4MzUgWiBNMjkuNTMsMjIuMzkzMjg4OSBMMzYuMzQxMiwyMi4zOTMyODg5IEwzNi4zNDEyLDI4LjE2MDMzOTIgTDM0LjYxNzQsMjguMTYwMzM5MiBMMzQuNjE3NCwyNS41OTk4NzIgQzM0LjYxNzQsMjQuNjQxMzQwOCAzMy44NDAyNTU5LDIzLjg2NDI5NzcgMzIuODgxNiwyMy44NjQyOTc3IEMzMS45MjI5NDQxLDIzLjg2NDI5NzcgMzEuMTQ1OCwyNC42NDEzNDA4IDMxLjE0NTgsMjUuNTk5ODcyIEwzMS4xNDU4LDI4LjE2MDMzOTIgTDI5LjUzLDI4LjE2MDMzOTIgTDI5LjUzLDIyLjM5MzI4ODkgWiIgaWQ9IuW9oueKtiIgZmlsbD0iI0ZGRkZGRiIgZmlsbC1ydWxlPSJub256ZXJvIj48L3BhdGg+CiAgICAgICAgPC9nPgogICAgPC9nPgo8L3N2Zz4=
+    tekton.dev/pipelines.minVersion: 0.56.0
+    tekton.dev/platforms: linux/amd64,linux/arm64
+    tekton.dev/tags: harbor, connector, kubernetes, secret, robot-account
+  labels:
+    app.kubernetes.io/version: "0.1"
+  name: harbor-connector-automatic-creation
+  namespace: ${TARGET_NS}
+spec:
+  description: Use harbor-cli to create or update Harbor projects and robot accounts, then create Kubernetes Secret, Harbor Connector, and optional imagePullSecrets in target namespaces. It is suitable for quickly initializing Harbor connectors for cluster tenants and refreshing connector credentials when needed.
+  params:
+    - description: Tool image used by every step of this Task to run harbor-cli, kubectl, and the helper scripts that create Harbor projects, robot accounts, connector Secrets, and Harbor Connector resources
+      name: harborCliImage
+      type: string
+    - default: Always
+      description: Controls when Kubernetes pulls the Harbor CLI image used by this Task
+      name: imagePullPolicy
+      type: string
+    - description: Target Harbor Connector resource to create or update, in <namespace>/<name> format, for example connectors-management/project-a-harbor
+      name: connector
+      type: string
+    - default: ""
+      description: Name of the Kubernetes Secret that stores Harbor credentials for the connector in the connector namespace; leave empty to let the Task create or update <connector-name>-secret automatically
+      name: secret
+      type: string
+    - description: List of Harbor project names to create or update; add one Harbor project name per item
+      name: harborProjects
+      type: array
+    - description: Robot account permissions for the Harbor projects, matched one-to-one and in the same order as harborProjects; provide one entry for each project using <resource>:<verb1>,<verb2> format, for example repository:pull,push. More about harbor permission, please see https://goharbor.io/docs/2.13.0/administration/robot-accounts/#permission-references-a-namepermission-referencesa
+      name: permissions
+      type: array
+    - default: ""
+      description: Name of the Harbor robot account that the Task should reuse or create; leave empty to let the Task generate connector-<connector-namespace>-<connector-name>
+      name: robotAccount
+      type: string
+    - default: "-1"
+      description: Validity period of the Harbor robot account in days; use "-1" for no expiration
+      name: robotAccountDuration
+      type: string
+    - description: List of Kubernetes image pull Secret references to create from the generated Harbor robot credentials; add one <namespace>/<name> reference per item
+      name: imagePullSecrets
+      type: array
+    - default: "false"
+      description: Show detailed logs for Harbor and Kubernetes reconciliation steps; use "true" to troubleshoot and "false" for normal runs
+      name: verbose
+      type: string
+  results:
+    - description: List of Harbor project names that the Task created or checked, returned in the same order as the input
+      name: harbor-projects
+      type: array
+    - description: Name of the Harbor robot account actually used by the Task, including the generated default when robotAccount is left empty
+      name: robot-account-name
+    - description: Namespaced reference of the Harbor Connector handled by the Task, in <namespace>/<name> format
+      name: connector-ref
+    - description: List of Kubernetes image pull Secret references requested through imagePullSecrets, returned as <namespace>/<name> values
+      name: image-pull-secret-refs
+      type: array
+  steps:
+    - args:
+        - --harbor-projects
+        - $(params.harborProjects[*])
+        - --harbor-projects-permissions
+        - $(params.permissions[*])
+      computeResources:
+        limits:
+          cpu: 500m
+          memory: 512Mi
+        requests:
+          cpu: 100m
+          memory: 128Mi
+      env:
+        - name: VERBOSE
+          value: $(params.verbose)
+        - name: CONNECTOR
+          value: $(params.connector)
+        - name: ROBOT_ACCOUNT
+          value: $(params.robotAccount)
+        - name: ROBOT_ACCOUNT_DURATION
+          value: $(params.robotAccountDuration)
+        - name: WORKSPACE_HARBOR_CONFIG_BOUND
+          value: $(workspaces.harbor-config.bound)
+        - name: WORKSPACE_HARBOR_CONFIG_PATH
+          value: $(workspaces.harbor-config.path)
+      image: $(params.harborCliImage)
+      imagePullPolicy: $(params.imagePullPolicy)
+      name: ensure-harbor
+      script: |
+        #!/bin/bash
+        set -euo pipefail
+
+        mode=""
+        project_args=()
+        permission_args=()
+        robot_account_args=()
+
+        parse_step_args() {
+          for arg in "$@"; do
+            case "${arg}" in
+              --harbor-projects)
+                mode="projects"
+                continue
+                ;;
+              --harbor-projects-permissions)
+                mode="permissions"
+                continue
+                ;;
+            esac
+            if [[ "${mode}" == "projects" && -n "${arg}" ]]; then
+              project_args+=(--harbor-projects "${arg}")
+            elif [[ "${mode}" == "permissions" && -n "${arg}" ]]; then
+              permission_args+=(--harbor-projects-permissions "${arg}")
+            fi
+          done
+        }
+
+        prepare_harbor_cli_environment() {
+          if [[ "${WORKSPACE_HARBOR_CONFIG_BOUND}" != "true" ]]; then
+            unset HARBOR_CLI_CONFIG || true
+            unset HARBOR_ENCRYPTION_KEY || true
+            return
+          fi
+
+          if [[ -f "${WORKSPACE_HARBOR_CONFIG_PATH}/.env" ]]; then
+            set -a
+            # .env is generated by connectors-csi for connector-backed Harbor CLI config mounts.
+            source "${WORKSPACE_HARBOR_CONFIG_PATH}/.env"
+            set +a
+          fi
+
+          export HARBOR_CLI_CONFIG="${WORKSPACE_HARBOR_CONFIG_PATH}/config.yaml"
+          export HARBOR_ENCRYPTION_KEY="$(cat "${WORKSPACE_HARBOR_CONFIG_PATH}/HARBOR_ENCRYPTION_KEY")"
+        }
+
+        mkdir -p /shared
+        prepare_harbor_cli_environment
+        parse_step_args "$@"
+
+        if [[ -n "${ROBOT_ACCOUNT}" ]]; then
+          robot_account_args=(--robot-account "${ROBOT_ACCOUNT}")
+        fi
+
+        ensure-projects.sh \
+          --verbose "${VERBOSE}" \
+          "${project_args[@]}"
+
+        ensure-robot-account.sh \
+          --connector "${CONNECTOR}" \
+          --output-token-file /shared/robot-token \
+          --robot-account-duration "${ROBOT_ACCOUNT_DURATION}" \
+          --verbose "${VERBOSE}" \
+          "${robot_account_args[@]}" \
+          "${project_args[@]}" \
+          "${permission_args[@]}"
+      securityContext:
+        runAsNonRoot: true
+      volumeMounts:
+        - mountPath: /shared
+          name: shared-data
+    - args:
+        - --image-pull-secrets
+        - $(params.imagePullSecrets[*])
+      computeResources:
+        limits:
+          cpu: 500m
+          memory: 512Mi
+        requests:
+          cpu: 100m
+          memory: 128Mi
+      env:
+        - name: VERBOSE
+          value: $(params.verbose)
+        - name: CONNECTOR
+          value: $(params.connector)
+        - name: SECRET
+          value: $(params.secret)
+        - name: ROBOT_ACCOUNT
+          value: $(params.robotAccount)
+        - name: WORKSPACE_HARBOR_CONFIG_BOUND
+          value: $(workspaces.harbor-config.bound)
+        - name: WORKSPACE_HARBOR_CONFIG_PATH
+          value: $(workspaces.harbor-config.path)
+        - name: WORKSPACE_KUBE_CONFIG_BOUND
+          value: $(workspaces.kube-config.bound)
+        - name: WORKSPACE_KUBE_CONFIG_PATH
+          value: $(workspaces.kube-config.path)
+      image: $(params.harborCliImage)
+      imagePullPolicy: $(params.imagePullPolicy)
+      name: apply-kubernetes-resources
+      script: |
+        #!/bin/bash
+        set -euo pipefail
+
+        mode=""
+        image_pull_secret_args=()
+        robot_account_args=()
+
+        parse_step_args() {
+          for arg in "$@"; do
+            case "${arg}" in
+              --image-pull-secrets)
+                mode="image-pull-secrets"
+                continue
+                ;;
+            esac
+            if [[ "${mode}" == "image-pull-secrets" && -n "${arg}" ]]; then
+              image_pull_secret_args+=(--image-pull-secrets "${arg}")
+            fi
+          done
+        }
+
+        prepare_harbor_cli_environment() {
+          if [[ "${WORKSPACE_HARBOR_CONFIG_BOUND}" != "true" ]]; then
+            unset HARBOR_CLI_CONFIG || true
+            unset HARBOR_ENCRYPTION_KEY || true
+            return
+          fi
+
+          if [[ -f "${WORKSPACE_HARBOR_CONFIG_PATH}/.env" ]]; then
+            set -a
+            # .env is generated by connectors-csi for connector-backed Harbor CLI config mounts.
+            source "${WORKSPACE_HARBOR_CONFIG_PATH}/.env"
+            set +a
+          fi
+
+          export HARBOR_CLI_CONFIG="${WORKSPACE_HARBOR_CONFIG_PATH}/config.yaml"
+          export HARBOR_ENCRYPTION_KEY="$(cat "${WORKSPACE_HARBOR_CONFIG_PATH}/HARBOR_ENCRYPTION_KEY")"
+        }
+
+        prepare_kubeconfig_environment() {
+          if [[ "${WORKSPACE_KUBE_CONFIG_BOUND}" != "true" ]]; then
+            unset KUBECONFIG || true
+            return
+          fi
+
+          export KUBECONFIG="${WORKSPACE_KUBE_CONFIG_PATH}/kubeconfig"
+        }
+
+        prepare_harbor_cli_environment
+        prepare_kubeconfig_environment
+
+        if [[ -n "${ROBOT_ACCOUNT}" ]]; then
+          robot_account_args=(--robot-account "${ROBOT_ACCOUNT}")
+        fi
+
+        parse_step_args "$@"
+
+        apply-kubernetes-resources.sh \
+          --connector "${CONNECTOR}" \
+          --secret "${SECRET}" \
+          --robot-token-file /shared/robot-token \
+          --verbose "${VERBOSE}" \
+          "${robot_account_args[@]}" \
+          "${image_pull_secret_args[@]}"
+      securityContext:
+        runAsNonRoot: true
+      volumeMounts:
+        - mountPath: /shared
+          name: shared-data
+    - args:
+        - --harbor-projects
+        - $(params.harborProjects[*])
+        - --image-pull-secrets
+        - $(params.imagePullSecrets[*])
+      computeResources:
+        limits:
+          cpu: 500m
+          memory: 512Mi
+        requests:
+          cpu: 100m
+          memory: 128Mi
+      env:
+        - name: CONNECTOR
+          value: $(params.connector)
+        - name: ROBOT_ACCOUNT
+          value: $(params.robotAccount)
+      image: $(params.harborCliImage)
+      imagePullPolicy: $(params.imagePullPolicy)
+      name: write-results
+      script: |
+        #!/bin/bash
+        set -euo pipefail
+
+        mode=""
+        harbor_projects=()
+        image_pull_secrets=()
+        robot_account="${ROBOT_ACCOUNT}"
+        output_path=""
+
+        parse_step_args() {
+          for arg in "$@"; do
+            case "${arg}" in
+              --harbor-projects)
+                mode="projects"
+                continue
+                ;;
+              --image-pull-secrets)
+                mode="image-pull-secrets"
+                continue
+                ;;
+            esac
+            if [[ "${mode}" == "projects" && -n "${arg}" ]]; then
+              harbor_projects+=("${arg}")
+            elif [[ "${mode}" == "image-pull-secrets" && -n "${arg}" ]]; then
+              image_pull_secrets+=("${arg}")
+            fi
+          done
+        }
+
+        parse_step_args "$@"
+
+        if [[ -z "${robot_account}" ]]; then
+          robot_account="connector-${CONNECTOR%%/*}-${CONNECTOR#*/}"
+        fi
+
+        output_path="$(results.harbor-projects.path)"
+        printf '[' > "${output_path}"
+        for i in "${!harbor_projects[@]}"; do
+          if [[ "${i}" -gt 0 ]]; then
+            printf ',' >> "${output_path}"
+          fi
+          printf '"%s"' "${harbor_projects[${i}]}" >> "${output_path}"
+        done
+        printf ']' >> "${output_path}"
+
+        printf '%s' "${CONNECTOR}" > "$(results.connector-ref.path)"
+        printf '%s' "${robot_account}" > "$(results.robot-account-name.path)"
+
+        output_path="$(results.image-pull-secret-refs.path)"
+        printf '[' > "${output_path}"
+        for i in "${!image_pull_secrets[@]}"; do
+          if [[ "${i}" -gt 0 ]]; then
+            printf ',' >> "${output_path}"
+          fi
+          printf '"%s"' "${image_pull_secrets[${i}]}" >> "${output_path}"
+        done
+        printf ']' >> "${output_path}"
+      securityContext:
+        runAsNonRoot: true
+  volumes:
+    - emptyDir:
+        medium: Memory
+      name: shared-data
+  workspaces:
+    - description: Optional Harbor CLI config input; when bound the Task exports HARBOR_CLI_CONFIG from config.yaml, HARBOR_ENCRYPTION_KEY from HARBOR_ENCRYPTION_KEY, and sources .env when present so connector-backed harbor-cli-config mounts can inject proxy variables, otherwise harbor-cli falls back to its default config lookup
+      name: harbor-config
+      optional: true
+    - description: Optional kubeconfig input; when bound the Task exports KUBECONFIG, otherwise kubectl falls back to its default config lookup
+      name: kube-config
+      optional: true
+EOF
+```
+{/* END GENERATED TASK YAML */}

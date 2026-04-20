@@ -1,0 +1,460 @@
+---
+weight: 25
+title: Automatically Create and Reconcile Harbor Connector Resources with Tekton
+---
+
+# Automatically Create and Reconcile Harbor Connector Resources with Tekton
+
+When a new tenant, project, or namespace is created in Alauda Container Platform, administrators often need to complete the same Harbor onboarding steps again and again:
+
+- Create one or more Harbor projects.
+- Create or update a Harbor robot account with the correct project permissions.
+- Create the Connector authentication Secret and the Harbor Connector in Kubernetes.
+- Distribute `imagePullSecrets` to the namespaces that need to pull images.
+
+The same operational problem appears again later when Harbor credentials need to be refreshed. The robot account token changes, but the corresponding Connector Secret and `imagePullSecrets` must also be updated in a controlled way.
+
+This guide focuses on that operational problem. The implementation mechanism used here is the `harbor-connector-automatic-creation` Tekton Task. You can run it once for initial provisioning, and run it again later to reconcile permissions and refresh credentials.
+
+## What Problem This Solves
+
+Use this approach when you need to automate Harbor onboarding and credential refresh for Alauda Container Platform tenants and namespaces.
+
+Common scenarios include:
+
+- **Project-level shared Harbor access**: create one or more Harbor projects and one robot account for an Alauda Container Platform project, then distribute `imagePullSecrets` to multiple namespaces in that project.
+- **Namespace-level isolated Harbor access**: create a Harbor project, robot account, Connector, and `imagePullSecret` for one namespace that should not share image access with other namespaces.
+- **Multiple Harbor projects with one robot account**: grant one robot account access to several Harbor projects, with one permission definition per project.
+- **Credential refresh and reconciliation**: re-run the same automation to update robot account permissions, refresh the robot token, and update the generated Secrets.
+
+This guide is about solving the Harbor initialization and credential lifecycle problem. The Tekton Task is the solution used to implement that workflow.
+
+## Before You Begin
+
+Make sure the environment meets these requirements:
+
+- Tekton Pipelines is installed.
+- The Connectors system and the Harbor Connector component are installed.
+- The [`harbor-connector-automatic-creation` Task](./harbor_connector_automatic_creation_task.mdx) is installed in the namespace where you will run the TaskRun.
+- The Harbor runtime image used by the Task is available from your internal registry.
+
+Security recommendation:
+
+- Use a private management namespace to store the privileged Harbor credential, the Kubernetes credential, and the TaskRun that performs provisioning or credential refresh.
+- Use generated `imagePullSecrets` only in the target namespaces that actually need them.
+- Restrict who can trigger the TaskRun, because that action can create or refresh Harbor robot account credentials.
+
+## Prepare Credentials and Workspaces
+
+The solution uses two workspaces:
+
+| Workspace | Purpose | Expected files |
+| --------- | ------- | -------------- |
+| `harbor-config` | Harbor CLI configuration and Harbor credentials used for Harbor-side operations. | `config.yaml`, `HARBOR_ENCRYPTION_KEY`; connector-backed mounts also provide `.env` |
+| `kube-config` | kubeconfig used for Kubernetes-side operations. | `kubeconfig` |
+
+### Harbor credentials for `harbor-config`
+
+This workspace provides the Harbor credential that the automation uses to create Harbor projects, create or update or delete robot accounts, and refresh robot account secrets.
+
+The Harbor credential used here must be able to:
+
+- Create and update Harbor projects.
+- Create, update, and delete system-level robot accounts.
+- Refresh robot account secrets.
+
+You can provide this workspace in either of these ways:
+
+- Use a Harbor Connector to render a Harbor CLI configuration through Connectors CSI.
+- Use a Kubernetes Secret that contains a pre-generated Harbor CLI `config.yaml` and matching `HARBOR_ENCRYPTION_KEY`.
+
+#### Use a Harbor Connector for `harbor-config`
+
+Use this option when you want the TaskRun to access Harbor through the Harbor Connector proxy instead of mounting the original Harbor username and password directly into the Task Pod.
+
+First, create a Harbor Connector in the management namespace. The credential behind this Connector should be a dedicated Harbor robot account with the Harbor permissions listed above.
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: harbor-provisioner-auth
+  namespace: <management-namespace>
+type: kubernetes.io/basic-auth
+stringData:
+  username: <harbor-robot-username>
+  password: <harbor-robot-token>
+---
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: harbor-provisioner
+  namespace: <management-namespace>
+spec:
+  connectorClassName: harbor
+  address: https://harbor.example.com
+  auth:
+    name: basicAuth
+    secretRef:
+      name: harbor-provisioner-auth
+```
+
+Then bind the TaskRun `harbor-config` workspace to the Connector with the `harbor-cli-config` configuration:
+
+```yaml
+workspaces:
+  - name: harbor-config
+    csi:
+      driver: connectors-csi
+      readOnly: true
+      volumeAttributes:
+        connectors: <management-namespace>/harbor-provisioner
+        configuration.names: harbor-cli-config
+```
+
+You can replace the `harbor-config` Secret binding in the TaskRun examples below with this CSI binding.
+
+The `harbor-cli-config` mount provides:
+
+- `config.yaml`: a Harbor CLI configuration whose context points to the Harbor address from the Connector.
+- `HARBOR_ENCRYPTION_KEY`: the key Harbor CLI needs when reading the generated `config.yaml`.
+- `.env`: proxy environment variables that route Harbor CLI traffic through the Harbor Connector proxy.
+
+The generated `config.yaml` does not contain the original Harbor password. Harbor access is authorized through the Connector and the Connector proxy, so make sure the service account that runs the TaskRun is allowed to access this Harbor Connector.
+
+For more details about the generated files and Harbor CLI runtime behavior, see [Harbor CLI configuration](../concepts/harbor_connectorclass.mdx#harbor-cli-configuration).
+
+#### Prepare `config.yaml` and the encryption key
+
+Use this option when you want to provide a normal Harbor CLI login configuration through a Kubernetes Secret.
+
+The format of `config.yaml` and the login behavior are defined by the official Harbor CLI documentation:
+
+- [Harbor CLI project](https://github.com/goharbor/harbor-cli)
+- [harbor login command reference](https://github.com/goharbor/harbor-cli/blob/main/doc/cli-docs/harbor-login.md)
+
+For this workspace, prepare:
+
+- `config.yaml`
+- `HARBOR_ENCRYPTION_KEY`
+
+`HARBOR_ENCRYPTION_KEY` contains the same value that Harbor CLI uses through the `HARBOR_ENCRYPTION_KEY` environment variable. Use a base64-encoded 32-byte value for this key. Harbor CLI uses that key when it writes the encrypted `password` value into `config.yaml`, and the same key is required later when the Task reads `config.yaml`. The recommended way to calculate a compatible encrypted `password` value is to let `harbor-cli login` write it for you.
+
+Example:
+
+```bash
+mkdir -p harbor-cli-materials
+
+openssl rand -base64 32 > harbor-cli-materials/HARBOR_ENCRYPTION_KEY
+
+export HARBOR_ENCRYPTION_KEY="$(cat harbor-cli-materials/HARBOR_ENCRYPTION_KEY)"
+export HARBOR_CLI_CONFIG="$PWD/harbor-cli-materials/config.yaml"
+
+printf '%s' 'your-harbor-robot-token' | \
+  harbor-cli login https://harbor.example.com \
+    -u <harbor-robot-username> \
+    --password-stdin \
+    --context-name harbor.example.com
+```
+
+After `harbor-cli login` succeeds, `harbor-cli-materials/config.yaml` contains the Harbor CLI context, and the `password` field is stored in the encrypted format expected by Harbor CLI.
+
+#### Create the `harbor-config` Secret
+
+```bash
+kubectl create secret generic harbor-cli-config \
+  -n <management-namespace> \
+  --from-file=config.yaml=harbor-cli-materials/config.yaml \
+  --from-file=HARBOR_ENCRYPTION_KEY=harbor-cli-materials/HARBOR_ENCRYPTION_KEY \
+  --dry-run=client -o yaml | kubectl apply -f -
+```
+
+Bind it like this:
+
+```yaml
+workspaces:
+  - name: harbor-config
+    secret:
+      secretName: harbor-cli-config
+```
+
+### Kubernetes credentials for `kube-config`
+
+This workspace provides the Kubernetes credential that the automation uses to create or update the Connector Secret, Harbor Connector, and generated `imagePullSecrets`.
+
+The Kubernetes credential used here must be able to:
+
+- Create and update Secrets in the Connector namespace.
+- Create and update Harbor Connector resources in the Connector namespace.
+- Create and update `imagePullSecrets` in each target namespace.
+
+#### Use a Kubernetes Secret for `kube-config`
+
+This is the simplest approach when you already have a kubeconfig file for the target cluster:
+
+```bash
+kubectl create secret generic target-kubeconfig \
+  -n <management-namespace> \
+  --from-file=kubeconfig=/path/to/kubeconfig \
+  --dry-run=client -o yaml | kubectl apply -f -
+```
+
+Bind it like this:
+
+```yaml
+workspaces:
+  - name: kube-config
+    secret:
+      secretName: target-kubeconfig
+```
+
+#### Use a Kubernetes Connector for `kube-config`
+
+You can also provide `kube-config` through Connectors CSI with a Kubernetes Connector that renders the `kubeconfig` configuration:
+
+```yaml
+workspaces:
+  - name: kube-config
+    csi:
+      driver: connectors-csi
+      readOnly: true
+      volumeAttributes:
+        connectors: <management-namespace>/<k8s-connector-name>
+        configuration.names: kubeconfig
+```
+
+For how to create that Kubernetes Connector, see [Using Kubernetes Connector in Tekton Task](../../connectors-k8s/how_to/using-in-tekton-task.mdx) and [Kubernetes Connector](../../connectors-k8s/concepts/k8s_connectorclass.mdx).
+
+## How the Task Solves the Problem
+
+The `harbor-connector-automatic-creation` Task is used in two ways:
+
+- **Initial provisioning**: create Harbor projects, create or update the robot account, create the Connector Secret, create the Harbor Connector, and optionally distribute `imagePullSecrets`.
+- **Repeated reconciliation**: run the same Task again with the intended Harbor project and permission set to refresh the robot token and update the generated Secrets.
+
+This document focuses on the workflow. For the full parameter reference and the exact Task definition, see the [`harbor-connector-automatic-creation` Task reference](./harbor_connector_automatic_creation_task.mdx).
+
+## Example: Create Shared Harbor Access for an Alauda Container Platform Project
+
+Replace these placeholders before you run the example:
+
+- `<management-namespace>`: the private namespace that contains the Task and the credential Secrets.
+- `<your-registry>`: your internal registry address.
+- `<project-namespace-a>` and `<project-namespace-b>`: the target application namespaces.
+
+example:
+
+```yaml
+apiVersion: tekton.dev/v1
+kind: TaskRun
+metadata:
+  name: project-a-harbor-setup
+  namespace: <management-namespace>
+spec:
+  taskRef:
+    kind: Task
+    name: harbor-connector-automatic-creation
+  params:
+    - name: harborCliImage
+      value: <your-registry>/devops/harbor-connector-automatic-creation:v0.0.18
+    - name: connector
+      value: <management-namespace>/project-a-harbor
+    - name: harborProjects
+      value:
+        - project-a-shared
+        - project-a-delivery
+    - name: permissions
+      value:
+        - repository:pull,push
+        - repository:pull
+    - name: imagePullSecrets
+      value:
+        - <project-namespace-a>/harbor-pull-secret
+        - <project-namespace-b>/harbor-pull-secret
+  workspaces:
+    - name: harbor-config
+      secret:
+        secretName: harbor-cli-config
+    - name: kube-config
+      secret:
+        secretName: target-kubeconfig
+```
+
+After the TaskRun succeeds:
+
+- Harbor contains the requested Harbor projects.
+- Harbor contains the robot account used for those projects.
+- The management namespace contains the generated Connector Secret and the Harbor Connector.
+- Each target namespace contains the requested `imagePullSecret`.
+
+## Example: Create Namespace-specific Harbor Access
+
+This example keeps the Harbor access path isolated for one namespace:
+
+```yaml
+apiVersion: tekton.dev/v1
+kind: TaskRun
+metadata:
+  name: team-a-harbor-setup
+  namespace: <management-namespace>
+spec:
+  taskRef:
+    kind: Task
+    name: harbor-connector-automatic-creation
+  params:
+    - name: harborCliImage
+      value: <your-registry>/devops/harbor-connector-automatic-creation:v0.0.18
+    - name: connector
+      value: <management-namespace>/team-a-harbor
+    - name: harborProjects
+      value:
+        - team-a
+    - name: permissions
+      value:
+        - repository:pull,push
+    - name: robotAccount
+      value: team-a-harbor-robot
+    - name: imagePullSecrets
+      value:
+        - <team-a-namespace>/harbor-pull-secret
+  workspaces:
+    - name: harbor-config
+      secret:
+        secretName: harbor-cli-config
+    - name: kube-config
+      csi:
+        driver: connectors-csi
+        readOnly: true
+        volumeAttributes:
+          connectors: <management-namespace>/<k8s-connector-name>
+          configuration.names: kubeconfig
+```
+
+Use this pattern when one namespace should own its own Harbor project and should not share image pull credentials with other namespaces.
+
+## Example: Re-run the Task to Refresh Credentials and Reconcile Resources
+
+Use the same Task again when you need to add a Harbor project, change the permission set, or refresh the robot token and update all generated Secrets.
+
+```yaml
+apiVersion: tekton.dev/v1
+kind: TaskRun
+metadata:
+  name: project-a-harbor-reconcile
+  namespace: <management-namespace>
+spec:
+  taskRef:
+    kind: Task
+    name: harbor-connector-automatic-creation
+  params:
+    - name: harborCliImage
+      value: <your-registry>/devops/harbor-connector-automatic-creation:v0.0.18
+    - name: connector
+      value: <management-namespace>/project-a-harbor
+    - name: harborProjects
+      value:
+        - project-a-shared
+        - project-a-delivery
+        - project-a-security
+    - name: permissions
+      value:
+        - repository:pull,push
+        - repository:pull
+        - repository:pull
+    - name: imagePullSecrets
+      value:
+        - <project-namespace-a>/harbor-pull-secret
+        - <project-namespace-b>/harbor-pull-secret
+  workspaces:
+    - name: harbor-config
+      secret:
+        secretName: harbor-cli-config
+    - name: kube-config
+      secret:
+        secretName: target-kubeconfig
+```
+
+Keep the same Connector identity when you want to reconcile an existing Harbor access path instead of creating a separate one.
+
+## Verify the Result
+
+Check that the TaskRun succeeded:
+
+```bash
+kubectl get taskrun project-a-harbor-setup -n <management-namespace>
+```
+
+Check the generated Connector and Secret in the management namespace:
+
+```bash
+kubectl get connector project-a-harbor -n <management-namespace>
+kubectl get secret project-a-harbor-secret -n <management-namespace>
+```
+
+Check the generated `imagePullSecret` in a target namespace:
+
+```bash
+kubectl get secret harbor-pull-secret -n <project-namespace-a>
+```
+
+To verify that the generated `imagePullSecret` can actually pull an image, create a temporary Pod in the target namespace:
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: harbor-pull-check
+  namespace: <project-namespace-a>
+spec:
+  restartPolicy: Never
+  imagePullSecrets:
+    - name: harbor-pull-secret
+  containers:
+    - name: check
+      image: <your-harbor-registry>/<your-project>/<your-image>:<your-tag>
+```
+
+Replace the image with one that the generated robot account is allowed to pull. Then check the Pod:
+
+```bash
+kubectl get pod harbor-pull-check -n <project-namespace-a>
+kubectl describe pod harbor-pull-check -n <project-namespace-a>
+```
+
+If the Pod starts successfully and does not enter `ImagePullBackOff` or `ErrImagePull`, the generated `imagePullSecret` is usable by Kubernetes image pull.
+
+## Troubleshooting
+
+### `harborProjects` and `permissions` counts do not match
+
+Each Harbor project must have one matching permission definition. The two arrays are matched by index.
+
+### The `connector` or `imagePullSecrets` value has an invalid format
+
+The `connector` value must use `<namespace>/<name>`. Each `imagePullSecrets` entry must also use `<namespace>/<name>`.
+
+### The `kube-config` workspace is missing `kubeconfig`
+
+The `kube-config` workspace must provide a file named `kubeconfig`.
+
+### Harbor permissions are not sufficient
+
+The Harbor credential used by `harbor-config` must be allowed to create or update Harbor projects, create or update or delete system-level robot accounts, and refresh robot account secrets.
+
+If you use a Harbor Connector for `harbor-config`, check both:
+
+- The Harbor robot account configured in the Connector has those Harbor-side permissions.
+- The TaskRun service account is allowed to use that Connector.
+
+### Kubernetes permissions are not sufficient
+
+The Kubernetes credential used by `kube-config` must be allowed to create and update the Connector Secret, Harbor Connector, and generated `imagePullSecrets`.
+
+### The `imagePullSecret` exists but image pull still fails
+
+Check the following:
+
+- The image points to the Harbor registry that the Task prepared credentials for.
+- The robot account has `repository:pull` permission for the Harbor project that contains the image.
+- The Pod references the generated `imagePullSecret` in the same namespace.
+- The `imagePullSecrets` entry used in the TaskRun matches the actual target namespace and Secret name.
