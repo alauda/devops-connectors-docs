@@ -1,0 +1,103 @@
+---
+weight: 30
+---
+
+# Quick Start
+
+This guide shows how to create a GitHub Connector and use it to clone a repository without exposing GitHub credentials directly in your workload.
+
+## Prerequisites
+
+- Kubernetes cluster with Connectors installed (Operator, ConnectorsCore, ConnectorsGitHub)
+- `kubectl` configured for your cluster
+- A GitHub Personal Access Token (PAT)
+
+## Step 1: Create Namespace
+
+```bash
+kubectl create ns github-connector-demo
+```
+
+## Step 2: Create Secret and Connector
+
+```bash
+cat <<EOF | kubectl apply -f -
+apiVersion: v1
+kind: Secret
+metadata:
+  name: github-secret
+  namespace: github-connector-demo
+type: Opaque
+stringData:
+  token: ghp_xxxxxxxxxxxxxxxxxxxx
+---
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: github-connector
+  namespace: github-connector-demo
+spec:
+  connectorClassName: github
+  address: https://github.com
+  auth:
+    name: patAuth
+    secretRef:
+      name: github-secret
+  addressExtensions:
+    - name: api
+      value: https://api.github.com
+EOF
+```
+
+Verify readiness:
+
+```bash
+kubectl get connector -n github-connector-demo github-connector
+```
+
+## Step 3: Run a Clone Job
+
+```bash
+cat <<EOF | kubectl apply -f -
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: github-git-clone
+  namespace: github-connector-demo
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: git
+        image: bitnami/git
+        command: ["sh", "-c"]
+        args:
+        - |
+          set -ex
+          cp /opt/git/.gitconfig /root/
+          chmod 644 /root/.gitconfig
+          git clone --progress https://github.com/octocat/hello-world.git /tmp/repo
+        volumeMounts:
+        - name: github-auth
+          mountPath: /opt/git
+      volumes:
+      - name: github-auth
+        csi:
+          readOnly: true
+          driver: connectors-csi
+          volumeAttributes:
+            connector.name: "github-connector"
+            configuration.names: "gitconfig"
+EOF
+```
+
+## Step 4: Verify
+
+```bash
+kubectl logs -f job/github-git-clone -n github-connector-demo
+```
+
+## Next Steps
+
+- See [GitHub ConnectorClass](./concepts/github_connectorclass.mdx) for supported fields and configurations.

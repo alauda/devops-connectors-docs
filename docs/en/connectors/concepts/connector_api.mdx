@@ -62,6 +62,42 @@ curl -H "Authorization: Bearer ${K8S_TOKEN}" "https://platform.example.com/conne
 
 The Proxy Service capabilities can be configured through the `ConnectorClass` specification. For configuration details, refer to [ConnectorClass Proxy](./connectorclass.mdx#connectorclass_proxy). For a deeper understanding of the `Connectors Proxy` concept, refer to [Connectors Proxy](./connectors_proxy.mdx).
 
+### Selecting backend address with `x-openapi-address`
+
+When an OpenAPI operation uses `x-provider-type: proxy`, you can optionally set `x-openapi-address` to control which backend address the request should use.
+
+Supported selector forms:
+
+- Empty or not set: fallback to `Connector.spec.address`.
+- Extension name: resolve from `Connector.spec.addressExtensions` by `name`.
+- Direct address: a full `http/https` URL.
+
+Example:
+
+```yaml
+spec:
+  api:
+    openapi:
+      openapi: "3.0.1"
+      paths:
+        /repos/{owner}/{repo}/pulls:
+          get:
+            x-provider-type: proxy
+            x-openapi-address: api
+        /search/code:
+          get:
+            x-provider-type: proxy
+            x-openapi-address: https://api.github.com
+```
+
+In this example:
+
+- `/repos/{owner}/{repo}/pulls` uses the connector extension named `api`.
+- `/search/code` uses the direct URL `https://api.github.com`.
+- If `x-openapi-address` is omitted, the request uses `Connector.spec.address`.
+
+If `x-openapi-address` references a missing extension name or an invalid direct URL, the request is rejected.
+
 ## Custom API
 
 When the tool's original API cannot meet your requirements or the ConnectorClass does not provide Proxy Service capabilities, you can provide a custom API service for the current ConnectorClass to meet your needs.

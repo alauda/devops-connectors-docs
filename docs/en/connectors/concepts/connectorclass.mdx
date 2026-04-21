@@ -51,6 +51,40 @@ spec:
 
 At this point, it indicates that the address information for connecting the tool to the platform must be of `string` type.
 
+## Address Extensions \{#address-extensions}
+
+`spec.addressExtensions` defines additional named addresses for the current tool type. It uses the same schema as `spec.params`:
+
+- `spec.addressExtensions[].name` - Extension name. Must be unique in one ConnectorClass.
+- `spec.addressExtensions[].type` - Value type. Currently only `string` is supported.
+- `spec.addressExtensions[].default` - Default value (optional). If not set, this extension is required in Connector.
+- `spec.addressExtensions[].description` - Description (optional).
+
+This mechanism is commonly used when one connector needs multiple backend addresses, for example one Web access address and one API addres.
+
+```yaml
+kind: ConnectorClass
+metadata:
+  name: github
+spec:
+  address:
+    type: string
+  addressExtensions:
+    - name: api
+      type: string
+      description: GitHub API address, for example https://api.github.com
+    - name: upload
+      type: string
+      default: https://uploads.github.com
+```
+
+Connector admission follows the class contract defined here:
+
+- Each extension without `default` must be provided by Connector.
+- Connector cannot provide extension names that are not defined in `ConnectorClass.spec.addressExtensions`.
+
+For connector-side values and runtime usage, refer to [Connector Address Extensions](./connector.mdx#address-extensions).
+
 ## Parameters \{#parameters}
 
 Parameters are used to defines additional parameters when creating a connector.
@@ -640,6 +674,12 @@ You can define the `x-provider-type` extension field in the API paths to mark wh
 
 The `x-provider-type` extension is defined as: `api.openapi.paths[<path>].<verb>[x-provider-type]`
 
+When `x-provider-type: proxy` is used, you can also define `x-openapi-address` on the same operation to choose the backend address:
+
+- empty or omitted: fallback to `Connector.spec.address`
+- extension name: resolve from `Connector.spec.addressExtensions[*].name`
+- direct URL: use a full `http/https` address
+
 Example:
 
 ```yaml
@@ -659,6 +699,7 @@ spec:
           get:
             summary: Get Gitlab Projects API
             x-provider-type: proxy  # Use Proxy to access the tool's original API
+            x-openapi-address: api
 ```
 
 ::: info

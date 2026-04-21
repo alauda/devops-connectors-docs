@@ -72,6 +72,41 @@ The `http` based authentication probe and liveness probe will not be performed a
 
 More about it please refer to [liveness probe](./connectorclass.mdx#livenessProbe) and [authentication probe](./connectorclass.mdx#authProbe).
 
+## Connector Address Extensions \{#address-extensions}
+
+`spec.addressExtensions` defines additional named addresses on a Connector instance.
+The available names come from [ConnectorClass Address Extensions](./connectorclass.mdx#address-extensions).
+
+- `spec.addressExtensions[].name`: Extension name. Must be unique in one Connector.
+- `spec.addressExtensions[].value`: Extension value. Must be a non-empty `http/https` URL.
+
+Admission validation enforces both syntax and class constraints:
+
+1. Extensions required by ConnectorClass (no `default`) must be provided.
+2. Connector cannot provide extension names that are not declared in ConnectorClass.
+3. Extension names must be unique in Connector.
+4. Extension values must not duplicate `spec.address`.
+
+Runtime behavior:
+
+- `Connectors API` can select backend address by extension name or direct URL through `x-openapi-address`.
+- `Connectors Proxy` can treat `spec.address` and `spec.addressExtensions[*].value` as credential-injection target addresses.
+
+**Example**
+
+```yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: github-demo
+spec:
+  connectorClassName: github
+  address: "https://github.com"
+  addressExtensions:
+    - name: api
+      value: "https://api.github.com"
+```
+
 ## Connector Parameters \{#parameters}
 
 Connector parameters enable you to pass additional configuration information to a Connector instance. These parameters are first defined in the `ConnectorClass` specification and can then be configured when creating individual `Connector` resources.

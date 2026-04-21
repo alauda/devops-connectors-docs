@@ -24,7 +24,7 @@ The built-in `ConnectorsProxy` implementation provides comprehensive HTTP/HTTPS 
 Operates as a standard HTTP proxy using `http_proxy` and `https_proxy` environment variables. When the proxy receives client requests, it:
 
 1. Authenticates the client
-2. Injects tool credentials specified in the Connector into the request if current request path is pointing to the target tool specified by the Connector
+2. Injects tool credentials specified in the Connector only when the request targets an allowed address of that Connector
 3. Forwards the authenticated request to the target tool
 
 :::danger
@@ -32,6 +32,16 @@ Operates as a standard HTTP proxy using `http_proxy` and `https_proxy` environme
 Connectors Proxy does not support the `CONNECT` method for `HTTP tunneling`. Clients must send HTTP requests directly to the proxy server.
 
 :::
+
+#### Forward Proxy Credential-Injection Targets
+
+For built-in forward proxy mode, credential injection targets are:
+
+- `Connector.spec.address`
+- `Connector.spec.addressExtensions[*].value`
+
+When `addressExtensions` is not configured, only `spec.address` is eligible.
+Changing these addresses requires permission to update the Connector itself, so this capability does not create a new credential ownership boundary.
 
 ### Reverse Proxy \{#reverse-proxy}
 
@@ -225,7 +235,7 @@ For more detailed configuration on using Rego rules to extract tokens, see [Conn
 
 For more about injecting authentication credentials into backend request, see [Injecting Authentication Credentials into Backend Request when using built-in Reverse Proxy](#injecting-authentication-when-using-built-in-reverse-proxy).
 
-##### Connector Identification
+#### Connector Identification
 
 The connector can be identified through different proxy address formats:
 

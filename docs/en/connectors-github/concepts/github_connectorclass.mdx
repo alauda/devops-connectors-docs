@@ -1,0 +1,101 @@
+---
+weight: 20
+---
+
+# GitHub Connector
+
+The GitHub connector allows workloads to access GitHub through the Connectors proxy model.
+
+## Core Fields
+
+Example connector:
+
+```yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: github-demo
+spec:
+  connectorClassName: github
+  address: https://github.com
+  addressExtensions:
+    - name: api
+      value: https://api.github.com
+  auth:
+    name: patAuth
+    secretRef:
+      name: github-secret
+```
+
+- `spec.connectorClassName`: constant value `github`
+- `spec.address`: GitHub server URL used for Git operations (e.g., `https://github.com`)
+- `spec.addressExtensions[api]`: API endpoint override. When the host is `https://github.com`, set this to `https://api.github.com`; otherwise leave unset
+
+> **Note:** GitHub Enterprise is not supported at this time.
+
+## Authentication
+
+Supported auth type:
+
+- `patAuth` (optional)
+- Secret type: `Opaque`
+
+Secret example:
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: github-secret
+type: Opaque
+stringData:
+  token: ghp_xxxxxxxxxxxxxxxxxxxx
+```
+
+## Configurations
+
+Built-in configuration files from ConnectorClass:
+
+- `gitconfig`: used by Git CLI (URL rewrite and auth header via the built-in reverse proxy)
+- `githubconfig`: used by `gh` CLI (GitHub CLI), provides `config.yml`, `hosts.yml`, and `ca.cert`. **Requires forward proxy** — `hosts.yml` uses a placeholder token; real authentication is injected by the Connectors forward proxy. You must set the forward proxy environment variables for `gh` CLI to authenticate correctly.
+
+### Using `githubconfig` with Forward Proxy \{#using-githubconfig-with-forward-proxy}
+
+When you mount `githubconfig` via the Connectors CSI Driver, the CSI Driver automatically provides a built-in `.env` file containing `http_proxy`, `https_proxy`, and `no_proxy` settings in the same mount directory. To use `githubconfig`:
+
+1. Mount the CSI volume with `configuration.names: "githubconfig"`
+2. Set `GH_CONFIG_DIR` to the mount path so `gh` CLI reads `config.yml` and `hosts.yml`
+3. Source the `.env` file to set forward proxy environment variables
+4. Configure TLS trust for the proxy certificate (required when HTTPS forward proxy is used, such as a MITM-style proxy)
+
+Example:
+
+```yaml
+containers:
+- name: gh
+  image: ghcr.io/cli/cli
+  command: ["sh", "-c"]
+  args:
+  - |
+    set -a
+    source /opt/github/.env
+    set +a
+    export SSL_CERT_FILE=/tmp/connector/ca.crt
+    export GH_CONFIG_DIR=/opt/github
+    gh repo list --limit 5
+  volumeMounts:
+  - name: github-auth
+    mountPath: /opt/github
+volumes:
+- name: github-auth
+  csi:
+    readOnly: true
+    driver: connectors-csi
+    volumeAttributes:
+      connectors: "github-demo"
+      configuration.names: "githubconfig"
+```
+
+For more details on the built-in `.env` file and forward proxy configuration, see [Connectors CSI Driver — Built-in Configurations](../../connectors/concepts/connectors_csi.mdx#built-in-configurations).
+
+When your environment enforces TLS interception through an HTTPS forward proxy, make sure `SSL_CERT_FILE` points to the mounted `ca.cert`; otherwise, `gh` requests may fail with certificate verification errors.

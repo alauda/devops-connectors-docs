@@ -1,0 +1,26 @@
+---
+weight: 10
+---
+
+# Introduction
+
+## ConnectorsGitHub
+
+ConnectorsGitHub is a specialized connector component for integrating with GitHub APIs.
+
+> **Note:** GitHub Enterprise is not supported at this time.
+
+It provides GitHub-specific authentication and configuration templates so workloads can use Git CLI and GitHub CLI capabilities without embedding long-lived credentials in containers.
+
+## Feature Overview
+
+- Private Access Token (PAT) authentication (`patAuth`)
+- Built-in configurations: `gitconfig`, `githubconfig`
+- GitHub API operation metadata for repository, branch, pull request, and tag selection
+- GitHub code repository resource interface (`githubcoderepository`)
+
+## Application Scenarios
+
+- Cloning private GitHub repositories in CI/CD tasks
+- Using GitHub API-backed selections (repository/branch/PR/tag) in platform workflows
+- Centralized management of GitHub access for teams and namespaces

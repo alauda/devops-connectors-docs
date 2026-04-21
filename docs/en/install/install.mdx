@@ -14,7 +14,8 @@ title: Installation Guide
 The Connectors system has a modular architecture with the following components:
 - **Connectors Operator**: The central management component that handles the deployment and lifecycle of other connector components
 - **ConnectorsCore**: Required core component that provides the foundation for all connector types
-- **ConnectorsGit**: Optional component that adds support for Git services (GitHub, GitLab, etc.)
+- **ConnectorsGit**: Optional component that adds support for generic Git services.
+- **ConnectorsGitHub**: Optional component that adds support for GitHub-specific features.
 - **ConnectorsGitLab**: Optional component that adds support for GitLab-specific features (GitLab CLI, enhanced authentication)
 - **ConnectorsOCI**: Optional component that adds support for container registries (Harbor, Distribution, etc.)
 - **ConnectorsK8S**: Optional component that adds support for Kubernetes clusters
@@ -219,6 +220,41 @@ To add support for Git services like GitHub, GitLab, etc., install the Connector
    ```
    NAME  READY  AGE
    git   True       1m
+   ```
+
+### Install ConnectorsGitHub (Optional)
+
+To add support for GitHub integration, install the ConnectorsGitHub component:
+
+1. Create the ConnectorsGitHub custom resource:
+
+   ```bash
+   cat <<EOF | kubectl apply -f -
+   apiVersion: operator.connectors.alauda.io/v1alpha1
+   kind: ConnectorsGitHub
+   metadata:
+     name: connectors-github
+     namespace: connectors-system
+   spec: {}
+   EOF
+   ```
+
+2. Monitor the deployment progress:
+
+   ```bash
+   kubectl get connectorsgithub -n connectors-system
+   ```
+
+3. Wait until the status shows that ConnectorsGitHub is ready:
+
+   ```bash
+   kubectl wait --for=condition=Ready connectorsgithub/connectors-github -n connectors-system --timeout=300s
+   ```
+
+4. Verify that the GitHub ConnectorClass has been created:
+
+   ```bash
+   kubectl get connectorclass github
    ```
 
 ### Install ConnectorsGitLab (Optional)
@@ -564,6 +600,9 @@ To uninstall the Connectors system, remove components in the reverse order of in
 
    # Delete ConnectorsGit
    kubectl delete connectorsgit --all -n connectors-system
+
+   # Delete ConnectorsGitHub
+   kubectl delete connectorsgithub --all -n connectors-system
 
    # Delete ConnectorsGitLab
    kubectl delete connectorsgitlab --all -n connectors-system
