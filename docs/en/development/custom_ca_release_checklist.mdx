@@ -1,0 +1,102 @@
+---
+created: '2026-04-20'
+title: Custom CA Certificates Release Checklist
+weight: 30
+sourceSHA: ''
+---
+
+# Custom CA Certificates Release Checklist
+
+## Scope
+
+Release-gate manual QA checklist for the custom CA certificates feature (introduced in v1.10.0 under the `enable-custom-ca-certs` feature flag). Run this checklist once per release-candidate bundle on a production-shaped TLS demo cluster. It is the human-eye safety net for integration-surface and real-cluster quirks that the unit tests (Layer 1), BDD scenarios (Layer 2), and structural checks (Layer 3 — extension plugin.yaml audit and RBAC golden-file test) do not cover. It does not replace those automated layers. Budget roughly 45 minutes of hands-on time per bundle.
+
+## Environment prerequisites
+
+- Demo cluster with the TLS toolchain deployed via `demo-env-tls.yaml` (GitLab, Harbor, Nexus, and SonarQube all serving HTTPS with a private CA).
+- Feature flag `enable-custom-ca-certs=true` on `ConfigMap connectors-system/connectors-config`; controller, proxy, and API deployments rolled after the flip.
+- Global CA Secret in `connectors-system` labeled `connectors.cpaas.io/ca-cert=true` with the demo-toolchain root CA in a `.crt` / `.pem` key.
+- At least one per-connector CA case — a Connector with `spec.caCertSecretRef` pointing to a Secret in the same namespace.
+- Pre-existing QA fixtures available (fresh-cluster reset: recreate `qa-cacert-flag-on/qa-invalid-pem`, `qa-cacert-flag-on/qa-missing-secret`, `qa-cacert-flag-on/qa-valid-cacert`, `testing-connector-cacert-e2e-wrong` nginx + RoleBinding, `kube-public/maven-public`, `orbitmall/qa-oci-harbor`, `orbitmall/orbitmall-harbor`).
+- `kubectl` context pointed at the demo cluster with cluster-admin; `jira` CLI available for posting the release-gate report.
+
+## Bundle install verification
+
+| Check | Expected |
+|-------|----------|
+| CSV `connectors-operator.v1.10.0-beta.XX.gYYYYYYY` | phase `Succeeded` |
+| Operator Deployment image | tag `v1.10.0-g<short-sha>` matching the bundle commit |
+| `connectors-core` images (api/controller/proxy/csi) | shared `v1.10.0-g<sha>` from the latest core sync |
+| Per-extension images (git / harbor / maven / npm / oci / pypi / sonarqube) | tag `v1.9.0-g<sha>` or newer per the `cmd/kodata/<kind>/<version>/` manifest |
+| Pre-existing Connectors | remain `Ready=True` across the rollout |
+| All `connectors-system` pods | `Running`, rollout clean, zero `CrashLoopBackOff` / `ImagePullBackOff` |
+
+## Per-bug regression suite
+
+| Bug | Check | Expected |
+|-----|-------|----------|
+| DEVOPS-43776 | Fixture `qa-cacert-flag-on/qa-invalid-pem` references a Secret with non-PEM data | `CACertReady=False, reason=InvalidPEM, message=Secret "invalid-ca-secret" contains invalid PEM data` |
+| DEVOPS-43777 | `kubectl describe connector qa-invalid-pem -n qa-cacert-flag-on` and `qa-missing-secret` | Events list shows `Warning InvalidCACert` and `Warning CACertSecretNotFound` respectively |
+| DEVOPS-43778 | Flip `enable-custom-ca-certs` `true` → `false` → `true`; hit the wrong-CA client pod in `testing-connector-cacert-e2e-wrong` after each flip | 502 (ON) → 200 within 60 s (OFF) → 502 within 60 s (ON); no stuck cached strict transport |
+| DEVOPS-43781 | `kube-public/maven-public` and siblings `npm-public` / `pypi-public` against HTTPS Nexus | `AuthReady=True`, `Ready=True`; plugin logs contain no `x509: certificate signed by unknown authority` |
+| DEVOPS-43783 | Controller logs for every `k8s`-class Connector after rollout | `/livez` and `/api` probes return 200 against `https://kubernetes.default.svc:443`; no `x509` errors |
+| DEVOPS-43785 | `orbitmall/qa-oci-harbor` (OCI connector against HTTPS Harbor) | `AuthReady=True`; OCI plugin `/api/auth/check` returns 200 |
+| DEVOPS-43786 | `orbitmall/orbitmall-harbor` (Harbor token / OCI fallback paths) | `Ready=True`; Harbor-plugin and proxy logs contain no `x509` in a 5–10 min window |
+| DEVOPS-43811 | Maven-plugin Deployment in `connectors-system` | Container env carries `CONFIG_NAME=connectors-config`; feature-flag ConfigMap is reachable from the plugin pod |
+| DEVOPS-43812 | `kubectl auth can-i create events -n qa-cacert-flag-on --as=system:serviceaccount:connectors-system:connectors-controller-manager` | `yes`; ClusterRole `connectors-manager-role` grants `create`/`patch` on `""/events` |
+
+## Known classes of failure that only show manually
+
+- **Generated-manifest gaps (missing env vars on Deployments — as in DEVOPS-43811).** Look for plugin Deployments missing `CONFIG_NAME`, `POD_NAMESPACE`, or other feature-flag-loading env vars. Most likely to surface when a plugin's `CACertReady=True` but `AuthReady=False` with `x509: certificate signed by unknown authority` — a sign the plugin never read the feature flag and silently fell back to `InsecureSkipVerify=false` against an unknown CA.
+- **Generated-RBAC gaps (missing kubebuilder markers — as in DEVOPS-43812).** Look for controller log lines like `events is forbidden: User "system:serviceaccount:connectors-system:..." cannot create resource "events"`. Most likely to surface when the `CACertReady` condition is correctly `False` on a Connector but `kubectl describe connector` shows an empty Events list — the reconciler called `Eventf()` but the API rejected it with 403.
+- **Protocol-level / multi-pod gaps where one process in the chain lacks context about the Connector (as in DEVOPS-43824).** Look for split signals: `CACertReady=True` on the Connector (controller loaded the per-connector Secret) but `AuthReady=False` on the same Connector with an `x509` error (the plugin pod on the other side of the RPC never received the per-connector CA). Most likely to surface when a Connector relies *exclusively* on `spec.caCertSecretRef` with no global labeled Secret available to compensate; pass-through works if a global CA Secret happens to sign the same tool.
+
+## Release-gate pass/fail template
+
+Post a consolidated Round-N QA report as a Jira comment on DEVOPS-43245 (or the successor epic for future releases). Use the following scaffolding:
+
+```markdown
+**QA report — Round N — bundle v1.10.0-beta.XX.gYYYYYYY**
+
+Bundle installed on `devops-v4-demo` via ArtifactVersion → InstallPlan `install-TBD` → CSV
+`connectors-operator.v1.10.0-beta.XX.gYYYYYYY` = `Succeeded`. Replaces `beta.XX-1.gZZZZZZZ`.
+All component pods rolled: core/proxy/csi `v1.10.0-g<sha>`, git/harbor/maven/oci/npm/pypi/sonarqube `v1.9.0-g<sha>`.
+`enable-custom-ca-certs=true`.
+
+## Pre-conditions (bundle install) — PASS / FAIL
+
+| Check | Result |
+|-------|--------|
+| CSV | Succeeded |
+| Operator image tag | v1.10.0-g<sha> |
+| Controller SA events RBAC | yes |
+| Maven plugin Deployment env | CONFIG_NAME=connectors-config |
+| Pre-existing Connectors | Ready=True across rollout |
+
+## Per-bug result
+
+| Bug | Scope | Result | Evidence |
+|-----|-------|--------|----------|
+| DEVOPS-43776 | Invalid PEM condition | PASS / FAIL | TBD |
+| DEVOPS-43777 | Warning Events emitted | PASS / FAIL | TBD |
+| DEVOPS-43778 | Flag flip cache invalidation | PASS / FAIL | TBD |
+| DEVOPS-43781 | Maven/NPM/PyPI custom CA | PASS / FAIL | TBD |
+| DEVOPS-43783 | k8s in-cluster | PASS / FAIL | TBD |
+| DEVOPS-43785 | OCI /auth/check | PASS / FAIL | TBD |
+| DEVOPS-43786 | Harbor token / OCI fallback | PASS / FAIL | TBD |
+| DEVOPS-43811 | Maven plugin CONFIG_NAME env | PASS / FAIL | TBD |
+| DEVOPS-43812 | Controller SA events RBAC | PASS / FAIL | TBD |
+
+## Overall
+
+- New defects: TBD
+- Regressions from last round: TBD
+- Recommendation: proceed to acceptance / hold for respin
+```
+
+## More
+
+- **Configure Custom CA Certificates** — step-by-step how-to for enabling and operating the feature. Sibling page in this directory: `configure_custom_ca_certificates.mdx` (ships with the custom-CA feature docs in PR #906).
+- **Connector concepts: Custom CA Certificates** — conceptual reference for the CA pool and `CACertReady` condition. See the "Custom CA Certificates" section of `../concepts/connector.mdx` (ships with the custom-CA feature docs in PR #906).
+- DEVOPS-43245 — epic that shipped the feature; Round 1–5 QA history lives in its comments.
+- DEVOPS-43784 — parent regression-test strategy story; this checklist is its Layer 4 deliverable.
