@@ -42,6 +42,11 @@ The following table shows the compatibility and support matrix between the Alaud
   - [JFrog Connector Quick Start](../connectors-jfrog/quick_start.mdx)
 - Support integration with Nexus Artifactory by using Nexus Connector. more details:
   - [Nexus Connector Quick Start](../connectors-nexus/quick_start.mdx)
+- Support mounting `harbor-cli-config` from Harbor Connector so workloads can use `harbor-cli` through the connector proxy without exposing the original Harbor credential. more details:
+  - [Harbor CLI configuration](../connectors-harbor/concepts/harbor_connectorclass.mdx#harbor-cli-configuration)
+- Provide the `harbor-connector-automatic-creation` Tekton Task to automate Harbor connector initialization and credential refresh for Alauda Container Platform tenants and namespaces. more details:
+  - It can create or reconcile Harbor projects, robot accounts, Connector Secrets, Harbor Connectors, and target namespace `imagePullSecrets`.
+  - [Automatically Create and Reconcile Harbor Connector Resources with Tekton](../connectors-harbor/how_to/using_harbor_connector_automatic_creation_task.mdx)
 
 **Deprecation Notice**
 
