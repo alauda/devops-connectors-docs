@@ -119,6 +119,7 @@ You can exclude specific mounted files by using `!<fileName>` in `configuration.
 | `connector.status.proxyAddress`  | Proxy address (see [Connectors Proxy](./connectors_proxy.mdx)). <br></br> If multiple Connectors are present, the proxy information from the last ConnectorClass will be used. |
 | `ca.cert`                        | CA certificate for the Connectors proxy, same as `context.proxy.caCert`, it will be deprecated soon; use `ca.crt` instead.   |
 | `ca.crt`                         | CA certificate for the Connectors proxy, same as `context.proxy.caCert`     |
+| `.error.json`                    | Present only when approval is rejected. When this file exists, no other configuration files are mounted. See [Connectors Approval](./connectors_approval.mdx) for details. |
 
 **Forward Proxy Usage:**
 

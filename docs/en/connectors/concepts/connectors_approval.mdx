@@ -75,7 +75,7 @@ This means the same Connector capability can be used in different ways depending
 - for a shared internal tool, an administrator may grant `defaultPermission` so approved namespaces or ServiceAccounts can use it directly
 - for a production registry or production cluster, an administrator can require checks before the workload is allowed to use the Connector
 
-At runtime, a workload usually reaches the target tool by mounting Connector configuration through the [Connectors CSI Driver](./connectors_csi.mdx) and then calling the Connector's proxy endpoint. If the matched policy requires approval, the system keeps the workload pending until the checks pass and then grants temporary proxy permission for that workload.
+At runtime, a workload usually reaches the target tool by mounting Connector configuration through the [Connectors CSI Driver](./connectors_csi.mdx) and then calling the Connector's proxy endpoint. If the matched policy requires approval, the system keeps the workload waiting until the checks pass and then grants temporary proxy permission for that workload. If the checks are rejected, the CSI Driver mounts only a `.error.json` file (no configuration files) and the Pod starts without usable Connector configuration, causing the workload to fail promptly.
 
 ## What Is Actually Gated
 
@@ -119,7 +119,8 @@ After that, the system handles the approval-aware access flow automatically:
 - The system creates an `AccessRequest` for the Pod running the promotion task.
 - By default, the `AccessRequest` looks for an `ApprovalTask` in the same `PipelineRun`.
 - If that `ApprovalTask` is approved, the system grants temporary proxy permission and the promotion task continues.
-- If the `ApprovalTask` is missing or not approved, the workload stays pending and cannot complete the promotion.
+- If the `ApprovalTask` is rejected, the CSI Driver mounts a `.error.json` file instead of configuration files, and the workload fails because it cannot access the Connector.
+- If the `ApprovalTask` is still pending, the workload stays waiting until the approval decision is made.
 
 This pattern lets teams keep the Connector available in the platform while still requiring an explicit approval step before a sensitive promotion action can use it.
 
