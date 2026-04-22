@@ -49,6 +49,9 @@ The following table shows the compatibility and support matrix between the Alaud
 - Provide the `harbor-connector-automatic-creation` Tekton Task to automate Harbor connector initialization and credential refresh for Alauda Container Platform tenants and namespaces. more details:
   - It can create or reconcile Harbor projects, robot accounts, Connector Secrets, Harbor Connectors, and target namespace `imagePullSecrets`.
   - [Automatically Create and Reconcile Harbor Connector Resources with Tekton](../connectors-harbor/how_to/using_harbor_connector_automatic_creation_task.mdx)
+- Support custom CA certificates for Connectors that target tools served by an internal or private Certificate Authority (CA), preserving TLS verification instead of disabling it. When the `enable-custom-ca-certs` feature flag is enabled, administrators can register cluster-wide CA bundles via labeled Secrets in the system namespace and Connector authors can additionally provide a per-Connector CA via `spec.caCertSecretRef`. The resulting trust pool is additive (system + global + per-connector) and load status is surfaced through the informational `CACertReady` condition. more details:
+  - [Configure Custom CA Certificates](../connectors/how_to/configure_custom_ca_certificates.mdx)
+  - [Connector concepts: Custom CA Certificates](../connectors/concepts/connector.mdx#custom-ca-certificates)
 
 **Deprecation Notice**
 

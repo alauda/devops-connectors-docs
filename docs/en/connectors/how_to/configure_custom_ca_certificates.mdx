@@ -1,0 +1,201 @@
+---
+created: '2026-04-09'
+title: How to Configure Custom CA Certificates for Connectors
+weight: 20
+sourceSHA: b6411c78f332e6088a7ca3a6f80a4372cf5428436060a3c2dc885d46e1cb5d33
+---
+
+# Configuring Custom CA Certificates
+
+When your connectors need to access tools that present TLS certificates signed by an internal or private Certificate Authority (CA), you can configure the platform to trust those CAs without disabling certificate verification entirely.
+
+This guide covers:
+
+- Enabling the custom CA certificates feature flag
+- Configuring global CA certificates that apply to all connectors
+- Configuring per-connector CA certificates
+- Verifying the configuration via the `CACertReady` condition
+
+## Prerequisites
+
+- A running Connectors deployment (controller, proxy, and optional extensions).
+- Cluster admin access to the system namespace where the Connectors components run (typically `connectors-system`).
+- One or more PEM-encoded CA certificates that your tools' server certificates are signed with.
+
+## Step 1: Enable the Feature Flag
+
+Custom CA certificate support is gated behind the `enable-custom-ca-certs` feature flag, which is **disabled by default** to preserve backward compatibility.
+
+Edit the `connectors-config` ConfigMap in the system namespace and set the flag to `true`:
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: connectors-config
+  namespace: connectors-system
+  labels:
+    group: connectors.alauda.io
+data:
+  enable-custom-ca-certs: "true"
+```
+
+Apply with:
+
+```bash
+kubectl -n connectors-system patch configmap connectors-config \
+  --type merge -p '{"data":{"enable-custom-ca-certs":"true"}}'
+```
+
+Flipping the feature flag takes effect immediately — the setting is consulted at request time. When the flag is `false`, the `CACertReady` condition is not added to Connector status and components preserve the legacy TLS behavior for backward compatibility.
+
+## Step 2: Configure Global CA Certificates
+
+Global CA certificates apply to **all** connectors in the cluster. They are discovered automatically by labeling Secrets in the system namespace.
+
+Create a Secret in the system namespace with the label `connectors.cpaas.io/ca-cert: "true"` and one or more PEM-encoded certificates in the `data` keys. Only keys ending in `.crt` or `.pem`, or values containing a PEM header, are loaded — other keys are ignored.
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: my-internal-ca
+  namespace: connectors-system
+  labels:
+    connectors.cpaas.io/ca-cert: "true"
+type: Opaque
+stringData:
+  ca.crt: |
+    -----BEGIN CERTIFICATE-----
+    MIIDazCCAlOgAwIBAgIUF+...
+    -----END CERTIFICATE-----
+```
+
+Apply with:
+
+```bash
+kubectl apply -f my-internal-ca.yaml
+```
+
+> **Note:** After updating a global labeled Secret, the reverse proxy may take up to 5 minutes to pick up the new CA pool — connector reverse-proxy transports are cached per-connector with a 5-minute TTL. To force an immediate refresh, restart the `connectors-proxy` Deployment.
+
+You can create **multiple** labeled Secrets — all of their certificates are aggregated into the global CA pool. Adding or removing labeled Secrets triggers automatic re-reconciliation of affected connectors.
+
+## Step 3: Configure Per-Connector CA Certificates (Optional)
+
+For tools that need a specific CA not shared with other connectors, you can reference a CA Secret from the `Connector` resource itself. The Secret must reside in the **same namespace** as the `Connector` (cross-namespace references are not allowed).
+
+First, create the CA Secret in the connector's namespace:
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: my-tool-ca
+  namespace: my-namespace
+type: Opaque
+stringData:
+  ca.crt: |
+    -----BEGIN CERTIFICATE-----
+    MIIDazCCAlOgAwIBAgIUF+...
+    -----END CERTIFICATE-----
+```
+
+Then reference it from the `Connector`:
+
+```yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: my-tool-connector
+  namespace: my-namespace
+spec:
+  connectorClassName: my-tool
+  address: https://my-tool.internal.example.com
+  auth:
+    name: bearerToken
+    secretRef:
+      name: my-tool-credentials
+  caCertSecretRef:
+    name: my-tool-ca
+```
+
+The per-connector CA is **additive** — it is appended to the global CA pool (system CAs + global labeled Secrets + per-connector Secret).
+
+## Step 4: Verify the Configuration
+
+Check the `CACertReady` condition on the Connector status:
+
+```bash
+kubectl -n my-namespace get connector my-tool-connector \
+  -o jsonpath='{.status.conditions[?(@.type=="CACertReady")]}'
+```
+
+Expected output for a valid configuration:
+
+```json
+{
+  "type": "CACertReady",
+  "status": "True",
+  "reason": "Valid",
+  "message": "CA certificate loaded from secret \"my-tool-ca\"",
+  "severity": "Info"
+}
+```
+
+The `CACertReady` condition is **informational** — its status does **not** affect the top-level `Ready` condition. This means a misconfigured CA Secret will surface as a warning but will not block connector reconciliation. See [CA Certificate Status](../concepts/connector.mdx#ca-cert-status) in the Connector concepts page for the complete status reference.
+
+If the CA Secret is missing or contains invalid PEM data, the controller emits a Kubernetes Warning Event on the Connector object. View events with:
+
+```bash
+kubectl -n my-namespace describe connector my-tool-connector
+```
+
+## Common Issues
+
+### Connector status shows `CACertReady=False, reason=SecretNotFound`
+
+The Secret named in `spec.caCertSecretRef.name` does not exist in the connector's namespace. Verify the Secret name and namespace:
+
+```bash
+kubectl -n my-namespace get secret my-tool-ca
+```
+
+### Connector status shows `CACertReady=False, reason=InvalidPEM`
+
+The Secret exists but its data does not contain valid PEM-encoded certificates. Verify the Secret content:
+
+```bash
+kubectl -n my-namespace get secret my-tool-ca -o jsonpath='{.data.ca\.crt}' | base64 -d
+```
+
+The output should start with `-----BEGIN CERTIFICATE-----` and end with `-----END CERTIFICATE-----`.
+
+### CACertReady condition is not present after enabling the flag
+
+Make sure you restarted the controller, proxy, and API deployments after toggling the flag. The CA pool is loaded at component startup.
+
+```bash
+kubectl -n connectors-system rollout restart deployment connectors-proxy connectors-controller-manager connectors-api
+```
+
+### Tool still rejects connections after configuring CA
+
+The CA pool is constructed in additive layers: system CAs + global labeled Secrets + per-connector Secret. Make sure the CA that signed your tool's server certificate is present in at least one of these layers. You can verify the global pool is populated by listing labeled Secrets:
+
+```bash
+kubectl -n connectors-system get secret -l connectors.cpaas.io/ca-cert=true
+```
+
+### Connection still failing right after a CA Secret change
+
+The reverse-proxy caches CA pools with a 5-minute TTL. If you just updated a global labeled Secret or per-connector Secret, wait for the TTL to expire or restart `connectors-proxy` to pick up the new pool immediately:
+
+```bash
+kubectl -n connectors-system rollout restart deployment connectors-proxy
+```
+
+## More
+
+- [Connector concepts: CA Certificates](../concepts/connector.mdx#custom-ca-certificates)
+- [Connector status conditions reference](../concepts/connector.mdx#status-information)

@@ -24,6 +24,7 @@ data:
   enable-connector-proxy-permissions: "false"
   enable-connectors-approval: "false"
   enable-multi-connector: "false"
+  enable-custom-ca-certs: "false"
 ```
 
 All values are string booleans (`"true"` or `"false"`). Because the flags are stored in one shared ConfigMap, they apply to the current Connectors installation rather than to a single Connector.
@@ -67,6 +68,7 @@ The `skip-sync: "true"` annotation prevents `connectors-operator` from reverting
 | `enable-connector-proxy-permissions` | `"false"` | Enables permission control for traffic handled through Connectors Proxy. |
 | `enable-connectors-approval` | `"false"` | Enables the Connectors approval workflow for gated access to Connectors Proxy. This flag should be enabled together with `enable-connector-proxy-permissions`. |
 | `enable-multi-connector` | `"false"` | Enables mounting and rendering configuration for multiple Connectors in a single CSI volume. |
+| `enable-custom-ca-certs` | `"false"` | Enables trusting custom CA certificates (global labeled Secrets and per-Connector `spec.caCertSecretRef`) when verifying TLS connections to tools. |
 
 ## Feature Flag Details
 
@@ -120,6 +122,23 @@ Related reading:
 
 - [Multiple Connectors in Connectors CSI](../connectors/concepts/connectors_csi.mdx#multiple-connectors)
 - [Using Maven Connector in Tekton Task](../connectors-maven/how_to/using-in-tekton-task.mdx)
+
+### `enable-custom-ca-certs` \{#enable-custom-ca-certs}
+
+When this flag is enabled, the platform trusts additional CA certificates when verifying TLS connections to tools, without disabling certificate verification. The trust pool is composed additively:
+
+1. System default CA pool — the OS-level trust store baked into the container image.
+2. Global custom CA certificates — Secrets in the `connectors-system` namespace labeled `connectors.cpaas.io/ca-cert: "true"`.
+3. Per-Connector CA certificate — an optional Secret referenced by `spec.caCertSecretRef.name` on the `Connector`, which must reside in the same namespace as the `Connector`.
+
+The constructed CA pool is used by controller liveness and authentication probes, `Connectors Proxy` traffic, `ConnectorClass` accessibility checks, and extension proxies (OCI, Harbor, Git HTTPS, etc.) where applicable.
+
+When the flag is enabled, the informational `CACertReady` condition is published on each `Connector` to reflect the per-Connector CA load status. This condition has `severity: Info` and does **not** affect the top-level `Ready` condition.
+
+Related reading:
+
+- [Configure Custom CA Certificates](../connectors/how_to/configure_custom_ca_certificates.mdx)
+- [Connector concepts: Custom CA Certificates](../connectors/concepts/connector.mdx#custom-ca-certificates)
 
 ## Next Steps
 

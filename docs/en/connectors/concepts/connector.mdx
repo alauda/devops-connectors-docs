@@ -234,9 +234,73 @@ spec:
 
 Note that once the ConnectorClass specifies authentication detection params, parameters in connector must be provided, even if the Connector is created without specifying secret information, `spec.auth.params` must be passed.
 
+## Custom CA Certificates \{#custom-ca-certificates}
+
+When a tool's TLS certificate is signed by an internal or private Certificate Authority (CA), the Connector platform can be configured to trust those CAs without disabling certificate verification.
+
+Custom CA certificate support is gated behind the [`enable-custom-ca-certs`](../../overview/feature_flags.mdx#enable-custom-ca-certs) feature flag, which is **disabled by default** to preserve backward compatibility with existing deployments.
+
+When the flag is **enabled**, the platform constructs a CA pool composed of three additive layers:
+
+1. **System default CA pool** — the OS-level trust store baked into the container image.
+2. **Global custom CA certificates** — Secrets in the `connectors-system` namespace labeled `connectors.cpaas.io/ca-cert: "true"`. Multiple Secrets are aggregated.
+3. **Per-Connector CA certificates** — an optional Secret referenced by `spec.caCertSecretRef.name` on the `Connector`. The Secret MUST reside in the same namespace as the `Connector`.
+
+The constructed CA pool is used for:
+
+- Liveness and authentication probes from the controller against the tool
+- Proxy connectors to the tool from the proxy components
+- ConnectorClass accessibility checks from the controller
+- Extension proxies (OCI, Harbor, Git HTTPS, etc.) where applicable
+
+### Per-Connector CA Certificate Reference
+
+To trust a specific CA for a single Connector, set `spec.caCertSecretRef.name`:
+
+```yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: internal-tool
+  namespace: my-namespace
+spec:
+  connectorClassName: my-tool
+  address: https://internal-tool.example.com
+  auth:
+    name: bearerToken
+    secretRef:
+      name: my-tool-credentials
+  caCertSecretRef:
+    name: my-tool-ca       ##  Secret in the same namespace
+```
+
+The referenced Secret MUST contain at least one PEM-encoded CA certificate. Only keys ending in `.crt` or `.pem`, or values containing a PEM header, are loaded into the pool — other keys (such as tokens or passwords accidentally placed in the same Secret) are ignored.
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: my-tool-ca
+  namespace: my-namespace
+type: Opaque
+stringData:
+  ca.crt: |
+    -----BEGIN CERTIFICATE-----
+    MIIDazCCAlOgAwIBAgIUF+...
+    -----END CERTIFICATE-----
+```
+
+### Global CA Certificates
+
+Cluster administrators can configure CA certificates that apply to **all** connectors by creating Secrets in the `connectors-system` namespace with the label `connectors.cpaas.io/ca-cert: "true"`. The platform automatically discovers all matching Secrets and aggregates their certificates into the global CA pool.
+
+Adding or removing labeled Secrets triggers automatic re-reconciliation of affected Connectors — no component restart is needed for global CA changes after the feature flag has been enabled.
+
+For step-by-step instructions, see [How to Configure Custom CA Certificates](../how_to/configure_custom_ca_certificates.mdx).
+
 ## Proxy Address \{#connector_proxy}
 
-If the `Connector` points to a `ConnectorClass` that has configured [proxy capability](./connectorclass.mdx#proxy), the system will allocate a proxy address for each `Connector`. 
+If the `Connector` points to a `ConnectorClass` that has configured [proxy capability](./connectorclass.mdx#connectorclass_proxy), the system will allocate a proxy address for each `Connector`. 
 
 Clients can use this proxy address to access the tool in a secretless manner.
 
@@ -311,6 +375,7 @@ The `conditions` type includes:
 - `LivenessReady`: Indicates whether the tool is accessible.
 - `AuthReady`: Indicates whether the authentication information is valid.
 - `ProxyServiceReady`: Indicates whether the [proxy address](#connector_proxy) for the current Connector is successfully allocated.
+- `CACertReady`: Informational — indicates the status of the [custom CA certificate configuration](#custom-ca-certificates). This condition does **not** affect the top-level `Ready` condition.
 - `Ready`: Indicates the overall status.
 
 **SecretReady Condition**
@@ -357,6 +422,23 @@ Indicates the status information of the proxy service for the Connector.
 | False   |          | Proxy service is in an abnormal state                                                    |
 | Unknown |          | Proxy service check in progress                                                        |
 
+<a id="ca-cert-status"></a>
+
+**CACertReady Condition**
+
+Informational — indicates the status of the [custom CA certificate configuration](#custom-ca-certificates). This condition is **not** part of the standard readiness set, has `severity: Info`, and does **not** affect the top-level `Ready` condition. It is only present when the `enable-custom-ca-certs` feature flag is enabled.
+
+| Status | Reason         | Description                                                                                       |
+| ------ | -------------- | ------------------------------------------------------------------------------------------------- |
+| True   | Valid          | `caCertSecretRef` is set and the referenced Secret was loaded successfully                        |
+| True   | NoCACert       | `caCertSecretRef` is not set; the connector uses only the global CA pool                          |
+| False  | SecretNotFound | `caCertSecretRef` is set but the referenced Secret does not exist in the connector's namespace    |
+| False  | InvalidPEM     | The referenced Secret exists but contains no valid PEM-encoded certificate data                   |
+
+When the condition is `False`, the controller also emits a Kubernetes Warning Event on the Connector object with reason `CACertSecretNotFound` or `InvalidCACert`, which can be seen with `kubectl describe connector <name>`.
+
+When the feature flag is disabled, the `CACertReady` condition is not present at all.
+
 For example:
 
 ```yaml
@@ -380,6 +462,11 @@ status:
     status: "True"
     lastProbeTime: "2024-10-16T02:27:44Z"
     message: ""
+  - type: CACertReady           ##  Only present when enable-custom-ca-certs feature flag is enabled
+    status: "True"
+    severity: Info              ##  Informational — does not affect Ready
+    reason: Valid
+    message: 'CA certificate loaded from secret "my-tool-ca"'
   - type: Ready
     status: "True"
     message: ""

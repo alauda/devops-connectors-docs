@@ -15,7 +15,7 @@ The Connectors CSI Driver is a storage driver implemented based on the Container
 - Supporting dynamic variable rendering in configuration files to automatically inject runtime information
 - Supporting the simultaneous mounting of multiple configuration files
 
-All configuration data comes from the [ConnectorClass configuration](./connectorclass.mdx#configurations) associated with the Connector.
+All configuration data comes from the [ConnectorClass configuration](./connectorclass.mdx#configuration-capabilities) associated with the Connector.
 
 :::info
 Use this document to understand how workloads mount Connector-rendered configuration and consume proxy-related runtime data.
@@ -106,7 +106,8 @@ kubectl exec -ti csi-demo -- cat /tmp/config/.gitconfig
 
 ## Built-in Configurations \{#built-in-configurations}
 
-The CSI Driver automatically provides built-in configuration files that are always mounted into Pods.
+The CSI Driver automatically provides built-in configuration files that are mounted into Pods by default.
+You can exclude specific mounted files by using `!<fileName>` in `configuration.names` (for example, `!context.token`), including both built-in files and ConnectorClass-rendered files selected by `configuration.names`.
 
 | File Name                        | Description                                                                 |
 | -------------------------------- | --------------------------------------------------------------------------- |
@@ -154,7 +155,7 @@ export SERVER=$(cat /{mount-path}/connector.status.proxyAddress)
 | -----------------------| -------- | -------------------------------------------------------- |
 | connector.name         | No      | Connector name **(Deprecated — use `connectors` instead)**                               |
 | connector.namespace    | No       | Connector namespace, defaults to Pod's namespace **(Deprecated — use `connectors` instead)**        |
-| configuration.names    | No       | Comma-separated configuration names (e.g., `config1,config2`), the configuration names are the names of the configurations in the ConnectorClass |
+| configuration.names    | No       | Comma-separated selectors. Use configuration names (e.g., `config1,config2`) to include ConnectorClass configurations; use `!<fileName>` (e.g., `!context.token`) to exclude specific files from the final mounted output. |
 | configuration.params   | No       | JSON string of runtime parameters for named configurations (see [configuration.params](#configuration-params)) |
 | token.expiration       | No       | Token expiration time (default: `30m`)                   |
 | connectors             | Yes      | Comma-separated list of connectors in the format `namespace/name` or `name`; if namespace is omitted, the Pod's namespace is used. Used to specify multiple connectors. |
@@ -200,9 +201,37 @@ volumes:
       configuration.names: "config1,config2"
 ```
 
+Exclude specific mounted files:
+
+```yaml
+volumes:
+- name: config
+  csi:
+    driver: connectors-csi
+    readOnly: true
+    volumeAttributes:
+      connectors: "my-connector"
+      configuration.names: "config1,!config1.conf"
+```
+
+Exclude a built-in file while mounting only built-in configurations:
+
+```yaml
+volumes:
+- name: config
+  csi:
+    driver: connectors-csi
+    readOnly: true
+    volumeAttributes:
+      connectors: "my-connector"
+      configuration.names: "!context.token"
+```
+
 **Notes:**
 - If `configuration.names` is omitted, only built-in configurations are mounted
 - When multiple configurations contain files with the same name, later configurations overwrite earlier ones
+- Exclusions (`!<fileName>`) are applied to final mounted file names after configuration collection and merge.
+- If included configuration names are specified but none are found, the request fails even when exclusions are provided.
 - The `connectors` parameter is used to specify multiple connectors for mount config.
 
 ## configuration.params \{#configuration-params}
