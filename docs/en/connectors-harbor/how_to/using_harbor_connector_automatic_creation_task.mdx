@@ -232,6 +232,19 @@ The `harbor-connector-automatic-creation` Task is used in two ways:
 - **Initial provisioning**: create Harbor projects, create or update the robot account, create the Connector Secret, create the Harbor Connector, and optionally distribute `imagePullSecrets`.
 - **Repeated reconciliation**: run the same Task again with the intended Harbor project and permission set to refresh the robot token and update the generated Secrets.
 
+### Robot account validity period
+
+Use the `robotAccountDuration` parameter to control how long the generated Harbor robot account stays valid:
+
+- Default is `"-1"`, which means the robot account never expires.
+- Set a positive integer to express the robot account validity period in days, for example `"30"` for 30 days.
+
+If the account is intended for long-term use, keep `robotAccountDuration` at `"-1"` and rerun the Task whenever you want to rotate the robot token and refresh the generated Secrets. If the account itself should expire after a fixed number of days, set `robotAccountDuration` to that number.
+
+Running the Task again rotates the robot token and updates the generated Secrets. If the robot account has a bounded validity period and you want to extend that validity window before it expires, update `robotAccountDuration` in the TaskRun and rerun the Task. Rotating credentials alone does not extend the robot account expiration.
+
+When the requested Harbor project set changes between runs, the Task deletes and recreates the robot account; when only the duration changes, the Task updates the existing robot account in place and refreshes its token.
+
 This document focuses on the workflow. For the full parameter reference and the exact Task definition, see the [`harbor-connector-automatic-creation` Task reference](./harbor_connector_automatic_creation_task.mdx).
 
 ## Example: Create Shared Harbor Access for an Alauda Container Platform Project
@@ -361,6 +374,8 @@ spec:
         - repository:pull,push
         - repository:pull
         - repository:pull
+    - name: robotAccountDuration
+      value: "-1"
     - name: imagePullSecrets
       value:
         - <project-namespace-a>/harbor-pull-secret
@@ -374,7 +389,7 @@ spec:
         secretName: target-kubeconfig
 ```
 
-Keep the same Connector identity when you want to reconcile an existing Harbor access path instead of creating a separate one.
+Keep the same Connector identity when you want to reconcile an existing Harbor access path instead of creating a separate one. Use `robotAccountDuration: "-1"` for a long-lived account and rerun the Task whenever you want to rotate the token. If the account should expire after a fixed number of days, set `robotAccountDuration` to that value and update it on a later run when you need to extend the account validity window.
 
 ## Verify the Result
 

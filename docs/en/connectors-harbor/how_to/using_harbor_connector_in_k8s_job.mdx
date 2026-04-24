@@ -218,6 +218,63 @@ spec:
 EOF
 ```
 
+## Running `harbor-cli` in a K8S Job via the Harbor Connector
+
+Besides building images, you can also use the Harbor Connector to run the official `harbor-cli` inside a Kubernetes Job without placing the original Harbor username or password in the Pod. The Pod still receives the connector-generated Harbor CLI materials that `harbor-cli` needs at runtime, including `config.yaml`, `HARBOR_ENCRYPTION_KEY`, and the encrypted dummy `password` value stored in `config.yaml`. The Harbor ConnectorClass already renders a ready-to-use `harbor-cli-config`; see [Harbor CLI configuration](../concepts/harbor_connectorclass.mdx#harbor-cli-configuration) for the full list of mounted files.
+
+Key points:
+
+- Mount the `harbor-cli-config` configuration through `connectors-csi`; the mount provides `config.yaml`, `HARBOR_ENCRYPTION_KEY`, and a `.env` file that carries the forward-proxy environment variables. The generated `config.yaml` stores a dummy Harbor CLI `password` field in encrypted form.
+- Before invoking `harbor-cli`, source the proxy `.env`, export `HARBOR_CLI_CONFIG`, and export `HARBOR_ENCRYPTION_KEY`.
+- Always pass `-o json` (or `-o yaml`) to `harbor-cli` subcommands in a Job. `harbor-cli` defaults to an interactive TTY view and fails with `could not open a new TTY` inside a non-interactive container.
+
+Example Job that lists a Harbor project and robot account through the Connector proxy:
+
+```shell
+cat << 'EOF' | kubectl create -f -
+apiVersion: batch/v1
+kind: Job
+metadata:
+  generateName: harbor-cli-
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: cli
+          image: registry.goharbor.io/harbor-cli/harbor-cli@v0.0.18
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              set -a; source /mnt/harbor-cli/.env; set +a
+              export HARBOR_CLI_CONFIG=/mnt/harbor-cli/config.yaml
+              export HARBOR_ENCRYPTION_KEY=$(cat /mnt/harbor-cli/HARBOR_ENCRYPTION_KEY)
+
+              harbor-cli project list --name <your-harbor-project> -o json
+              harbor-cli robot list -q 'name=<your-robot-account>' -o json
+          volumeMounts:
+            - name: harbor-cli
+              mountPath: /mnt/harbor-cli
+              readOnly: true
+      volumes:
+        - name: harbor-cli
+          csi:
+            readOnly: true
+            driver: connectors-csi
+            volumeAttributes:
+              connector.name: "harbor"
+              configuration.names: "harbor-cli-config"
+EOF
+```
+
+Notes:
+
+- The example uses the official `harbor-cli` image `registry.goharbor.io/harbor-cli/harbor-cli@v0.0.18`. You can replace it with any image that already contains a compatible `harbor-cli` binary.
+- The Job Pod never sees the original Harbor password. It does receive `HARBOR_ENCRYPTION_KEY` and a generated `config.yaml` whose dummy `password` field is stored in Harbor CLI's encrypted format, because Harbor CLI needs both values to read the mounted configuration. That dummy value is not used as the real credential for Harbor access; real Harbor access is still authorized through the Connector proxy loaded from `.env`.
+- For multi-Connector setups, change `connector.name` to `connectors: "<conn-a>,<conn-b>"` and switch contexts with `harbor-cli context switch <namespace>/<connector>`. This requires the `enable-multi-connector` feature flag. For details, see [Feature Flags](../../overview/feature_flags.mdx).
+
 ## Operational Results
 
 You can check whether the Job has executed successfully with the following command:
@@ -228,4 +285,4 @@ $ kubectl get job
 
 ## Summary
 
-We have completed the entire process of "Building Images Using Harbor Connector in K8S Job." We can observe that during the execution of the Job, users are required to specify the authentication information for the image repository, and within the Pod running the Job, users cannot access the authentication data configured for the Connector. This greatly ensures that credentials are not leaked in practical usage, safeguarding the security of the tool's authentication information.
+We have completed the entire process of "Building Images Using Harbor Connector in K8S Job." During Job execution, the workload does not need the original Harbor username or password. Depending on the integration mode, the Pod receives connector-generated proxy credentials or Harbor CLI runtime materials such as `HARBOR_ENCRYPTION_KEY` and the encrypted Harbor CLI config with a dummy `password` value, while real Harbor access is still mediated by the Connector. This reduces direct exposure of the original Harbor credential in client workloads.

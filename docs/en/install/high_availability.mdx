@@ -105,31 +105,6 @@ connectors-oci-plugin-84985b9d7d-vllp6                  1/1     Running   0     
 connectors-oci-plugin-84985b9d7d-vllp6                  1/1     Running   0          67s
 ```
 
-### ConnectorsMaven
-
-ConnectorsMaven runs a single plugin deployment for Maven registry integration:
-
-```yaml
-apiVersion: operator.connectors.alauda.io/v1alpha1
-kind: ConnectorsMaven
-metadata:
-  name: connectors-maven
-  namespace: connectors-system
-spec:
-  workloads:
-  - name: connectors-maven-plugin
-    replicas: 2
-```
-
-After a period of time, all pods of the connectors-maven component have a replica count of 2.
-
-```
-$ kubectl get pod -n connectors-system
-NAME                                                      READY   STATUS    RESTARTS   AGE
-connectors-maven-plugin-84985b9d7d-vllp6                  1/1     Running   0          67s
-connectors-maven-plugin-84985b9d7d-vllp6                  1/1     Running   0          67s
-```
-
 ### ConnectorsHarbor
 
 ConnectorsHarbor runs a single plugin deployment for Harbor-specific features:
