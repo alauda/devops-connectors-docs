@@ -48,17 +48,37 @@ This API requires permission to access `ConnectorClass`. For the endpoint detail
 
 ## Update a Feature Flag
 
-To enable a feature, patch the `connectors-config` ConfigMap and set the corresponding value to `"true"`.
+Feature flags are configured through the `ConnectorsCore` CR's `spec.featureFlags` field. The operator merges these values into the `connectors-config` ConfigMap during reconciliation, with CR values overriding manifest defaults.
 
-Example:
+### Via ConnectorsCore CR (Recommended)
+
+Edit the `ConnectorsCore` CR to set feature flags declaratively:
 
 ```bash
-kubectl -n <connectors-namespace> patch configmap connectors-config \
-  --type merge \
-  -p '{"metadata":{"annotations":{"skip-sync":"true"}},"data":{"enable-multi-connector":"true"}}'
+kubectl edit connectorscore connectorscore
 ```
 
-The `skip-sync: "true"` annotation prevents `connectors-operator` from reverting the manual ConfigMap change during reconciliation.
+```yaml
+apiVersion: operator.connectors.alauda.io/v1alpha1
+kind: ConnectorsCore
+metadata:
+  name: connectorscore
+spec:
+  featureFlags:
+    enable-multi-connector: "true"
+    enable-custom-ca-certs: "true"
+```
+
+Or use `kubectl patch`:
+
+```bash
+kubectl patch connectorscore connectorscore --type merge \
+  -p '{"spec":{"featureFlags":{"enable-multi-connector":"true"}}}'
+```
+
+Feature flags declared in `spec.featureFlags` override the manifest defaults in `connectors-config`. Keys not listed in the CR keep their manifest default values. When a new version introduces additional feature flags, they appear automatically with their default values.
+
+> **Note:** Direct modifications to the `connectors-config` ConfigMap (e.g., via `kubectl edit configmap`) are overwritten during the next reconciliation. Always use the `ConnectorsCore` CR to configure feature flags.
 
 ## Built-in Feature Flags
 

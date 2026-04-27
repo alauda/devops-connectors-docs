@@ -1,0 +1,89 @@
+# Feature Flags: CR Spec-Driven Feature Flag Configuration
+
+## 背景与问题
+
+Connectors Operator 通过 `InstallManifest` 机制管理所有资源。reconcile 时 installer 会将 manifest 中的资源状态 apply 到集群，覆盖现有值。对于 `connectors-config` ConfigMap 中的 feature flags，用户通过 `kubectl edit` 做的修改会在下一次 reconcile 时被还原。
+
+现有 `skip-sync` 注解可完全跳过 reconcile，但会导致新版本新增的 feature flag 无法自动出现。
+
+### 需求
+
+- 用户修改的 feature flag 值在 reconcile 时自动保留
+- 新版本新增的 feature flag 自动出现
+- 声明式配置，支持 GitOps
+- 用户无需查文档即可发现所有可用 flag 及默认值
+
+## 设计
+
+### 处理流程
+
+```
+用户创建/更新 ConnectorsCore CR
+  │
+  ├─ Webhook Default: 从 defaultFeatureFlags 填充缺失的 flag 默认值
+  ├─ Webhook Validate: 校验 key 已知 + value 为 "true"/"false"
+  │
+  └─ ConnectorsReconciler.Reconcile()
+       ├─ 从 kodata 加载 manifest
+       ├─ FeatureFlagsTransform: CR featureFlags 覆盖 manifest 中 connectors-config 的 data
+       ├─ 写入 InstallManifest CR
+       └─ InstallManifestReconciler apply 到集群
+```
+
+### 核心组件
+
+**1. 默认值定义** (`feature_flags.go`)
+
+所有 flag key 和默认值集中定义，新增 flag 只需加一行常量 + 一行默认值，无需改 CRD：
+
+```go
+var defaultFeatureFlags = map[string]string{
+    "enable-connector-apis-permissions":  "false",
+    "enable-connector-proxy-permissions": "false",
+    "enable-connectors-approval":        "false",
+    "enable-multi-connector":            "false",
+    "enable-custom-ca-certs":            "false",
+}
+```
+
+通过 `GetDefaultFeatureFlags()` 返回只读副本，防止外部修改。
+
+**2. CRD 字段** (`connectorscore_types.go`)
+
+```go
+type ConnectorsCoreSpec struct {
+    component.ComponentSpec `json:",inline"`
+    FeatureFlags map[string]string `json:"featureFlags,omitempty"`
+}
+```
+
+**3. Webhook Defaulting** — CR 创建时自动填充所有已知 flag，`kubectl get -o yaml` 即可发现所有可用 flag。
+
+**4. Webhook Validation** — 拒绝未知 key（`Unsupported value`）和非 `"true"/"false"` 的 value（`Invalid value`）。
+
+**5. ConfigMap Name** — 通过 `CONFIG_FEATURE_FLAGS_NAME` 环境变量覆盖，默认 `connectors-config`。
+
+**6. FeatureFlagsTransform** — CR 值覆盖 manifest 默认值，未声明的 key 保持 manifest 默认值。
+
+### 版本升级行为
+
+Webhook 仅在 create/update API 调用时触发，reconcile 本身不触发 webhook。升级后新 flag 会在 CR 下次被更新时自动补充。
+
+## 与 tektoncd/operator 的对比
+
+| 维度 | Tekton (struct) | Connectors (map + webhook) |
+| --- | --- | --- |
+| **新增 flag** | 改 struct + 重新生成 CRD | 加 `defaultFeatureFlags` 一行，**无需改 CRD** |
+| **发现性** | `kubectl explain` 列出字段 | `kubectl get -o yaml` 展示所有 flag（webhook 预填充） |
+| **ConfigMap name** | 硬编码 | 环境变量可配置 |
+| **CR→CM 映射** | 反射遍历 struct | `maps.Copy()` 直接合并 |
+| **值校验** | OpenAPI schema 自动校验 | webhook Validate 校验 |
+| **值类型** | `*bool`/`string`/`*int32` | 统一 `string`（当前全部为布尔开关） |
+
+选择 map 方案的核心理由：**零 CRD 变更成本**，新增 flag 不需要 CRD 迁移。
+
+## 局限性
+
+1. `kubectl explain` 无法列出可用 key，需通过 `kubectl get -o yaml` 查看
+2. 直接编辑 ConfigMap 的修改会在下次 reconcile 被覆盖
+3. 所有 flag 值统一为 string，不支持 int/enum 类型（当前不需要）
