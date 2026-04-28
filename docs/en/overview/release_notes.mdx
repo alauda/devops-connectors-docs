@@ -9,29 +9,39 @@ title: Release Notes
 # Release Notes
 
 ::: tip
-The maintenance period for version **v1.9.z** is from Mar 23, 2026 to July 23, 2026..
+The maintenance period for version **v1.10.z (LTS)** is from Apr 30, 2026 to Apr 30, 2027.
 :::
 
 ## Compatibility and support matrix
 
 The following table shows the compatibility and support matrix between the Alauda DevOps Connectors operator and ACP versions.
 
-| Alauda DevOps Connectors Operator Version | ACP Version      |
-| ----------------------------------------- | ---------------- |
-| v1.9.0                                    | v4.2, v4.1, v4.0 |
-| v1.8.0                                    | v4.2, v4.1, v4.0 |
-| v1.7.0                                    | v4.2, v4.1, v4.0 |
-| v1.6.0 (LTS)                              | v4.2, v4.1, v4.0 |
-| v1.4.0                                    | v4.1, v4.0       |
+| Alauda DevOps Connectors Operator Version | ACP Version             |
+| ----------------------------------------- | ----------------------- |
+| v1.10.0 (LTS)                             | v4.3, v4.2, v4.1, v4.0 |
+| v1.9.0                                    | v4.2, v4.1, v4.0       |
+| v1.8.0                                    | v4.2, v4.1, v4.0       |
+| v1.7.0                                    | v4.2, v4.1, v4.0       |
+| v1.6.0 (LTS)                              | v4.2, v4.1, v4.0       |
+| v1.4.0                                    | v4.1, v4.0             |
 
-## v1.10.0 （WIP）
+## v1.10.0 (LTS)
 
 ### Features and Enhancements
 
-- Support integration with GitHub by using GitHub Connector. more details:
+**New Connectors**
+
+- Support integration with GitHub by using GitHub Connector. More details:
   - [GitHub Connector Quick Start](../connectors-github/quick_start.mdx)
-- Added an additional `connectors/apis` permission validation for Connector API access. 
-  - When `enable-connector-apis-permissions` is enabled, the system performs an additional `connectors/apis` permission check for Connectors API requests that browse tool data. This change separates Connector discovery from actual Connector API usage. 
+- Support integration with JFrog Artifactory by using JFrog Connector. More details:
+  - [JFrog Connector Quick Start](../connectors-jfrog/quick_start.mdx)
+- Support integration with Nexus Repository by using Nexus Connector. More details:
+  - [Nexus Connector Quick Start](../connectors-nexus/quick_start.mdx)
+
+**Permission and Access Control**
+
+- Added an additional `connectors/apis` permission validation for Connector API access.
+  - When `enable-connector-apis-permissions` is enabled, the system performs an additional `connectors/apis` permission check for Connectors API requests that browse tool data. This change separates Connector discovery from actual Connector API usage.
   - For more details, see [Connectors Permission Model](../connectors/concepts/permission_model.mdx#connectors-api-permissions) and [Connector API](../connectors/concepts/connector_api.mdx).
 - Added an additional `connectors/proxy` permission validation for Connectors Proxy access.
   - When `enable-connector-proxy-permissions` is enabled, the system performs an additional `connectors/proxy` permission check before workloads or CLIs use proxy-based Connector access. This change separates Connector discovery from actual runtime use.
@@ -39,19 +49,30 @@ The following table shows the compatibility and support matrix between the Alaud
 - Added approval-gated access control for protected Connectors Proxy usage.
   - When `enable-connectors-approval` is enabled together with `enable-connector-proxy-permissions`, administrators can use `AccessPolicy` and `AccessRequest` to require approval before a workload is allowed to use protected Connector proxy access.
   - For more details, see [Connectors Approval & Permission Gating](../connectors/concepts/connectors_approval.mdx).
-- Add `ca.crt` to the Connectors-CSI built-in configuration as a replacement for `ca.cert`.
-- Support integration with JFrog Artifactory by using JFrog Connector. more details:
-  - [JFrog Connector Quick Start](../connectors-jfrog/quick_start.mdx)
-- Support integration with Nexus Artifactory by using Nexus Connector. more details:
-  - [Nexus Connector Quick Start](../connectors-nexus/quick_start.mdx)
-- Support mounting `harbor-cli-config` from Harbor Connector so workloads can use `harbor-cli` through the connector proxy without exposing the original Harbor credential. more details:
+- Added ACP platform roles for `AccessPolicy` and `AccessRequest` resources, so approval resources follow the expected platform, project, and namespace permission model.
+
+**Feature Flag Management**
+
+- Support declarative feature flag configuration through the `ConnectorsCore` CR `spec.featureFlags` field. CR values override manifest defaults during reconciliation, eliminating the need to manually edit the `connectors-config` ConfigMap. For more details, see [Feature Flags](./feature_flags.mdx).
+
+**Harbor Connector Enhancements**
+
+- Support mounting `harbor-cli-config` from Harbor Connector so workloads can use `harbor-cli` through the connector proxy without exposing the original Harbor credential. More details:
   - [Harbor CLI configuration](../connectors-harbor/concepts/harbor_connectorclass.mdx#harbor-cli-configuration)
-- Provide the `harbor-connector-automatic-creation` Tekton Task to automate Harbor connector initialization and credential refresh for Alauda Container Platform tenants and namespaces. more details:
+- Provide the `harbor-connector-automatic-creation` Tekton Task to automate Harbor connector initialization and credential refresh for Alauda Container Platform tenants and namespaces. More details:
   - It can create or reconcile Harbor projects, robot accounts, Connector Secrets, Harbor Connectors, and target namespace `imagePullSecrets`.
   - [Automatically Create and Reconcile Harbor Connector Resources with Tekton](../connectors-harbor/how_to/using_harbor_connector_automatic_creation_task.mdx)
-- Support custom CA certificates for Connectors that target tools served by an internal or private Certificate Authority (CA), preserving TLS verification instead of disabling it. When the `enable-custom-ca-certs` feature flag is enabled, administrators can register cluster-wide CA bundles via labeled Secrets in the system namespace and Connector authors can additionally provide a per-Connector CA via `spec.caCertSecretRef`. The resulting trust pool is additive (system + global + per-connector) and load status is surfaced through the informational `CACertReady` condition. more details:
+
+**Custom CA Certificates**
+
+- Support custom CA certificates for Connectors that target tools served by an internal or private Certificate Authority (CA), preserving TLS verification instead of disabling it. When the `enable-custom-ca-certs` feature flag is enabled, administrators can register cluster-wide CA bundles via labeled Secrets in the system namespace and Connector authors can additionally provide a per-Connector CA via `spec.caCertSecretRef`. The resulting trust pool is additive (system + global + per-connector) and load status is surfaced through the informational `CACertReady` condition. More details:
   - [Configure Custom CA Certificates](../connectors/how_to/configure_custom_ca_certificates.mdx)
   - [Connector concepts: Custom CA Certificates](../connectors/concepts/connector.mdx#custom-ca-certificates)
+
+**Other Enhancements**
+
+- Add `ca.crt` to the Connectors-CSI built-in configuration as a replacement for `ca.cert`.
+- When CSI approval is rejected, the driver now mounts a `.error.json` file (google.rpc.Status JSON) instead of blocking the Pod, allowing the workload to fail promptly. For more details, see [Connectors Approval](../connectors/concepts/connectors_approval.mdx).
 
 **Deprecation Notice**
 
@@ -62,6 +83,8 @@ The following table shows the compatibility and support matrix between the Alaud
 Updated base images, dependencies, and resolved security vulnerabilities
 
 ### Breaking Changes
+
+- The Maven ResourceInterface has been renamed from `MavenArtifact` to `MavenRepository`. The `groupId`, `artifactId`, and `version` parameters have been removed; the ResourceInterface now exposes a single `repository` attribute derived from the Connector address. Existing pipelines that reference the old `MavenArtifact` ResourceInterface or its removed parameters need to be updated.
 
 ### Fixed Issues
 
