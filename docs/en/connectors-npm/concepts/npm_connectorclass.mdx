@@ -79,6 +79,16 @@ NMP Connector support parameters, which is used to control the behavior of conne
 - `spec.params[].value`: The parameter value. The value type must match the parameter type defined in the `ConnectorClass`.
 
 supported parameters:
+- `registryType`: Specifies the role of this connector when multiple NPM connectors are used together in a single CSI volume. This parameter controls which registry address is used for downloading packages and which is used for publishing. Allowed values:
+  - `mirror` — use this connector's registry for downloading dependencies (e.g., `npm install`)
+  - `publish` — use this connector's registry for publishing packages (e.g., `npm publish`)
+  - `all` — use this connector's registry for both downloading and publishing
+  - *(empty)* — legacy behavior; when no connector has an explicit `registryType`, the current connector's address is used for both downloading and publishing
+
+  When at least one connector has an explicit `registryType`, the download registry is resolved with priority: `mirror` > `all` > `publish` > current connector. The publish registry is resolved with priority: `publish` > `all` > *(empty)* > `mirror` > current connector.
+
+  This parameter is only meaningful when using [multiple connectors in one CSI volume](../how_to/using-in-tekton-task.mdx). For single-connector usage, you can omit it.
+
 - `strict-ssl`: whether to write .npmrc/.yarnrc.yml file with `strict-ssl` parameter for the NPM registry. default value is `true`. supports `true` and `false`.
 
 For example:
@@ -86,6 +96,8 @@ For example:
 ```yaml
 spec:
   params:
+    - name: registryType
+      value: "mirror"
     - name: strict-ssl
       value: "false"
 ```

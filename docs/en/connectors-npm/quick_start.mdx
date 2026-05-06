@@ -63,12 +63,17 @@ metadata:
 spec:
   connectorClassName: npm
   address: https://nexus.example.com/repository/npm # Replace with your NPM repository address, we will deploy package to this repository.
+  params:
+    - name: registryType
+      value: "all" # mirror for downloads only, publish for publishing only, all for both
   auth:
     name: basicAuth
     secretRef:
       name: npm-registry-secret
 EOF
 ```
+
+When creating a connector, it is recommended to set `spec.params.registryType` to explicitly specify the connector's role — `mirror` for downloading dependencies, `publish` for publishing packages, or `all` for both. See [NPM Connector Parameters](./concepts/npm_connectorclass.mdx) and [Using Multiple NPM Connectors in Tekton Tasks](./how_to/using-in-tekton-task.mdx) for details.
 
 Verify that the connector is in "Ready" status:
 
