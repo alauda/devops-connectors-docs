@@ -1,0 +1,450 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/AlaudaDevops/connectors-operator/blob/main/docs/en/design/state.schema.json",
+  "title": "Umbrella State",
+  "description": "Machine-readable state for either a feature umbrella or an epic umbrella. Written only by /feature:* commands. Manual edits are detected by checksum and rejected; recover via /feature:state-repair.",
+  "type": "object",
+  "required": ["kind", "schema_version", "integrity"],
+  "properties": {
+    "kind": { "enum": ["feature", "epic"] },
+    "schema_version": { "type": "integer", "const": 3 }
+  },
+  "oneOf": [
+    { "$ref": "#/$defs/FeatureState" },
+    { "$ref": "#/$defs/EpicState" }
+  ],
+  "$defs": {
+    "Integrity": {
+      "type": "object",
+      "required": ["last_hash", "last_written_by", "last_written_at"],
+      "properties": {
+        "last_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "last_written_by": { "type": "string" },
+        "last_written_at": { "type": "string", "format": "date-time" },
+        "repairs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["at", "driver", "audit_reason"],
+            "properties": {
+              "at": { "type": "string", "format": "date-time" },
+              "driver": { "type": "string" },
+              "audit_reason": { "type": "string", "minLength": 10 }
+            }
+          }
+        }
+      }
+    },
+    "Repos": {
+      "type": "array",
+      "items": {
+        "enum": ["connectors", "connectors-extensions", "connectors-operator", "connectors-plugin"]
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "Story": {
+      "type": "object",
+      "required": ["id", "title", "slice", "priority"],
+      "properties": {
+        "id": { "type": "integer", "minimum": 1 },
+        "title": { "type": "string" },
+        "slice": { "enum": ["backend", "ui", "infra", "docs", "test", "ops"] },
+        "priority": { "enum": ["p0", "p1", "p2"] },
+        "repos": { "type": "array", "items": { "type": "string" } },
+        "depends_on": { "type": "array", "items": { "type": "integer" } },
+        "state": {
+          "enum": ["not-started", "in-flight", "shipped", "cancelled", "deferred"]
+        },
+        "shipped_in_release": { "type": ["string", "null"] },
+        "feature_jira_id": { "type": ["string", "null"], "pattern": "^[A-Z]+-[0-9]+$|^$" },
+        "split_into": { "type": "array", "items": { "type": "integer" } },
+        "merged_into": { "type": ["integer", "null"] },
+        "deferred_to_jira": { "type": ["string", "null"] },
+        "history": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["event", "at"],
+            "properties": {
+              "event": { "enum": ["added", "split", "merged", "deferred", "reviewed", "restarted"] },
+              "at": { "type": "string", "format": "date-time" },
+              "note": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "Dependency": {
+      "type": "object",
+      "required": ["from", "to"],
+      "properties": {
+        "from": { "type": "integer" },
+        "to": { "type": "integer" }
+      }
+    },
+    "FeatureState": {
+      "type": "object",
+      "required": ["kind", "schema_version", "feature", "stage", "integrity"],
+      "properties": {
+        "kind": { "const": "feature" },
+        "schema_version": { "const": 3 },
+        "feature": {
+          "type": "object",
+          "required": ["jira_id", "slug", "title", "profile", "risk", "repos", "created_at", "driver"],
+          "properties": {
+            "jira_id": { "type": "string", "pattern": "^[A-Z]+-[0-9]+$" },
+            "slug": { "type": "string", "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$" },
+            "title": { "type": "string", "minLength": 1 },
+            "parent_epic": { "type": ["string", "null"], "pattern": "^[A-Z]+-[0-9]+$|^$" },
+            "profile": { "enum": ["light", "standard", "full"] },
+            "risk": { "enum": ["low", "standard", "sensitive"] },
+            "repos": { "$ref": "#/$defs/Repos" },
+            "effort": { "enum": ["hours", "days", "weeks", "months", null] },
+            "created_at": { "type": "string", "format": "date-time" },
+            "driver": { "type": "string", "minLength": 1 },
+            "previous_drivers": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["driver", "transferred_at"],
+                "properties": {
+                  "driver": { "type": "string" },
+                  "transferred_at": { "type": "string", "format": "date-time" }
+                }
+              }
+            },
+            "paused": { "type": "boolean", "default": false },
+            "paused_at": { "type": ["string", "null"], "format": "date-time" },
+            "paused_reason": { "type": ["string", "null"] },
+            "profile_history": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["from", "to", "at", "reason"],
+                "properties": {
+                  "from": { "enum": ["light", "standard", "full"] },
+                  "to": { "enum": ["light", "standard", "full"] },
+                  "at": { "type": "string", "format": "date-time" },
+                  "reason": { "type": "string" }
+                }
+              }
+            },
+            "shipped_at": { "type": ["string", "null"], "format": "date-time" }
+          }
+        },
+        "stage": {
+          "type": "object",
+          "required": ["current", "history"],
+          "properties": {
+            "current": {
+              "enum": [
+                "init", "research", "design", "design-review", "poc",
+                "plan", "implement", "integrate", "qa", "accept", "docs",
+                "regress", "security-sign-off", "retrospective", "ship",
+                "archived", "cancelled"
+              ]
+            },
+            "history": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["stage", "closed_at"],
+                "properties": {
+                  "stage": { "type": "string" },
+                  "outcome": { "type": "string" },
+                  "closed_at": { "type": "string", "format": "date-time" }
+                }
+              }
+            }
+          }
+        },
+        "story": {
+          "oneOf": [
+            { "$ref": "#/$defs/Story" },
+            { "type": "null" }
+          ]
+        },
+        "stories": {
+          "description": "Populated only for profile=full standalone features. Epic-inherited features use `story:` (singular).",
+          "type": "array",
+          "items": { "$ref": "#/$defs/Story" }
+        },
+        "story_groups": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["story_id", "changes"],
+            "properties": {
+              "story_id": { "type": "integer" },
+              "review": {
+                "type": "object",
+                "properties": {
+                  "reviewer": { "type": "string" },
+                  "signed_at": { "type": "string", "format": "date-time" }
+                }
+              },
+              "changes": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["repo", "class", "path"],
+                  "properties": {
+                    "repo": {
+                      "type": "string",
+                      "description": "Repo that owns the openspec change folder at `path` (the planning artifact). Almost always also the repo where the implementation PR lands; if it doesn't, set `implementation_repo`."
+                    },
+                    "class": { "enum": ["design-change", "mechanical-followup"] },
+                    "path": { "type": "string" },
+                    "parent_change": { "type": ["string", "null"] },
+                    "pr": { "type": ["string", "null"], "format": "uri" },
+                    "pr_state": { "enum": ["draft", "open", "merged", "closed", "ready", null] },
+                    "implementation_repo": {
+                      "type": ["string", "null"],
+                      "description": "Optional. Set when the implementation PR lands in a different repo than `repo` (the openspec-change-folder owner). Drives /feature:integrate, /feature:tracks, and ship-time manifest sync to the right repo. Typically used for mechanical-followups whose docs/wiring ship from the consuming repo even though the openspec change was scaffolded under the parent design-change's repo."
+                    },
+                    "consolidated_from": {
+                      "type": ["string", "null"],
+                      "format": "uri",
+                      "description": "Optional. URL of a PR whose contents were collapsed into this entry's `pr` (typical when a stacked PR was rebased into its parent because PaC CEL or review-surface rules made the split untenable). The original PR is recorded for traceability; it is expected to be `closed` or `merged` with no independent content."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "bundle": {
+          "type": "object",
+          "properties": {
+            "synced_manifests": { "type": "array", "items": { "type": "string" } },
+            "bundle_image": { "type": ["string", "null"] },
+            "bundle_tag": { "type": ["string", "null"] }
+          }
+        },
+        "qa": {
+          "type": "object",
+          "properties": {
+            "packet_path": { "type": ["string", "null"] },
+            "owner": { "type": ["string", "null"] },
+            "assigned_at": { "type": ["string", "null"], "format": "date-time" }
+          }
+        },
+        "acceptance": {
+          "type": "object",
+          "properties": {
+            "status": { "enum": ["pending", "in_progress", "passed", "failed"] },
+            "report_path": { "type": ["string", "null"] }
+          }
+        },
+        "regression": {
+          "type": "object",
+          "properties": {
+            "status": { "enum": ["pending", "in_progress", "passed", "failed"] },
+            "report_path": { "type": ["string", "null"] }
+          }
+        },
+        "maturity": {
+          "type": "object",
+          "properties": {
+            "entries": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["stage", "command", "primary_blocker", "closed_at"],
+                "properties": {
+                  "stage": { "type": "string" },
+                  "command": { "type": "string" },
+                  "primary_blocker": {
+                    "enum": ["none", "template", "skill", "kb", "judgment", "flake"]
+                  },
+                  "ai_turns": { "type": "integer", "minimum": 0 },
+                  "driver_edits": {
+                    "type": "object",
+                    "properties": {
+                      "files_touched": { "type": "integer", "minimum": 0 },
+                      "lines_changed": { "type": "integer", "minimum": 0 }
+                    }
+                  },
+                  "custom_prompts": { "type": "integer", "minimum": 0 },
+                  "duration_min": { "type": "number", "minimum": 0 },
+                  "opened_at": { "type": "string", "format": "date-time" },
+                  "closed_at": { "type": "string", "format": "date-time" },
+                  "closed_by": { "enum": ["ai", "human"] },
+                  "notes": { "type": "string" },
+                  "excluded": { "type": "boolean", "default": false },
+                  "exclusion_reason": { "type": "string" }
+                }
+              }
+            },
+            "category_totals": {
+              "type": "object",
+              "properties": {
+                "none": { "type": "integer", "minimum": 0 },
+                "template": { "type": "integer", "minimum": 0 },
+                "skill": { "type": "integer", "minimum": 0 },
+                "kb": { "type": "integer", "minimum": 0 },
+                "judgment": { "type": "integer", "minimum": 0 },
+                "flake": { "type": "integer", "minimum": 0 }
+              }
+            }
+          }
+        },
+        "security": {
+          "type": "object",
+          "properties": {
+            "threat_model_path": { "type": ["string", "null"] },
+            "signoff_path": { "type": ["string", "null"] },
+            "override": {
+              "type": ["object", "null"],
+              "properties": {
+                "from": { "enum": ["low", "standard", "sensitive"] },
+                "to": { "enum": ["low", "standard", "sensitive"] },
+                "reason": { "type": "string" },
+                "at": { "type": "string", "format": "date-time" }
+              }
+            }
+          }
+        },
+        "collisions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["feature_id", "severity"],
+            "properties": {
+              "feature_id": { "type": "string", "pattern": "^[A-Z]+-[0-9]+$" },
+              "severity": { "enum": ["low", "medium", "high", "guaranteed"] },
+              "signals": { "type": "array", "items": { "type": "string" } },
+              "acknowledged_by": { "type": ["string", "null"] },
+              "acknowledged_at": { "type": ["string", "null"], "format": "date-time" },
+              "plan_decision": { "type": ["string", "null"] }
+            }
+          }
+        },
+        "integrity": { "$ref": "#/$defs/Integrity" }
+      }
+    },
+    "EpicState": {
+      "type": "object",
+      "required": ["kind", "schema_version", "epic", "epic_stage", "integrity"],
+      "properties": {
+        "kind": { "const": "epic" },
+        "schema_version": { "const": 3 },
+        "epic": {
+          "type": "object",
+          "required": ["jira_id", "slug", "title", "profile", "risk", "repos", "created_at", "driver"],
+          "properties": {
+            "jira_id": { "type": "string", "pattern": "^[A-Z]+-[0-9]+$" },
+            "slug": { "type": "string", "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$" },
+            "title": { "type": "string", "minLength": 1 },
+            "profile": { "enum": ["light", "standard", "full"] },
+            "risk": { "enum": ["low", "standard", "sensitive"] },
+            "repos": { "$ref": "#/$defs/Repos" },
+            "created_at": { "type": "string", "format": "date-time" },
+            "driver": { "type": "string", "minLength": 1 },
+            "previous_drivers": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["driver", "transferred_at"],
+                "properties": {
+                  "driver": { "type": "string" },
+                  "transferred_at": { "type": "string", "format": "date-time" }
+                }
+              }
+            }
+          }
+        },
+        "epic_stage": {
+          "type": "object",
+          "required": ["current", "history"],
+          "properties": {
+            "current": { "enum": ["init", "in-flight", "closing", "archived"] },
+            "history": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["stage", "closed_at"],
+                "properties": {
+                  "stage": { "type": "string" },
+                  "outcome": { "type": "string" },
+                  "closed_at": { "type": "string", "format": "date-time" }
+                }
+              }
+            }
+          }
+        },
+        "stories": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Story" }
+        },
+        "dependencies": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Dependency" }
+        },
+        "shipped_features": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["feature_jira_id", "story_id", "archived_path", "shipped_at"],
+            "properties": {
+              "feature_jira_id": { "type": "string", "pattern": "^[A-Z]+-[0-9]+$" },
+              "story_id": { "type": "integer" },
+              "archived_path": { "type": "string" },
+              "shipped_at": { "type": "string", "format": "date-time" },
+              "shipped_in_release": { "type": ["string", "null"] }
+            }
+          }
+        },
+        "post_release_log": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["entry_at", "jira_id", "severity", "disposition"],
+            "properties": {
+              "entry_at": { "type": "string", "format": "date-time" },
+              "jira_id": { "type": "string", "pattern": "^[A-Z]+-[0-9]+$" },
+              "severity": { "enum": ["low", "medium", "high", "critical"] },
+              "related_story": { "type": ["integer", "null"] },
+              "disposition": {
+                "enum": ["pending", "fix-next-release", "fold-into-inflight-story", "defer", "accept", "new-story-added"]
+              },
+              "new_story_id": { "type": ["integer", "null"] },
+              "notes": { "type": "string" }
+            }
+          }
+        },
+        "security": {
+          "type": "object",
+          "properties": {
+            "threat_model_path": { "type": ["string", "null"] },
+            "override": {
+              "type": ["object", "null"],
+              "properties": {
+                "from": { "enum": ["low", "standard", "sensitive"] },
+                "to": { "enum": ["low", "standard", "sensitive"] },
+                "reason": { "type": "string" },
+                "at": { "type": "string", "format": "date-time" }
+              }
+            }
+          }
+        },
+        "collisions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["epic_id", "severity"],
+            "properties": {
+              "epic_id": { "type": "string", "pattern": "^[A-Z]+-[0-9]+$" },
+              "severity": { "enum": ["low", "medium", "high", "guaranteed"] },
+              "signals": { "type": "array", "items": { "type": "string" } },
+              "acknowledged_by": { "type": ["string", "null"] },
+              "acknowledged_at": { "type": ["string", "null"], "format": "date-time" }
+            }
+          }
+        },
+        "integrity": { "$ref": "#/$defs/Integrity" }
+      }
+    }
+  }
+}

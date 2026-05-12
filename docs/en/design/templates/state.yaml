@@ -1,0 +1,76 @@
+# Seed template for feature umbrella state.yaml (kind: feature).
+# /feature:init populates this from driver inputs and integrity-signs it.
+# DO NOT edit manually — use /feature:state-repair if state becomes
+# inconsistent.
+#
+# For the EPIC umbrella seed, see epic-state.yaml.
+
+kind: feature
+schema_version: 3
+
+feature:
+  jira_id: ""                    # e.g. DEVOPS-12345
+  slug: ""                       # <jira-id-lowercase>-<kebab-title>
+  title: ""
+  parent_epic: null              # epic Jira id when branched via /feature:story-start; null for standalone
+  profile: ""                    # light | standard | full
+  risk: ""                       # low | standard | sensitive
+  repos: []                      # subset of [connectors, connectors-extensions, connectors-operator, connectors-plugin]
+  effort: null                   # hours | days | weeks | months | null
+  created_at: ""                 # RFC 3339
+  driver: ""                     # username or email
+  previous_drivers: []
+  paused: false
+  paused_at: null
+  paused_reason: null
+  profile_history: []
+  shipped_at: null               # filled at /feature:ship
+
+stage:
+  current: init
+  history: []
+
+story: null                      # populated at /feature:story-start from the epic's stories[]
+stories: []                      # standalone profile=full only — features branched from epics use `story:` above
+story_groups: []                 # populated by /feature:plan
+
+bundle:
+  synced_manifests: []
+  bundle_image: null
+  bundle_tag: null
+
+qa:
+  packet_path: null
+  owner: null
+  assigned_at: null
+
+acceptance:
+  status: pending                # pending | in_progress | passed | failed
+  report_path: null
+
+regression:
+  status: pending
+  report_path: null
+
+maturity:
+  entries: []
+  category_totals:
+    none: 0
+    template: 0
+    skill: 0
+    kb: 0
+    judgment: 0
+    flake: 0
+
+security:
+  threat_model_path: null
+  signoff_path: null
+  override: null
+
+collisions: []
+
+integrity:
+  last_hash: ""                  # sha256:<hex>
+  last_written_by: "/feature:init"
+  last_written_at: ""
+  repairs: []

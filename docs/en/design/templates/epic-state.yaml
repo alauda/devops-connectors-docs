@@ -1,0 +1,41 @@
+# Seed template for epic umbrella state.yaml (kind: epic).
+# /feature:epic-init populates this from driver inputs and integrity-signs it.
+# DO NOT edit manually — use /feature:state-repair if state becomes
+# inconsistent.
+#
+# For the FEATURE umbrella seed, see state.yaml.
+
+kind: epic
+schema_version: 3
+
+epic:
+  jira_id: ""                    # e.g. DEVOPS-41818
+  slug: ""                       # <jira-id-lowercase>-<kebab-title>
+  title: ""
+  profile: ""                    # light | standard | full
+  risk: ""                       # low | standard | sensitive (inherited by story-started features)
+  repos: []                      # union across anticipated stories
+  created_at: ""                 # RFC 3339
+  driver: ""
+  previous_drivers: []
+
+epic_stage:
+  current: init                  # init | in-flight | closing | archived
+  history: []
+
+stories: []                      # populated by /feature:research and /feature:story (--add|--split|--merge|--defer)
+dependencies: []                 # edge list: [{from: <id>, to: <id>}, ...]
+shipped_features: []             # populated at each /feature:ship of a story-started feature
+post_release_log: []             # populated by /feature:bug-link + deferred tech debt + epic-close summary
+
+security:
+  threat_model_path: null        # populated during /feature:design at epic scope if risk=sensitive
+  override: null
+
+collisions: []
+
+integrity:
+  last_hash: ""                  # sha256:<hex>
+  last_written_by: "/feature:epic-init"
+  last_written_at: ""
+  repairs: []

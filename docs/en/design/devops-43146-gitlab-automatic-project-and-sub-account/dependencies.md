@@ -1,0 +1,110 @@
+# Dependencies — Gitlab automatic project and sub-account support
+
+<!--
+Populated by /feature:design from the task breakdown's implied story-level
+edges. Re-validated at /feature:plan when story groups become PR groups.
+The graph is the source of truth for /feature:tracks.
+-->
+
+## Stories
+
+- **Story 1 — Task + scripts** (slice: backend + infra). Tasks 1–7.
+  Task template + rendered Task YAML, local `hack/render-task.sh`
+  build-time render tool, four helper scripts under
+  `connectors-gitlab/tektoncd/tasks/gitlab-connector-automatic-creation/0.1/scripts/`,
+  kustomization wiring.
+- **Story 2 — BDD coverage** (slice: test). Tasks 8, 9, 10.
+  `script.feature`, `tektoncd.feature`, BDD fixtures.
+- **Story 3 — Docs** (slice: docs). Tasks 11, 12.
+  Concept + how-to pages (the four product-design.md examples are
+  the how-to's source material).
+- **Story 4 — Operator pipeline wiring** (slice: infra + docs). Tasks
+  13, 14. `hack/sync_install_manifests.sh` entry, `values.yaml`
+  stub, `make manifests` regenerates `cmd/kodata/connectors-gitlab-tektoncd/...`,
+  doc-sync helper script.
+
+## Edges
+
+```
+Story 1 (Task + scripts) ──► Story 2 (BDD)
+                          │
+                          └─► Story 4 (operator wiring)
+
+Story 3 (docs) ────────► (no hard dependency on impl; runs in parallel)
+```
+
+- `Story 1 → Story 2` — BDD scenarios exercise the actual Task; they
+  require the Task YAML + scripts + kustomize wiring to be in place.
+- `Story 1 → Story 4` — operator pipeline wiring is meaningful only
+  once the connectors-extensions side publishes a non-empty install
+  manifest to Nexus. Soft dependency: Story 4 can be drafted in
+  parallel (one-line script edits + values.yaml stub), but the
+  `make manifests` validation in Story 4 requires Story 1's install
+  manifest to exist on Nexus.
+- `Story 3 ‖ Stories 1, 2, 4` — docs reference the Task contract
+  (params, results, workspaces) and the deployment shape, both of
+  which are fixed by the design and do not require the implementation
+  to be merged. The how-to TaskRun example IS verified end-to-end
+  against the Story 2 BDD before docs sign-off.
+
+## Cycle check
+
+No cycles. The graph is a DAG with two source nodes (Story 1, Story 3)
+and two sinks (Story 2, Story 4). Verified manually; re-validated at
+/feature:plan when the breakdown is finalised.
+
+## Cross-feature dependencies
+
+- None at design time. The Harbor reference Task (DEVOPS-43145, PR
+  AlaudaDevops/connectors-extensions#215) is already merged; the
+  shared patterns (BDD shape, kustomize wiring under `tektoncd/`,
+  Nexus sync flow) ship in `main` of `connectors-extensions` and
+  `connectors-operator`.
+- The catalog `glab` and `kubectl` images are pre-existing and not
+  changed by this feature; the Task references them as image
+  defaults only. **No files are added to catalog.** The render
+  contract that catalog's `gitlab-cli` Task uses (`tasklib/scripts/`
+  + base64 injection) is not used here — connectors-extensions
+  ships its own local render tool (`hack/render-task.sh`) instead.
+
+## Per-PR group skeleton (filled at /feature:plan)
+
+OpenSpec change paths populated by `/feature:plan` on 2026-05-06.
+
+- **Story 1 PR — connectors-extensions.** OpenSpec change:
+  `openspec/changes/gitlab-connector-automatic-creation-task/`
+  (class: **design-change**; full pre-apply cycle —
+  research/proposal/specs/design/bdd-scratch/tasks all green per
+  `openspec status`).
+  Implementation paths under
+  `connectors-gitlab/tektoncd/tasks/gitlab-connector-automatic-creation/0.1/`
+  (template `*.template.yaml`, rendered `*.yaml`, `scripts/*.sh`,
+  `samples/`), plus
+  `connectors-gitlab/tektoncd/kustomization.yaml` (new file),
+  `connectors-gitlab/hack/render-task.sh` (new, local render tool),
+  and a `make render-tasks` Makefile target. **All in connectors-extensions
+  — no catalog companion PR is needed.**
+- **Story 2 PR — connectors-extensions.** OpenSpec change:
+  `openspec/changes/gitlab-connector-automatic-creation-task-bdd/`
+  (class: **mechanical-followup**; parent_change = Story 1's change;
+  tasks.md only). Implementation paths under
+  `connectors-gitlab/tektoncd/tasks/gitlab-connector-automatic-creation/0.1/testing/`.
+- **Story 3 PR — connectors-extensions.** OpenSpec change:
+  `openspec/changes/gitlab-connector-automatic-creation-task-docs/`
+  (class: **mechanical-followup**; parent_change = Story 1's change;
+  tasks.md only). Implementation paths under
+  `connectors-gitlab/docs/en/connectors/{concepts,how-to}/`.
+- **Story 4 PR — connectors-operator.** OpenSpec change:
+  `openspec/changes/gitlab-connector-automatic-creation-task-operator-wiring/`
+  (class: **mechanical-followup**; parent_change is **cross-repo** —
+  points at `connectors-extensions/openspec/changes/gitlab-connector-automatic-creation-task/`;
+  tasks.md only). Implementation paths:
+  `hack/sync_install_manifests.sh` (one-line addition),
+  `values.yaml` (stub entry),
+  `cmd/kodata/connectors-gitlab-tektoncd/1.0.0/install.yaml` (auto-generated by `make manifests`),
+  `hack/sync_gitlab_connector_automatic_creation_task_doc.sh` (new),
+  `Makefile` (new target).
+
+Per-story PR draft state is tracked in
+`state.yaml.story_groups[]`; reviewer sign-off recorded under
+`story_groups[].review`.

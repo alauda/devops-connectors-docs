@@ -1,0 +1,806 @@
+---
+weight: 25
+title: Auto-Create GitLab Tenant Group and Connector with Tekton
+---
+
+# Auto-Create GitLab Tenant Group and Connector with Tekton
+
+When a new tenant is onboarded onto Alauda Container Platform, operators
+typically have to repeat the same GitLab setup steps: create a tenant
+group (and any per-team subgroups), mint a Group Access Token, then
+`kubectl apply` a tenant `gitlab` Connector + matching auth Secret. This
+guide turns that flow into a single Tekton TaskRun, and shows how to run
+the same TaskRun on a schedule to rotate the tenant token before it
+expires.
+
+The implementation mechanism is the
+[`gitlab-connector-automatic-creation` Task](./gitlab_connector_automatic_creation_task.mdx).
+Run it once for initial provisioning, run it again later to rotate
+(or — when an identity-affecting input changes — recreate) the tenant
+GAT.
+
+The concept page
+[GitLab CLI Configuration and Auto-Creation Patterns](../concepts/glab_cli_config.mdx)
+covers the underlying model (Pattern A vs Pattern B, the three-path GAT
+lifecycle, and how the admin credential stays in the CSI mount). This
+page focuses on the operator workflow.
+
+## What This Solves
+
+- **Tenant onboarding.** One TaskRun creates the tenant GitLab group, any
+  optional subgroups, the tenant GAT, and the tenant `gitlab` Connector
+  + Secret on the cluster.
+- **Token rotation.** Re-running the TaskRun on a schedule rotates the
+  tenant GAT in place; the Secret is updated atomically; running
+  pipelines re-read the Secret on next launch.
+- **Self-healing.** If a rotation cycle is missed and the GAT expires
+  before the next run, the Task detects the expired token and
+  automatically falls through to a recreate. No manual intervention is
+  required.
+- **Recreate on identity change.** Changing `scopes`, `accessLevel`, or
+  the `subgroups[]` set on a re-run triggers a controlled
+  delete-and-recreate of the GAT.
+
+## Before You Begin
+
+Make sure the environment meets these requirements:
+
+- Tekton Pipelines is installed.
+- The Connectors system and the GitLab Connector ConnectorClass are
+  installed.
+- The
+  [`gitlab-connector-automatic-creation` Task](./gitlab_connector_automatic_creation_task.mdx)
+  is installed in the cluster. The connectors-operator installs it
+  together with the rest of the GitLab Connector component.
+- The catalog `glab` and `kubectl` tool images are reachable from your
+  internal registry. The Task uses the existing
+  `catalog.tekton.dev/tool-image-glab` and
+  `catalog.tekton.dev/tool-image-kubectl` ConfigMaps in `kube-public`.
+
+Security recommendation:
+
+- Keep the admin GitLab Connector in a private management namespace
+  (e.g. `connectors-management`).
+- Restrict who can trigger the TaskRun — that action mints (and
+  rotates) Group Access Tokens.
+- Pick the smallest-footprint admin identity per pattern (see
+  [Choose a Deployment Pattern](#choose-a-deployment-pattern) below).
+
+## Choose a Deployment Pattern \{#choose-a-deployment-pattern}
+
+The Task itself does not branch on pattern — both patterns flow through
+the same code path. Pick based on your GitLab tenancy shape:
+
+| Pick | When |
+|---|---|
+| **Pattern A** — top-level tenant group, admin user PAT with `can_create_group` | Greenfield self-hosted GitLab; one-tenant-per-top-level-group; you want full isolation between tenants. |
+| **Pattern B** — subgroup of an umbrella, **admin user PAT with Owner on the umbrella** | You already have an umbrella group consolidating tenants (typical for SaaS GitLab and for orgs with shared admin tooling). Smaller blast radius. |
+
+> **Why a user PAT and not a Group Access Token (GAT) on the umbrella?** A
+> GAT belongs to a group bot user that GitLab restricts to the issuance
+> group: it cannot mint GATs on freshly-created subgroups (HTTP 400 — "User
+> does not have permission to create group access token"), and group bots
+> cannot be added as direct members of other groups. The Task therefore
+> requires a *regular user* identity — a dedicated automation user that
+> you grant Owner on the umbrella — to mint per-tenant GATs on subgroups.
+> See [Pattern B prerequisites](#prerequisites-pattern-b-subgroup-of-umbrella-admin-user-pat) below.
+
+See
+[Pattern A vs Pattern B](../concepts/glab_cli_config.mdx#pattern-a-vs-pattern-b)
+for the full comparison.
+
+## Prerequisites — Pattern A (Top-Level + `can_create_group` User)
+
+1. **Create or pick a dedicated GitLab user** (do **not** use a human
+   identity). On self-hosted GitLab, ask the GitLab instance admin to
+   set this user's `can_create_group` flag to `true`. On GitLab.com,
+   any user can create top-level groups so no flag setup is required.
+
+2. **Restrict that user's ownership.** The user becomes owner of every
+   group it creates, and its blast radius if compromised is the union of
+   those groups. Document a rule like "this user must not own anything
+   outside the auto-created tenant set" and audit it on a schedule (see
+   [Pattern-A user ownership audit](#pattern-a-user-ownership-audit) in
+   the runbook below).
+
+3. **Mint a PAT for that user** with at least the `api` scope. Store
+   the PAT as a Kubernetes Secret in the management namespace:
+
+   ```yaml
+   apiVersion: v1
+   kind: Secret
+   metadata:
+     name: gitlab-admin-secret
+     namespace: connectors-management
+   type: connectors.cpaas.io/gitlab-pat-auth
+   stringData:
+     username: gitlab-admin-bot
+     token: glpat-xxxxxxxxxxxxxxxxxxxx
+   ```
+
+4. **Create the admin Connector** pointing at the Secret:
+
+   ```yaml
+   apiVersion: connectors.alauda.io/v1alpha1
+   kind: Connector
+   metadata:
+     name: gitlab-admin
+     namespace: connectors-management
+   spec:
+     connectorClassName: gitlab
+     address: https://gitlab.example.com
+     auth:
+       name: patAuth
+       secretRef:
+         name: gitlab-admin-secret
+   ```
+
+## Prerequisites — Pattern B (Subgroup of Umbrella + Admin User PAT) \{#prerequisites-pattern-b-subgroup-of-umbrella-admin-user-pat}
+
+1. **Create the umbrella group** (e.g. `umbrella`) on GitLab if it does
+   not already exist. This is a one-time operation — every tenant from
+   here on lives as a subgroup under it.
+
+2. **Create or pick a dedicated GitLab user** to be the umbrella admin.
+   Treat it like the Pattern A automation user: a non-human bot account,
+   not a real person's identity. You do **not** need `can_create_group`
+   for this user (it creates *subgroups*, not top-level groups).
+
+3. **Add that user to the umbrella as Owner** so it can create
+   subgroups under it AND mint GATs on those subgroups (GAT-creation
+   endpoints require *direct* Owner membership, which group access
+   tokens cannot satisfy — that's why a user identity is required for
+   Pattern B).
+
+4. **Mint a PAT for that user** with at least the `api` scope. Store
+   the PAT as a Kubernetes Secret in the management namespace:
+
+   ```yaml
+   apiVersion: v1
+   kind: Secret
+   metadata:
+     name: gitlab-umbrella-secret
+     namespace: connectors-management
+   type: connectors.cpaas.io/gitlab-pat-auth
+   stringData:
+     username: gitlab-umbrella-admin
+     token: glpat-xxxxxxxxxxxxxxxxxxxx
+   ```
+
+4. **Create the admin Connector** pointing at the umbrella Secret:
+
+   ```yaml
+   apiVersion: connectors.alauda.io/v1alpha1
+   kind: Connector
+   metadata:
+     name: gitlab-umbrella
+     namespace: connectors-management
+   spec:
+     connectorClassName: gitlab
+     address: https://gitlab.example.com
+     auth:
+       name: patAuth
+       secretRef:
+         name: gitlab-umbrella-secret
+   ```
+
+## Optional: Kubernetes Connector for Cross-Cluster Apply
+
+When the management namespace and the tenant Connector live on different
+clusters, the Task supports an optional `kubeconfig` workspace. Mount it
+from a `kubernetes`-class Connector:
+
+```yaml
+- name: kubeconfig
+  csi:
+    driver: connectors-csi
+    readOnly: true
+    volumeAttributes:
+      connector.name: target-cluster
+      configuration.names: kubeconfig
+```
+
+When the workspace is unbound the Task uses the in-cluster ServiceAccount
+context; that SA needs RBAC to create Secrets and Connectors in the
+connector namespace. See
+[Using Kubernetes Connector in Tekton Task](../../connectors-k8s/how_to/using-in-tekton-task.mdx)
+for the Kubernetes Connector setup.
+
+## Step-by-Step — Pattern A: Fresh Creation
+
+This onboarding example creates a top-level GitLab group `acme-corp` with
+two per-team subgroups, mints an `owner` GAT at `acme-corp` with a 30-day
+expiry, and lands a `gitlab` Connector + Secret in
+`connectors-management/acme-corp`.
+
+```yaml
+# Pattern A -- top-level tenant group, fresh creation.
+apiVersion: tekton.dev/v1
+kind: TaskRun
+metadata:
+  generateName: gitlab-pattern-a-top-level-
+  namespace: connectors-management
+spec:
+  taskRef:
+    name: gitlab-connector-automatic-creation
+  params:
+    - name: connector
+      value: connectors-management/acme-corp
+    - name: tenantGroup
+      value: acme-corp
+    - name: subgroups
+      value:
+        - backend
+        - frontend
+    - name: accessLevel
+      value: owner
+    - name: scopes
+      value:
+        - api
+    - name: tokenDuration
+      value: "30"
+  workspaces:
+    - name: gitlabconfig
+      csi:
+        driver: connectors-csi
+        readOnly: true
+        volumeAttributes:
+          connector.name: gitlab-admin
+          configuration.names: gitlabconfig
+    - name: kubeconfig
+      csi:
+        driver: connectors-csi
+        readOnly: true
+        volumeAttributes:
+          connector.name: target-cluster
+          configuration.names: kubeconfig
+```
+
+Apply it and wait for completion:
+
+```bash
+kubectl apply -f pattern-a-top-level.yaml
+kubectl get taskrun -n connectors-management --watch
+```
+
+After the TaskRun succeeds:
+
+- GitLab contains top-level group `acme-corp` and subgroups
+  `acme-corp/backend`, `acme-corp/frontend`.
+- A GAT named `connector-connectors-management-acme-corp/<identity>`
+  exists at `acme-corp` with scopes `[api]`, access level `owner`, expiry
+  today + 30 days.
+- Cluster contains `Secret/acme-corp` (type
+  `connectors.cpaas.io/gitlab-pat-auth`) and `Connector/acme-corp`
+  pointing at it, both in `connectors-management`.
+
+## Step-by-Step — Pattern B: Fresh Creation
+
+Same tenant, different deployment pattern: the umbrella `umbrella` is
+pre-existing, and the admin Connector carries a *user PAT* whose user
+holds Owner on the umbrella. (A Group Access Token cannot mint per-tenant
+GATs on subgroups — see the explanation in the [pattern picker](#choose-a-deployment-pattern).)
+
+```yaml
+apiVersion: tekton.dev/v1
+kind: TaskRun
+metadata:
+  generateName: gitlab-pattern-b-subgroup-
+  namespace: connectors-management
+spec:
+  taskRef:
+    name: gitlab-connector-automatic-creation
+  params:
+    - name: connector
+      value: connectors-management/acme-corp
+    - name: tenantGroup
+      value: umbrella/acme-corp
+    - name: subgroups
+      value: []
+    - name: accessLevel
+      value: owner
+    - name: scopes
+      value:
+        - api
+    - name: tokenDuration
+      value: "30"
+  workspaces:
+    - name: gitlabconfig
+      csi:
+        driver: connectors-csi
+        readOnly: true
+        volumeAttributes:
+          connector.name: gitlab-umbrella
+          configuration.names: gitlabconfig
+    - name: kubeconfig
+      csi:
+        driver: connectors-csi
+        readOnly: true
+        volumeAttributes:
+          connector.name: target-cluster
+          configuration.names: kubeconfig
+```
+
+Result: identical cluster outputs to Pattern A; on the GitLab side the
+new group sits at `umbrella/acme-corp` (subgroup of the umbrella) instead
+of at the top level, and the GAT is issued at `umbrella/acme-corp` (NOT
+at the umbrella).
+
+## Step-by-Step — Rotate-in-Place
+
+Rerunning the TaskRun with **all params unchanged** rotates the existing
+GAT in place. The Task locates the existing GAT by its name prefix
+(`connector-<connector-namespace>-<connector-name>`), confirms the
+identity matches, and calls
+`POST /groups/:id/access_tokens/:token_id/rotate`. GitLab atomically
+invalidates the old token and returns a fresh one with `expires_at`
+advanced by `tokenDuration` days; the tenant Secret is updated in place.
+
+The TaskRun is intentionally identical in shape to the Pattern A creation
+TaskRun. Cron-friendly: `tokenDuration` is a number of days, so every
+rotation refreshes `expires_at` to today + N days.
+
+### CronJob Pattern for Scheduled Rotation
+
+Wrap the rotate TaskRun in a CronJob so it fires on a schedule:
+
+```yaml
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: rotate-acme-corp-gat
+  namespace: connectors-management
+spec:
+  # Rotate weekly. Pick a window when tenant pipelines are likely idle
+  # (see "Rotation-during-use race" in the runbook below).
+  schedule: "0 2 * * 0"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        spec:
+          restartPolicy: OnFailure
+          serviceAccountName: gitlab-connector-rotator
+          containers:
+            - name: rotate
+              image: bitnami/kubectl:1.30
+              command: [/bin/sh, -c]
+              args:
+                - kubectl create -f /etc/rotate/rotate.yaml
+              volumeMounts:
+                - name: rotate-template
+                  mountPath: /etc/rotate
+          volumes:
+            - name: rotate-template
+              configMap:
+                name: rotate-acme-corp-gat-template
+```
+
+Store the rotate TaskRun manifest in the `rotate-acme-corp-gat-template`
+ConfigMap; the CronJob `kubectl create`s a fresh TaskRun each tick. Pair
+this with a stale-token alert (see
+[Token already expired](#token-already-expired-missed-rotation-window)
+in the runbook).
+
+> **Tip.** Set the CronJob schedule so consecutive runs are spaced
+> shorter than `tokenDuration` minus a safety margin. For
+> `tokenDuration=30` days, schedule weekly. For `tokenDuration=7` days,
+> schedule daily.
+
+## Step-by-Step — Recreate on Identity Change
+
+When you change `scopes`, `accessLevel`, or the `subgroups[]` set, the
+Task detects the identity drift and recreates the tenant GAT instead of
+rotating it. Example: a scope change from `[api]` to
+`[api, read_registry]`:
+
+```yaml
+apiVersion: tekton.dev/v1
+kind: TaskRun
+metadata:
+  generateName: gitlab-recreate-
+  namespace: connectors-management
+spec:
+  taskRef:
+    name: gitlab-connector-automatic-creation
+  params:
+    - name: connector
+      value: connectors-management/acme-corp
+    - name: tenantGroup
+      value: acme-corp
+    - name: subgroups
+      value:
+        - backend
+        - frontend
+    - name: accessLevel
+      value: owner
+    - name: scopes
+      value:
+        - api
+        - read_registry
+    - name: tokenDuration
+      value: "30"
+  workspaces:
+    - name: gitlabconfig
+      csi:
+        driver: connectors-csi
+        readOnly: true
+        volumeAttributes:
+          connector.name: gitlab-admin
+          configuration.names: gitlabconfig
+```
+
+The behavioural sequence:
+
+- The Task locates the existing GAT.
+- The existing GAT's identity no longer matches the desired identity.
+- The Task revokes it (`DELETE /groups/:id/access_tokens/:token_id`)
+  and mints a fresh one with the requested identity.
+- The tenant Secret is updated with the new token.
+- Annotation `connectors.cpaas.io/gat-recreated-at` is set on the
+  Secret.
+
+Note: the **subgroup set is NOT identity-affecting only when extending**
+— adding `team-c` to `subgroups` rotates the GAT in place and creates
+the missing subgroup under `<tenantGroup>/team-c`. Removing or changing
+the canonical subgroup set is identity-affecting and triggers recreate.
+
+## Step-by-Step — Expired-Fall-Through (Self-Healing) \{#step-by-step-expired-fall-through-self-healing}
+
+If a rotation cycle is missed and the GAT's `expires_at` passes before
+the next run, the Task self-heals. The recovery TaskRun is identical in
+shape to the rotate TaskRun. On the GitLab side:
+
+- `ensure-gat` (step 3 of the Task) lists existing GATs at `acme-corp`
+  and finds the one with the `connector-<ns>-<name>` prefix.
+- It detects `expires_at < now` and logs
+  `WARN: existing GAT <id> is expired; falling through to recreate`.
+- It revokes the stale GAT (best-effort; GitLab garbage-collects expired
+  tokens too) and mints a fresh one.
+- The tenant Secret is rewritten with the new token value.
+
+The TaskRun reports `Succeeded`. **No operator action is required for
+the immediate recovery** — but you should still investigate why the
+rotation cron missed (see
+[Token already expired](#token-already-expired-missed-rotation-window)
+in the runbook below).
+
+## Verify the Result
+
+Check the TaskRun:
+
+```bash
+kubectl get taskrun -n connectors-management
+kubectl describe taskrun <name> -n connectors-management
+```
+
+Check the tenant Connector and Secret:
+
+```bash
+kubectl get connector acme-corp -n connectors-management
+kubectl get secret acme-corp -n connectors-management
+```
+
+Check the rotation/recreation annotations on the Secret:
+
+```bash
+kubectl get secret acme-corp -n connectors-management -o jsonpath='{.metadata.annotations}'
+```
+
+Sanity-check the GitLab side with `glab`:
+
+```bash
+glab api groups/acme-corp/access_tokens?state=active
+```
+
+You should see the GAT named
+`connector-connectors-management-acme-corp/<identity>` with the requested
+`scopes`, `access_level`, and a forward-looking `expires_at`.
+
+## Operations Runbook \{#operations-runbook}
+
+Each scenario is structured as: **trigger → what the Task does →
+operator action → monitoring signal**.
+
+### Token already expired (missed rotation window) \{#token-already-expired-missed-rotation-window}
+
+**Trigger.** Operator created the tenant Connector with
+`tokenDuration=30` but the next rotation TaskRun did not run within 30
+days (CronJob disabled, controller paused, weekend on-call miss, etc.).
+On day 31+, GitLab has already expired the GAT.
+
+**What the Task does.** On re-run, `ensure-gat` reads the existing
+GAT from `GET /groups/<tenantGroup>/access_tokens` and detects
+`expires_at < now`. It logs
+`WARN: existing GAT <id> is expired; falling through to recreate` and
+switches from the rotate path to the **delete + recreate** path
+automatically. GitLab's rotate endpoint would otherwise return
+`400 invalid_grant` (token expired); the Task never calls it.
+
+**Outcome.** Same end state as a normal recreate: the old GAT id is
+gone (best-effort delete; GitLab also garbage-collects expired tokens),
+a new GAT is issued at `tenantGroup`, the Secret is rewritten, and the
+Connector annotation `connectors.cpaas.io/gat-recreated-at` is set. The
+TaskRun reports `Succeeded`. **No manual operator intervention is
+required.**
+
+**Operator action.** None for the immediate recovery. Long-term:
+investigate why the rotation cron missed and tighten the alert threshold
+below the expiry window (e.g. alert when stale-token age exceeds
+`tokenDuration - 7d`).
+
+**Monitoring signal.** Recommended alert rules:
+
+- `gat_age_seconds > tokenDuration_seconds - 604800` (warn — 7 days
+  before expiry).
+- `gat_age_seconds > tokenDuration_seconds` (page — already expired;
+  self-healing on next TaskRun, but tenants are reading stale
+  credentials in the meantime).
+- `taskrun_status == "Failed"` for the rotation CronJob's TaskRun (page).
+
+### Token-refresh CronJob disabled or misconfigured
+
+**Trigger.** Either someone disabled the CronJob, or the schedule
+silently stopped firing (Tekton Trigger misconfig, paused controller,
+etc.).
+
+**What the Task does.** Nothing — the Task only runs when invoked. The
+"missed rotation" failure mode above kicks in once expiry arrives.
+
+**Operator action.** Re-enable the CronJob; verify the next run
+succeeds; review the alerting that should have fired.
+
+**Monitoring signal.** Page on `kube_cronjob_spec_suspend == 1` for the
+rotation CronJob; page on the rotation CronJob having no successful
+Job run within the last 2 × schedule interval.
+
+### Tenant offboarding rollback
+
+**Trigger.** Tenant `acme-corp` is being decommissioned; the operator
+wants to revoke GitLab access cleanly.
+
+**What the Task does.** Out of scope — the Task only creates and
+rotates. The recommended manual sequence is:
+
+```bash
+# 1. Revoke the GAT (defensive — deleting the group below also revokes).
+glab api groups/acme-corp/access_tokens \
+  | jq '.[] | select(.name|startswith("connector-connectors-management-acme-corp/")) | .id' \
+  | xargs -I {} glab api -X DELETE groups/acme-corp/access_tokens/{}
+
+# 2. Remove the tenant group on GitLab.
+#    Pattern A: the admin user owns the group; delete it directly.
+#    Pattern B: the umbrella owner deletes the subgroup.
+glab api -X DELETE groups/acme-corp
+
+# 3. Delete the tenant Connector + Secret on the cluster.
+kubectl delete connector acme-corp -n connectors-management
+kubectl delete secret acme-corp -n connectors-management
+
+# 4. Pattern A only: if no other tenants share the dedicated user,
+#    consider revoking the admin PAT and deleting the user.
+```
+
+A future "tenant teardown" Task is a candidate follow-up; tracked as a
+deferred ticket once tenant demand surfaces.
+
+### Pattern-A user ownership audit \{#pattern-a-user-ownership-audit}
+
+**Trigger.** Periodic compliance check (the Pattern A user accumulates
+ownership of every group it creates, so its blast radius grows over
+time).
+
+**What the Task does.** Nothing — read-only audit. Run this snippet on a
+schedule (or wire it into a separate audit Task as a follow-up):
+
+```bash
+glab api 'groups?owned=true&min_access_level=50'
+```
+
+**Operator action.** If the owned-groups list contains anything the user
+is not supposed to own, escalate; otherwise no-op. The audit is the
+visibility tool for the user's residual blast-radius risk.
+
+**Monitoring signal.** None native — wire the audit output into your
+SIEM or a periodic CI job that diffs against an expected list of
+auto-created tenant groups.
+
+### Group-path conflict at fresh-creation time \{#group-path-conflict-at-fresh-creation-time}
+
+**Trigger.** Operator chose `tenantGroup=acme-corp` but `acme-corp`
+already exists at GitLab and is owned by someone else (not the admin
+identity).
+
+**What the Task does.** `ensure-group` `GET /groups/acme-corp` returns
+200, sees the admin identity is not in the owners list, and exits with:
+
+```
+ERROR: tenantGroup 'acme-corp' already exists and admin identity is not an owner; rename or pick a different tenantGroup
+```
+
+No mutation on either side.
+
+**Operator action.** Pick a different `tenantGroup` (e.g.
+`acme-corp-prod` or `tenants/acme-corp` if you have an umbrella) or
+coordinate with the existing group's owner.
+
+**Monitoring signal.** TaskRun `Failed` with the explicit error message
+in the step log. Alert on the message itself if you want a fast signal.
+
+### Rotation-during-use race
+
+**Trigger.** A rotate TaskRun runs concurrently with a long-lived tenant
+pipeline that reads the same tenant `Secret/<connector-name>`. The
+in-flight pipeline pod read the **old** token value at startup;
+mid-flight, the rotate TaskRun calls
+`POST /groups/:id/access_tokens/:token_id/rotate`, which invalidates the
+old token atomically; the in-flight pod's subsequent push or API call
+fails with `401`.
+
+**What the Task does.** The Task does not coordinate with tenant
+pipelines — rotation is unconditional on schedule.
+
+**Operator action.** Two options:
+
+1. **Schedule rotation when tenant pipelines are idle.** Pick a CronJob
+   window (e.g. `0 2 * * 0` — 02:00 Sunday) that minimises overlap with
+   business pipelines.
+2. **Make tenant pipelines retry on 401.** When the tenant workload
+   detects a `401`, re-mount or re-read the tenant Secret and retry.
+   The Secret is updated atomically by the rotate TaskRun; the next
+   read will pick up the new token.
+
+We recommend running both mitigations.
+
+**Monitoring signal.** Tenant-side `401` rate spike on the rotation
+window. Pair the rotation CronJob with a dashboard panel showing
+`http_request_total{code="401"}` by tenant.
+
+### Validating scopes against your instance \{#validating-scopes-against-your-instance}
+
+**Trigger.** A re-run with new `scopes` (e.g. adding `read_registry` or
+`write_registry`) fails with the bare GitLab error:
+
+```
+{"error":"scopes does not have a valid value"}
+```
+
+GitLab does **not** name which scope is invalid in the error body. The
+Task surfaces this verbatim.
+
+**Why this happens.** Some scopes are gated on instance features. For
+example `read_registry` and `write_registry` require the GitLab
+container registry feature to be enabled on the instance; on instances
+where that feature is disabled, GitLab rejects the entire scopes array.
+
+**Operator action.** Pre-validate the scope set against your instance
+before changing it on a production tenant:
+
+```bash
+# Option 1: query an existing user PAT and inspect its allowed scopes.
+glab api personal_access_tokens/<id>
+
+# Option 2: mint a throwaway PAT in a non-production scope using the
+# same scope set; if GitLab rejects, the production change will too.
+glab api -X POST personal_access_tokens \
+  -F name=scope-probe \
+  -F 'scopes[]=api' \
+  -F 'scopes[]=read_registry' \
+  -F expires_at=$(date -u -d '+1 day' +%Y-%m-%d)
+```
+
+If the probe fails, drop the offending scope from your tenant TaskRun
+input and retry. If you need a scope that requires an instance feature
+(e.g. container registry), enable that feature on the instance first.
+
+**Monitoring signal.** TaskRun `Failed` with
+`"scopes does not have a valid value"` in the step log. Alert on the
+phrase to surface scope-validation failures before they propagate to
+multiple tenants.
+
+## Manual Cross-Group Permissions Workaround
+
+The auto-creation Task issues **one** GAT at the tenant group with **one**
+`accessLevel`. If you need different access levels for different
+subgroups (e.g. `developer` on `team-a`, `maintainer` on `team-b`)
+under one tenant identity, the Task does not cover that today.
+
+A first-class option is on the deferred follow-up list. The manual
+workaround is:
+
+1. Create a dedicated GitLab service-account user and a PAT for it
+   (Pattern A's user-PAT shape).
+2. Use the auto-creation TaskRun to create the tenant group + subgroups
+   and the cluster-side Connector + Secret (with any reasonable
+   `accessLevel` — it will be overridden manually).
+3. Add the service-account user as a **member** of each subgroup with
+   the desired `access_level`:
+
+   ```bash
+   glab api -X POST groups/acme-corp%2Fteam-a/members \
+     -F user_id=<service-account-user-id> \
+     -F access_level=30
+   glab api -X POST groups/acme-corp%2Fteam-b/members \
+     -F user_id=<service-account-user-id> \
+     -F access_level=40
+   ```
+
+4. Replace the GAT in the tenant Secret with the service-account PAT.
+   Subsequent rotation TaskRuns will overwrite this — so document the
+   workaround as a deferred follow-up rather than a recommended steady
+   state.
+
+Track the demand for first-class per-group access-level support; it
+will eventually become a Task-level option.
+
+## Troubleshooting
+
+### `tenantGroup` value rejected
+
+The `tenantGroup` value must be a GitLab group full path. Top-level
+paths are simple slugs (`acme-corp`); subgroup paths use slashes
+(`umbrella/acme-corp`). Slug rules follow GitLab's group-path rules
+(lowercase letters, digits, `-`, `_`, `.`).
+
+### `scopes does not have a valid value`
+
+See
+[Validating scopes against your instance](#validating-scopes-against-your-instance)
+in the runbook. GitLab rejects the entire scopes array if any one scope
+is invalid for the instance.
+
+### Pattern A admin lacks `can_create_group`
+
+The admin Connector's user PAT belongs to a user without the
+`can_create_group` flag, and the request asks for a top-level
+`tenantGroup`. The Task fails with:
+
+```
+ERROR: admin user lacks 'can_create_group'; cannot create top-level GitLab group '<name>'.
+       Either set the user's can_create_group flag on the GitLab instance,
+       or use a subgroup tenantGroup (e.g. 'tenants/<name>') under a parent the admin already owns.
+```
+
+Set the flag (instance admin) or switch to Pattern B.
+
+### Pattern B admin lacks `owner` on the umbrella
+
+The admin Connector's PAT belongs to a user who is only a `maintainer`
+on the umbrella. Subgroup creation may succeed but the Task fails on the
+GAT-mint step (the GitLab API requires direct Owner membership for GAT
+creation):
+
+```
+ERROR: failed to mint GAT on '<subgroup>': HTTP 400 - User does not have permission to create group access token
+```
+
+Promote the admin user to `Owner` on the umbrella (Group → Members →
+edit role).
+
+### Group-path conflict
+
+See
+[Group-path conflict at fresh-creation time](#group-path-conflict-at-fresh-creation-time)
+in the runbook.
+
+### Kubernetes RBAC missing for in-cluster apply
+
+If the optional `kubeconfig` workspace is unbound and the in-cluster
+ServiceAccount lacks RBAC to create Secrets and Connectors in the
+connector namespace, the apply step fails with `403 Forbidden`. Either
+grant the SA the required permissions or bind a `kubeconfig` workspace
+that carries an identity with those permissions.
+
+## Further Reading
+
+- [`gitlab-connector-automatic-creation` Task reference](./gitlab_connector_automatic_creation_task.mdx)
+  — full parameter, workspace, and result reference.
+- [GitLab CLI Configuration and Auto-Creation Patterns](../concepts/glab_cli_config.mdx)
+  — concept page covering the `gitlabconfig` CSI mount, Pattern A vs
+  Pattern B, and the three-path GAT lifecycle.
+- [GitLab Connector](../concepts/gitlab_connectorclass.mdx)
+  — the underlying GitLab ConnectorClass and its tenant-side
+  configurations.

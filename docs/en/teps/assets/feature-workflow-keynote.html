@@ -1,0 +1,2148 @@
+<!doctype html>
+<!--
+  Feature Workflow Keynote.
+
+  Changelog:
+    rev 1 — initial deck, 12 slides.
+    rev 2 — blocker-stratified maturity, story groups, mechanical-followup,
+            pause vs handoff, research+design collapse for light/standard.
+    rev 3 — archive-at-ship + two-tier epic/feature umbrellas + release
+            cadence reality + multi-release walkthrough (DEVOPS-41818).
+            (Folded into the TEP in the same commit as this rev.)
+
+  The TEP (docs/en/teps/feature-workflow.md) and this keynote are now in
+  sync. When evolving further, keep them in lock-step; slide-level
+  TEP-INTEGRATION annotations are no longer needed on this deck.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Feature Workflow — Keynote</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT@9..144,300..900,0..100&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink: #0E0F11;
+    --ink-2: #161719;
+    --line: #25262A;
+    --line-strong: #3A3B40;
+    --paper: #EBE4D5;
+    --paper-dim: #B5AE9F;
+    --slate: #6E6960;
+    --lime: #D4FF3D;
+    --lime-dim: #8FA826;
+    --amber: #FF8A47;
+    --plum: #C77BFF;
+    --rose: #FF5C7C;
+    --cyan: #7FE3D4;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--ink);
+    color: var(--paper);
+    font-family: "Instrument Sans", system-ui, sans-serif;
+    font-size: 16px;
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: geometricPrecision;
+  }
+  html { scroll-snap-type: y mandatory; scroll-behavior: smooth; }
+  body { overflow-x: hidden; }
+
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    background-image:
+      radial-gradient(circle at 20% 10%, rgba(212,255,61,0.04), transparent 40%),
+      radial-gradient(circle at 80% 90%, rgba(255,138,71,0.03), transparent 40%);
+    z-index: 1;
+  }
+  body::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 1;
+    opacity: 0.06;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%' height='100%' filter='url(%23n)' opacity='0.6'/></svg>");
+    mix-blend-mode: overlay;
+  }
+
+  section {
+    min-height: 100vh;
+    width: 100%;
+    padding: clamp(48px, 7vh, 96px) clamp(48px, 8vw, 140px);
+    scroll-snap-align: start;
+    scroll-snap-stop: always;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    border-bottom: 1px solid var(--line);
+    z-index: 2;
+  }
+  section + section { background: linear-gradient(to bottom, transparent, rgba(255,255,255,0.005)); }
+
+  .eyebrow {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--slate);
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+  .eyebrow::before {
+    content: "";
+    display: inline-block;
+    width: 28px; height: 1px;
+    background: var(--slate);
+  }
+  .eyebrow .tag {
+    color: var(--lime);
+    border: 1px solid var(--lime-dim);
+    padding: 2px 8px;
+    border-radius: 2px;
+    letter-spacing: 0.14em;
+  }
+
+  h1, h2, h3 { font-family: "Fraunces", serif; font-weight: 380; letter-spacing: -0.02em; margin: 0; }
+  h1 { font-size: clamp(72px, 13vw, 200px); line-height: 0.88; font-variation-settings: "opsz" 144, "SOFT" 30; }
+  h2 { font-size: clamp(40px, 6vw, 88px); line-height: 1.0; font-variation-settings: "opsz" 80, "SOFT" 20; }
+  h3 { font-size: clamp(22px, 2.4vw, 32px); line-height: 1.15; font-variation-settings: "opsz" 36; font-weight: 420; }
+
+  .lead {
+    font-family: "Fraunces", serif;
+    font-size: clamp(22px, 2.6vw, 36px);
+    line-height: 1.35;
+    font-variation-settings: "opsz" 36, "SOFT" 50;
+    font-weight: 320;
+    max-width: 22ch;
+    color: var(--paper);
+  }
+  .lead em { font-style: italic; color: var(--lime); font-variation-settings: "opsz" 36, "SOFT" 100; }
+  .lead strong { color: var(--paper); font-weight: 500; font-style: normal; }
+
+  p { max-width: 64ch; color: var(--paper-dim); }
+  p strong { color: var(--paper); font-weight: 500; }
+
+  code, .mono { font-family: "JetBrains Mono", monospace; font-size: 0.92em; }
+  .cmd { color: var(--lime); }
+  .opt { color: var(--amber); }
+
+  /* Slide counter & title strip */
+  .deckbar {
+    position: fixed;
+    top: 24px; right: 32px;
+    z-index: 50;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    color: var(--slate);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .deckbar .num { color: var(--lime); }
+  .deckhint {
+    position: fixed;
+    bottom: 24px; left: 32px;
+    z-index: 50;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 10px;
+    letter-spacing: 0.18em;
+    color: var(--slate);
+    text-transform: uppercase;
+    opacity: 0.7;
+  }
+  .deckhint kbd {
+    border: 1px solid var(--line-strong);
+    border-bottom-width: 2px;
+    border-radius: 3px;
+    padding: 2px 6px;
+    color: var(--paper-dim);
+    background: var(--ink-2);
+    font-size: 10px;
+  }
+
+  /* ============== TITLE SLIDE ============== */
+  .s-title {
+    background:
+      radial-gradient(ellipse at 80% 100%, rgba(212,255,61,0.06), transparent 50%),
+      var(--ink);
+  }
+  .s-title .grid {
+    display: grid;
+    grid-template-columns: 2fr 1fr;
+    gap: 60px;
+    align-items: end;
+  }
+  .s-title h1 {
+    text-transform: uppercase;
+    letter-spacing: -0.04em;
+    font-variation-settings: "opsz" 144, "SOFT" 0;
+    font-weight: 320;
+  }
+  .s-title h1 .slash {
+    color: var(--lime);
+    font-weight: 200;
+    font-variation-settings: "opsz" 144, "SOFT" 100;
+    font-style: italic;
+  }
+  .s-title .meta {
+    border-left: 1px solid var(--line-strong);
+    padding-left: 28px;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 12px;
+    line-height: 2;
+    color: var(--paper-dim);
+    letter-spacing: 0.06em;
+  }
+  .s-title .meta .key { color: var(--slate); display: inline-block; width: 10ch; }
+  .s-title .meta .badge {
+    display: inline-block;
+    margin-top: 18px;
+    padding: 4px 10px;
+    background: var(--lime);
+    color: var(--ink);
+    font-weight: 700;
+    letter-spacing: 0.16em;
+    font-size: 10px;
+    text-transform: uppercase;
+  }
+  .s-title .subtitle {
+    margin-top: 32px;
+    font-family: "Fraunces", serif;
+    font-size: clamp(20px, 2.4vw, 30px);
+    font-style: italic;
+    font-variation-settings: "opsz" 36, "SOFT" 80;
+    color: var(--paper-dim);
+  }
+  .revised-pill {
+    display: inline-block;
+    margin-left: 12px;
+    padding: 3px 10px;
+    border: 1px solid var(--amber);
+    color: var(--amber);
+    font-family: "JetBrains Mono", monospace;
+    font-size: 10px;
+    letter-spacing: 0.16em;
+    border-radius: 2px;
+    text-transform: uppercase;
+    vertical-align: middle;
+  }
+
+  /* ============== PROBLEM SLIDE ============== */
+  .gap-pipe {
+    margin-top: 56px;
+    display: flex;
+    align-items: stretch;
+    gap: 0;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 12px;
+    letter-spacing: 0.06em;
+    border: 1px solid var(--line);
+    border-radius: 2px;
+    overflow: hidden;
+    max-width: 1100px;
+  }
+  .gap-pipe .seg {
+    padding: 18px 16px;
+    flex: 1 1 0;
+    border-right: 1px solid var(--line);
+    color: var(--paper);
+    background: var(--ink-2);
+    text-align: center;
+    text-transform: uppercase;
+  }
+  .gap-pipe .seg:last-child { border-right: none; }
+  .gap-pipe .seg.dim { color: var(--slate); background: transparent; text-decoration: line-through; text-decoration-color: var(--rose); text-decoration-thickness: 1px; }
+  .gap-pipe .seg.stop { background: var(--rose); color: var(--ink); font-weight: 700; flex: 0 0 auto; padding: 18px 14px; }
+
+  .problem-grid {
+    margin-top: 64px;
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 32px;
+    max-width: 1200px;
+  }
+  .problem-grid .card {
+    border-top: 1px solid var(--line-strong);
+    padding-top: 18px;
+  }
+  .problem-grid h3 { color: var(--rose); font-style: italic; margin-bottom: 10px; }
+
+  /* ============== PROPOSAL SLIDE ============== */
+  .s-proposal {
+    background:
+      radial-gradient(circle at 20% 30%, rgba(212,255,61,0.05), transparent 45%),
+      var(--ink);
+  }
+  .s-proposal .lead-big {
+    font-family: "Fraunces", serif;
+    font-weight: 300;
+    font-variation-settings: "opsz" 144, "SOFT" 30;
+    font-size: clamp(48px, 7vw, 110px);
+    line-height: 0.96;
+    letter-spacing: -0.025em;
+    max-width: 18ch;
+  }
+  .s-proposal .lead-big em { font-style: italic; color: var(--lime); font-variation-settings: "opsz" 144, "SOFT" 100; }
+  .s-proposal .four {
+    margin-top: 56px;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 32px;
+    max-width: 1200px;
+  }
+  .s-proposal .four .col {
+    border-top: 1px solid var(--lime-dim);
+    padding-top: 16px;
+  }
+  .s-proposal .four .col .num {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px;
+    color: var(--lime);
+    letter-spacing: 0.18em;
+  }
+  .s-proposal .four .col h3 { margin-top: 4px; color: var(--paper); font-size: 20px; }
+  .s-proposal .four .col p { font-size: 13px; margin-top: 8px; line-height: 1.55; }
+
+  /* ============== PIPELINE SLIDE ============== */
+  .s-pipeline { padding-top: 80px; padding-bottom: 80px; }
+  .pipe {
+    margin-top: 28px;
+    display: grid;
+    grid-template-columns: 60px 1fr 1fr;
+    column-gap: 28px;
+    row-gap: 6px;
+    align-items: center;
+    max-width: 1200px;
+  }
+  .pipe .n {
+    font-family: "JetBrains Mono", monospace;
+    color: var(--lime);
+    font-size: 13px;
+    letter-spacing: 0.06em;
+    border-right: 1px solid var(--line-strong);
+    padding-right: 12px;
+    text-align: right;
+  }
+  .pipe .name {
+    font-family: "Fraunces", serif;
+    font-size: 22px;
+    font-variation-settings: "opsz" 36, "SOFT" 30;
+    font-weight: 380;
+    color: var(--paper);
+  }
+  .pipe .name .cmd {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 12px;
+    color: var(--paper-dim);
+    margin-left: 14px;
+    letter-spacing: 0.04em;
+  }
+  .pipe .desc {
+    font-size: 12px;
+    color: var(--paper-dim);
+  }
+  .pipe .row.fork .n { color: var(--amber); }
+  .pipe .row.fork .name { color: var(--amber); }
+  .pipe .row.fork .name .cmd { color: var(--amber); opacity: 0.7; }
+  .pipe .row.cond { opacity: 0.75; }
+  .pipe .row.cond .n { color: var(--plum); }
+  .pipe .row.cond .name { color: var(--plum); font-style: italic; }
+  .pipe .row.cond .name .cmd { color: var(--plum); opacity: 0.7; }
+  .pipe .row.post .n { color: var(--cyan); }
+  .pipe .row.post .name { color: var(--cyan); }
+  .pipe .row.post .name .cmd { color: var(--cyan); opacity: 0.8; }
+  .pipe .row { display: contents; }
+  .pipe .legend {
+    margin-top: 30px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 22px;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px;
+    color: var(--slate);
+    letter-spacing: 0.08em;
+    grid-column: 1 / -1;
+  }
+  .pipe .legend .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+
+  /* ============== DRIVER SURFACE SLIDE ============== */
+  .commands {
+    margin-top: 32px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 48px;
+    max-width: 1280px;
+    align-items: start;
+  }
+  .commands h3 { color: var(--lime); font-family: "JetBrains Mono", monospace; font-size: 12px; letter-spacing: 0.18em; text-transform: uppercase; font-weight: 500; }
+  .cmd-list { margin-top: 12px; padding: 0; list-style: none; }
+  .cmd-list li {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 15px;
+    line-height: 1.9;
+    color: var(--paper);
+    border-bottom: 1px dashed var(--line);
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 20px;
+  }
+  .cmd-list li .glyph { color: var(--lime); }
+  .cmd-list li .gloss { color: var(--slate); font-size: 11px; letter-spacing: 0.04em; font-family: "Instrument Sans", sans-serif; text-transform: uppercase; }
+
+  .always {
+    border-left: 2px solid var(--amber);
+    padding: 10px 18px;
+    margin-top: 16px;
+  }
+  .always .label {
+    color: var(--amber);
+    font-family: "JetBrains Mono", monospace;
+    font-size: 10px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+  }
+  .always li { color: var(--paper); }
+  .always li .glyph { color: var(--amber); }
+
+  /* ============== STORY GROUP SLIDE ============== */
+  .story-grid {
+    margin-top: 40px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 64px;
+    align-items: start;
+    max-width: 1200px;
+  }
+  .story-card {
+    border: 1px solid var(--line-strong);
+    padding: 20px 22px;
+    background: var(--ink-2);
+    border-radius: 2px;
+  }
+  .story-card .badge {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 10px;
+    color: var(--lime);
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    display: inline-block;
+    margin-bottom: 8px;
+  }
+  .story-card h4 {
+    font-family: "Fraunces", serif;
+    margin: 0 0 10px 0;
+    font-size: 22px;
+    color: var(--paper);
+    font-weight: 380;
+  }
+  .story-card ul { padding: 0; margin: 0; list-style: none; font-family: "JetBrains Mono", monospace; font-size: 12px; line-height: 1.8; color: var(--paper-dim); }
+  .story-card ul li { padding: 3px 0; }
+  .story-card .class-pill {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 2px;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    margin-left: 6px;
+  }
+  .class-pill.design { background: var(--lime); color: var(--ink); font-weight: 700; }
+  .class-pill.mech { border: 1px solid var(--cyan); color: var(--cyan); }
+
+  /* ============== PAUSE VS HANDOFF SLIDE ============== */
+  .pause-grid {
+    margin-top: 48px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 48px;
+    max-width: 1200px;
+  }
+  .pause-col {
+    border: 1px solid var(--line-strong);
+    background: var(--ink-2);
+    padding: 28px 26px;
+    position: relative;
+  }
+  .pause-col h3 {
+    font-family: "Fraunces", serif;
+    color: var(--paper);
+    font-size: 28px;
+    margin-bottom: 6px;
+  }
+  .pause-col .cmd-big {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 14px;
+    color: var(--lime);
+    letter-spacing: 0.04em;
+  }
+  .pause-col.handoff { border-color: var(--plum); }
+  .pause-col.handoff .cmd-big { color: var(--plum); }
+  .pause-col.pause { border-color: var(--amber); }
+  .pause-col.pause .cmd-big { color: var(--amber); }
+  .pause-col ul {
+    padding: 0;
+    margin: 18px 0 0 0;
+    list-style: none;
+  }
+  .pause-col li {
+    padding: 8px 0;
+    border-top: 1px dashed var(--line);
+    font-size: 14px;
+    color: var(--paper);
+    line-height: 1.5;
+  }
+  .pause-col li:first-child { border-top: none; }
+  .pause-col li span.em {
+    color: var(--paper-dim);
+    font-style: italic;
+  }
+
+  /* ============== LOOP (design-review + POC) SLIDE ============== */
+  .loop {
+    margin-top: 36px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 60px;
+    align-items: center;
+    max-width: 1200px;
+  }
+  .loop-svg { width: 100%; height: auto; max-width: 560px; }
+  .outcomes { list-style: none; padding: 0; margin: 16px 0 0; }
+  .outcomes li {
+    display: grid;
+    grid-template-columns: 130px 1fr;
+    gap: 16px;
+    padding: 10px 0;
+    border-top: 1px solid var(--line);
+    font-size: 14px;
+  }
+  .outcomes li:last-child { border-bottom: 1px solid var(--line); }
+  .outcomes .pill {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    padding: 4px 10px;
+    border-radius: 2px;
+    text-align: center;
+    height: fit-content;
+    margin-top: 2px;
+  }
+  .outcomes .pill.ok { background: var(--lime); color: var(--ink); font-weight: 700; }
+  .outcomes .pill.pivot { border: 1px solid var(--amber); color: var(--amber); }
+  .outcomes .pill.rework { border: 1px solid var(--plum); color: var(--plum); }
+  .outcomes .pill.poc { border: 1px solid var(--cyan); color: var(--cyan); }
+  .outcomes p { margin: 0; color: var(--paper); }
+
+  /* ============== RISK SLIDE ============== */
+  .risk-tiers {
+    margin-top: 48px;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 24px;
+    max-width: 1200px;
+  }
+  .tier {
+    border: 1px solid var(--line-strong);
+    padding: 28px 24px;
+    background: var(--ink-2);
+    position: relative;
+  }
+  .tier .name {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--slate);
+  }
+  .tier .level {
+    font-family: "Fraunces", serif;
+    font-variation-settings: "opsz" 80, "SOFT" 30;
+    font-size: 56px;
+    line-height: 1;
+    margin-top: 6px;
+    margin-bottom: 18px;
+  }
+  .tier ul { padding: 0; margin: 0; list-style: none; }
+  .tier li { font-size: 13px; padding: 6px 0; color: var(--paper-dim); border-top: 1px dashed var(--line); }
+  .tier li:first-child { border-top: none; }
+  .tier.low .level { color: var(--paper); }
+  .tier.standard { border-color: var(--amber); }
+  .tier.standard .level { color: var(--amber); }
+  .tier.standard::after { content: "+ design review note"; position: absolute; top: -10px; right: 14px; background: var(--ink); padding: 0 8px; font-family: "JetBrains Mono", monospace; font-size: 10px; color: var(--amber); letter-spacing: 0.1em; }
+  .tier.sensitive { border-color: var(--rose); background: linear-gradient(180deg, rgba(255,92,124,0.08), transparent 60%), var(--ink-2); }
+  .tier.sensitive .level { color: var(--rose); }
+  .tier.sensitive::after { content: "+ threat model + sign-off"; position: absolute; top: -10px; right: 14px; background: var(--ink); padding: 0 8px; font-family: "JetBrains Mono", monospace; font-size: 10px; color: var(--rose); letter-spacing: 0.1em; }
+
+  .triggers {
+    margin-top: 32px;
+    border: 1px dashed var(--line-strong);
+    padding: 16px 22px;
+    max-width: 1200px;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 12px;
+    color: var(--paper-dim);
+    line-height: 1.9;
+    letter-spacing: 0.02em;
+  }
+  .triggers .label { color: var(--slate); margin-right: 12px; }
+  .triggers strong { color: var(--paper); font-weight: 500; }
+  .triggers .red { color: var(--rose); }
+
+  /* ============== MATURITY SLIDE ============== */
+  .maturity-grid {
+    margin-top: 32px;
+    display: grid;
+    grid-template-columns: 1fr 1.2fr;
+    gap: 56px;
+    align-items: start;
+    max-width: 1260px;
+  }
+  .maturity-before {
+    position: relative;
+    border: 1px dashed var(--rose);
+    padding: 18px 22px;
+    background: linear-gradient(180deg, rgba(255,92,124,0.05), transparent 70%);
+  }
+  .maturity-before::before {
+    content: "WAS";
+    position: absolute;
+    top: -10px;
+    left: 14px;
+    background: var(--ink);
+    padding: 0 8px;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 10px;
+    letter-spacing: 0.16em;
+    color: var(--rose);
+  }
+  .maturity-before .target-mini {
+    width: 180px;
+    height: 180px;
+    border-radius: 50%;
+    background: conic-gradient(var(--rose) 0 90%, var(--line) 90% 100%);
+    display: grid;
+    place-items: center;
+    padding: 14px;
+    margin: 0 auto;
+    position: relative;
+  }
+  .maturity-before .target-mini .inner {
+    background: var(--ink);
+    border-radius: 50%;
+    width: 100%;
+    height: 100%;
+    display: grid;
+    place-items: center;
+    box-shadow: inset 0 0 0 1px var(--line);
+    text-align: center;
+  }
+  .maturity-before .target-mini .pct {
+    font-family: "Fraunces", serif;
+    font-variation-settings: "opsz" 144, "SOFT" 0;
+    font-weight: 280;
+    font-size: 62px;
+    line-height: 1;
+    color: var(--rose);
+    letter-spacing: -0.04em;
+    text-decoration: line-through;
+    text-decoration-color: var(--rose);
+    text-decoration-thickness: 2px;
+  }
+  .maturity-before .target-mini .label {
+    margin-top: 4px;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 9px;
+    letter-spacing: 0.2em;
+    color: var(--slate);
+    text-transform: uppercase;
+  }
+  .maturity-before p {
+    margin-top: 18px;
+    font-size: 13px;
+    color: var(--paper-dim);
+    line-height: 1.55;
+  }
+
+  .maturity-after {
+    position: relative;
+    border: 1px solid var(--lime);
+    padding: 24px 26px;
+    background: linear-gradient(180deg, rgba(212,255,61,0.05), transparent 70%);
+  }
+  .maturity-after::before {
+    content: "NOW";
+    position: absolute;
+    top: -10px;
+    left: 14px;
+    background: var(--ink);
+    padding: 0 8px;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 10px;
+    letter-spacing: 0.16em;
+    color: var(--lime);
+  }
+  .blocker-board {
+    margin-top: 8px;
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+  .blocker-row {
+    display: grid;
+    grid-template-columns: 140px 1fr auto;
+    gap: 14px;
+    align-items: center;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 13px;
+    padding: 6px 0;
+    border-bottom: 1px dashed var(--line);
+  }
+  .blocker-row .bkey {
+    color: var(--paper);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    font-size: 11px;
+  }
+  .blocker-row .bbar {
+    height: 6px;
+    background: var(--line);
+    border-radius: 3px;
+    position: relative;
+    overflow: hidden;
+  }
+  .blocker-row .bbar .bfill {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    border-radius: 3px;
+  }
+  .blocker-row .bval {
+    color: var(--paper);
+    font-size: 12px;
+    min-width: 24px;
+    text-align: right;
+  }
+  .blocker-row.none .bkey { color: var(--lime); }
+  .blocker-row.none .bfill { background: var(--lime); }
+  .blocker-row.template .bkey { color: var(--amber); }
+  .blocker-row.template .bfill { background: var(--amber); }
+  .blocker-row.skill .bkey { color: var(--amber); }
+  .blocker-row.skill .bfill { background: var(--amber); opacity: 0.7; }
+  .blocker-row.kb .bkey { color: var(--amber); }
+  .blocker-row.kb .bfill { background: var(--amber); opacity: 0.5; }
+  .blocker-row.judgment .bkey { color: var(--cyan); }
+  .blocker-row.judgment .bfill { background: var(--cyan); }
+  .blocker-row.flake .bkey { color: var(--slate); }
+  .blocker-row.flake .bfill { background: var(--slate); }
+
+  .maturity-callout {
+    margin-top: 18px;
+    padding: 14px 16px;
+    background: var(--ink-2);
+    border-left: 3px solid var(--lime);
+    font-size: 13px;
+    color: var(--paper);
+    line-height: 1.55;
+  }
+  .maturity-callout em { color: var(--lime); font-style: italic; }
+  .maturity-callout .label {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 10px;
+    letter-spacing: 0.16em;
+    color: var(--slate);
+    display: block;
+    margin-bottom: 6px;
+    text-transform: uppercase;
+  }
+
+  .thresholds {
+    margin-top: 18px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+  }
+  .threshold {
+    border: 1px solid var(--line-strong);
+    padding: 14px 16px;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--paper-dim);
+  }
+  .threshold .name {
+    color: var(--lime);
+    font-size: 12px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    display: block;
+    margin-bottom: 6px;
+  }
+  .threshold.autonomous .name { color: var(--cyan); }
+
+  /* ============== RELEASE REALITY SLIDE (replaces LANDED) ============== */
+  .release-cal {
+    margin-top: 32px;
+    display: flex;
+    gap: 0;
+    border: 1px solid var(--line);
+    border-radius: 2px;
+    overflow: hidden;
+    max-width: 1100px;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px;
+    letter-spacing: 0.08em;
+  }
+  .release-cal .rel {
+    flex: 1 1 0;
+    padding: 14px 12px;
+    border-right: 1px solid var(--line);
+    background: var(--ink-2);
+    text-align: center;
+    color: var(--paper);
+    text-transform: uppercase;
+  }
+  .release-cal .rel:last-child { border-right: none; }
+  .release-cal .rel.lts {
+    background: linear-gradient(180deg, rgba(212,255,61,0.08), transparent 80%), var(--ink-2);
+    color: var(--lime);
+    font-weight: 700;
+  }
+  .release-cal .rel .month {
+    display: block;
+    color: var(--slate);
+    font-size: 9px;
+    margin-top: 4px;
+    letter-spacing: 0.14em;
+  }
+  .contrast-pair {
+    margin-top: 36px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 32px;
+    max-width: 1100px;
+  }
+  .contrast-col {
+    border: 1px solid var(--line-strong);
+    padding: 22px 22px;
+    background: var(--ink-2);
+    position: relative;
+  }
+  .contrast-col.was { border-color: var(--rose); }
+  .contrast-col.was::before {
+    content: "WAS";
+    position: absolute;
+    top: -10px;
+    left: 14px;
+    background: var(--ink);
+    padding: 0 8px;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 10px;
+    color: var(--rose);
+    letter-spacing: 0.16em;
+  }
+  .contrast-col.now { border-color: var(--lime); }
+  .contrast-col.now::before {
+    content: "NOW";
+    position: absolute;
+    top: -10px;
+    left: 14px;
+    background: var(--ink);
+    padding: 0 8px;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 10px;
+    color: var(--lime);
+    letter-spacing: 0.16em;
+  }
+  .contrast-col h3 { font-family: "Fraunces", serif; color: var(--paper); margin-bottom: 8px; font-size: 22px; font-weight: 400; }
+  .contrast-col p { font-size: 14px; margin: 0; line-height: 1.55; }
+
+  /* ============== TWO-TIER UMBRELLA SLIDE ============== */
+  .umbrella-split {
+    margin-top: 36px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 32px;
+    max-width: 1280px;
+  }
+  .umbrella {
+    border: 1px solid var(--line-strong);
+    background: var(--ink-2);
+    padding: 22px 22px 16px;
+    position: relative;
+  }
+  .umbrella.epic { border-color: var(--cyan); background: linear-gradient(180deg, rgba(127,227,212,0.04), transparent 60%), var(--ink-2); }
+  .umbrella.feature { border-color: var(--lime); background: linear-gradient(180deg, rgba(212,255,61,0.04), transparent 60%), var(--ink-2); }
+  .umbrella .u-badge {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 10px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    display: inline-block;
+    padding: 3px 8px;
+    border-radius: 2px;
+    margin-bottom: 10px;
+  }
+  .umbrella.epic .u-badge { background: var(--cyan); color: var(--ink); font-weight: 700; }
+  .umbrella.feature .u-badge { background: var(--lime); color: var(--ink); font-weight: 700; }
+  .umbrella h3 {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 13px;
+    color: var(--paper);
+    margin: 0 0 12px 0;
+    font-weight: 500;
+    letter-spacing: 0.04em;
+  }
+  .umbrella p { font-size: 14px; margin: 0 0 10px 0; line-height: 1.55; }
+  .umbrella ul {
+    list-style: none;
+    padding: 0;
+    margin: 10px 0 14px 0;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 12px;
+    color: var(--paper-dim);
+    line-height: 1.85;
+  }
+  .umbrella ul li::before { content: "· "; color: var(--slate); }
+  .umbrella .u-cmds {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 12px;
+    padding: 10px 12px;
+    border-top: 1px dashed var(--line);
+    color: var(--paper);
+    letter-spacing: 0.02em;
+  }
+  .umbrella.epic .u-cmds { color: var(--cyan); }
+  .umbrella.feature .u-cmds { color: var(--lime); }
+
+  /* ============== WALKTHROUGH TIMELINE SLIDE ============== */
+  .timeline {
+    margin-top: 28px;
+    max-width: 1280px;
+    border-left: 2px solid var(--line-strong);
+    padding-left: 20px;
+  }
+  .tl-row {
+    display: grid;
+    grid-template-columns: 160px 1fr 1fr;
+    gap: 18px;
+    padding: 12px 0;
+    border-bottom: 1px dashed var(--line);
+    font-size: 13px;
+    position: relative;
+  }
+  .tl-row::before {
+    content: "";
+    position: absolute;
+    left: -26px;
+    top: 20px;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--paper-dim);
+    box-shadow: 0 0 0 3px var(--ink);
+  }
+  .tl-row.tl-epic::before { background: var(--cyan); }
+  .tl-row.tl-feat::before { background: var(--lime); }
+  .tl-row.tl-release::before { background: var(--amber); }
+  .tl-row.tl-bug::before { background: var(--rose); }
+  .tl-row.tl-debt::before { background: var(--plum); }
+  .tl-row.tl-close::before { background: var(--paper); }
+  .tl-when {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    color: var(--slate);
+    text-transform: uppercase;
+    padding-top: 4px;
+  }
+  .tl-row.tl-release .tl-when { color: var(--amber); font-weight: 700; }
+  .tl-row.tl-bug .tl-when { color: var(--rose); }
+  .tl-row.tl-debt .tl-when { color: var(--plum); }
+  .tl-cmd {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 13px;
+    color: var(--paper);
+    letter-spacing: 0.02em;
+  }
+  .tl-row.tl-epic .tl-cmd { color: var(--cyan); }
+  .tl-row.tl-feat .tl-cmd { color: var(--lime); }
+  .tl-row.tl-release .tl-cmd { color: var(--amber); font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; }
+  .tl-row.tl-bug .tl-cmd { color: var(--rose); }
+  .tl-row.tl-debt .tl-cmd { color: var(--plum); }
+  .tl-event {
+    color: var(--paper-dim);
+    font-size: 13px;
+    line-height: 1.55;
+  }
+  .tl-legend {
+    margin-top: 20px;
+    display: flex;
+    gap: 22px;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 10px;
+    color: var(--slate);
+    letter-spacing: 0.12em;
+    flex-wrap: wrap;
+  }
+  .tl-legend .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+
+  /* ============== DELIVERY SLIDE ============== */
+  .phases {
+    margin-top: 40px;
+    counter-reset: phase;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 22px;
+    max-width: 1280px;
+  }
+  .phase {
+    border-top: 2px solid var(--lime);
+    padding-top: 14px;
+    counter-increment: phase;
+    position: relative;
+  }
+  .phase::before {
+    content: "P" counter(phase);
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px;
+    color: var(--lime);
+    letter-spacing: 0.16em;
+    display: block;
+    margin-bottom: 6px;
+  }
+  .phase h3 { font-size: 18px; color: var(--paper); }
+  .phase ul { padding: 0; margin: 10px 0 0; list-style: none; }
+  .phase li {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px;
+    color: var(--paper-dim);
+    padding: 4px 0;
+    line-height: 1.4;
+    letter-spacing: 0.02em;
+  }
+  .phase li::before { content: "→ "; color: var(--lime); }
+
+  /* ============== NOT THIS SLIDE ============== */
+  .nots {
+    margin-top: 56px;
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 36px 80px;
+    max-width: 1200px;
+  }
+  .not {
+    display: grid;
+    grid-template-columns: 50px 1fr;
+    gap: 16px;
+    align-items: start;
+  }
+  .not .x {
+    font-family: "Fraunces", serif;
+    font-size: 38px;
+    color: var(--rose);
+    line-height: 1;
+    font-variation-settings: "opsz" 80, "SOFT" 0;
+  }
+  .not h3 { font-size: 22px; color: var(--paper); margin-bottom: 6px; }
+  .not p { font-size: 14px; margin: 0; }
+
+  /* ============== DISCUSSION SLIDE ============== */
+  .s-discussion {
+    background:
+      radial-gradient(ellipse at 100% 0%, rgba(212,255,61,0.06), transparent 60%),
+      var(--ink);
+  }
+  .s-discussion .ask {
+    font-family: "Fraunces", serif;
+    font-variation-settings: "opsz" 144, "SOFT" 80;
+    font-size: clamp(56px, 9vw, 140px);
+    line-height: 0.9;
+    letter-spacing: -0.03em;
+    font-weight: 320;
+    max-width: 14ch;
+    color: var(--paper);
+  }
+  .s-discussion .ask em { font-style: italic; color: var(--lime); }
+  .qs {
+    margin-top: 56px;
+    list-style: none;
+    padding: 0;
+    max-width: 950px;
+  }
+  .qs li {
+    padding: 16px 0;
+    border-top: 1px solid var(--line);
+    display: grid;
+    grid-template-columns: 60px 1fr;
+    gap: 20px;
+    align-items: baseline;
+    font-family: "Fraunces", serif;
+    font-size: 22px;
+    font-variation-settings: "opsz" 36, "SOFT" 30;
+    font-weight: 360;
+    color: var(--paper);
+  }
+  .qs li:last-child { border-bottom: 1px solid var(--line); }
+  .qs li .n {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px;
+    letter-spacing: 0.18em;
+    color: var(--lime);
+  }
+  .links {
+    margin-top: 48px;
+    display: flex;
+    gap: 24px;
+    flex-wrap: wrap;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 12px;
+    letter-spacing: 0.06em;
+    color: var(--paper-dim);
+  }
+  .links a {
+    color: var(--paper);
+    text-decoration: none;
+    border-bottom: 1px solid var(--lime);
+    padding-bottom: 2px;
+  }
+  .links a:hover { color: var(--lime); }
+
+  /* Section marker top-left of each slide */
+  .marker {
+    position: absolute;
+    top: 32px; left: clamp(48px, 8vw, 140px);
+    font-family: "JetBrains Mono", monospace;
+    font-size: 10px;
+    letter-spacing: 0.2em;
+    color: var(--slate);
+    text-transform: uppercase;
+  }
+  .marker .sep { color: var(--line-strong); margin: 0 10px; }
+  .marker .live { color: var(--lime); }
+
+  @media (max-width: 1100px) {
+    .s-proposal .four { grid-template-columns: repeat(2, 1fr); }
+    .phases { grid-template-columns: repeat(2, 1fr); }
+    .maturity-grid { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 900px) {
+    .s-title .grid,
+    .s-proposal .four,
+    .commands,
+    .story-grid,
+    .pause-grid,
+    .loop,
+    .contrast-pair,
+    .umbrella-split,
+    .risk-tiers,
+    .nots,
+    .problem-grid { grid-template-columns: 1fr; }
+    .pipe { grid-template-columns: 50px 1fr; }
+    .pipe .desc { display: none; }
+    .phases { grid-template-columns: 1fr; }
+    .tl-row { grid-template-columns: 1fr; gap: 4px; }
+    .release-cal { flex-direction: column; }
+    .release-cal .rel { border-right: none; border-bottom: 1px solid var(--line); }
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    section.in-view .lead-big,
+    section.in-view h1,
+    section.in-view h2,
+    section.in-view .lead {
+      animation: rise 700ms cubic-bezier(.2,.7,.2,1) both;
+    }
+    section.in-view .pipe .row,
+    section.in-view .cmd-list li,
+    section.in-view .tier,
+    section.in-view .phase,
+    section.in-view .not,
+    section.in-view .qs li,
+    section.in-view .blocker-row,
+    section.in-view .story-card,
+    section.in-view .pause-col,
+    section.in-view .contrast-col,
+    section.in-view .umbrella,
+    section.in-view .tl-row {
+      animation: rise 600ms cubic-bezier(.2,.7,.2,1) both;
+    }
+    .pipe .row:nth-child(1) { animation-delay: 20ms; }
+    .pipe .row:nth-child(2) { animation-delay: 60ms; }
+    .pipe .row:nth-child(3) { animation-delay: 100ms; }
+    .pipe .row:nth-child(4) { animation-delay: 140ms; }
+    .pipe .row:nth-child(5) { animation-delay: 180ms; }
+    .pipe .row:nth-child(6) { animation-delay: 220ms; }
+    .pipe .row:nth-child(7) { animation-delay: 260ms; }
+    .pipe .row:nth-child(8) { animation-delay: 300ms; }
+    .pipe .row:nth-child(9) { animation-delay: 340ms; }
+    .pipe .row:nth-child(10) { animation-delay: 380ms; }
+    .pipe .row:nth-child(11) { animation-delay: 420ms; }
+    .pipe .row:nth-child(12) { animation-delay: 460ms; }
+    .pipe .row:nth-child(13) { animation-delay: 500ms; }
+    .pipe .row:nth-child(14) { animation-delay: 540ms; }
+    .pipe .row:nth-child(15) { animation-delay: 580ms; }
+  }
+  @keyframes rise {
+    from { opacity: 0; transform: translateY(14px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+</style>
+</head>
+<body>
+
+<div class="deckbar">
+  <span>FEATURE-WORKFLOW · TEP</span>
+  <span>·</span>
+  <span><span class="num" id="cur">01</span> / <span id="tot">18</span></span>
+</div>
+<div class="deckhint">
+  <kbd>↓</kbd> <kbd>Space</kbd> NEXT &nbsp;·&nbsp; <kbd>↑</kbd> PREV
+</div>
+
+<!-- ============== 01 · TITLE ============== -->
+<section class="s-title" data-slide="01">
+  <div class="marker"><span>01</span><span class="sep">·</span><span>OPEN</span></div>
+  <div class="grid">
+    <div>
+      <div class="eyebrow">
+        <span class="tag">TEP · DRAFT</span>
+        <span>connectors-operator</span>
+        <span class="revised-pill">revised after team review</span>
+      </div>
+      <h1>Feature<br/><span class="slash">/</span>Workflow</h1>
+      <div class="subtitle">End-to-end AI-driven delivery, from Jira to a shippable bundle <em style="color:var(--lime)">and beyond</em>.</div>
+    </div>
+    <div class="meta">
+      <div><span class="key">AUTHOR</span> daniel</div>
+      <div><span class="key">DATE</span> 2026-04-21</div>
+      <div><span class="key">REPOS</span> connectors / extensions / operator / plugin</div>
+      <div><span class="key">STATUS</span> proposed · rev 2</div>
+      <div><span class="key">DOC</span> docs/en/teps/feature-workflow.md</div>
+      <div><span class="key">PR</span> AlaudaDevops/connectors-operator#888</div>
+      <div><span class="key">WALKTHROUGH</span> DEVOPS-41818 (oAuth2 App)</div>
+      <div class="badge">Revised for team review</div>
+    </div>
+  </div>
+</section>
+
+<!-- ============== 02 · PROBLEM ============== -->
+<section data-slide="02">
+  <div class="marker"><span>02</span><span class="sep">·</span><span>WHERE WE STOP TODAY</span></div>
+  <div class="eyebrow">The Problem</div>
+  <h2 style="margin-top:28px;max-width:20ch;">The workflow ends at <em style="color:var(--rose);font-style:italic;font-family:Fraunces,serif">code merged.</em> The product question doesn&rsquo;t.</h2>
+  <div class="gap-pipe">
+    <div class="seg">research</div>
+    <div class="seg">design</div>
+    <div class="seg">implement</div>
+    <div class="seg stop">MERGE · STOP</div>
+    <div class="seg dim">bundle</div>
+    <div class="seg dim">qa</div>
+    <div class="seg dim">accept</div>
+    <div class="seg dim">regress</div>
+    <div class="seg dim">ship</div>
+    <div class="seg dim">landed</div>
+  </div>
+
+  <div class="problem-grid">
+    <div class="card">
+      <h3>No traceability.</h3>
+      <p>OpenSpec change → operator bundle → QA result → regression status → production incident: there is no thread that ties them together.</p>
+    </div>
+    <div class="card">
+      <h3>No coordination.</h3>
+      <p>A cross-repo feature lives across <code>connectors</code>, <code>extensions</code>, <code>operator</code>, and <code>plugin</code>. Nobody can answer &ldquo;where is it&rdquo; without reading four histories.</p>
+    </div>
+    <div class="card">
+      <h3>No DoD enforcement.</h3>
+      <p>The real definition of done — regression green on a built bundle, with no production hotfix for 14 days — is tracked in chat. Drivers re-discover it every release.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============== 03 · PROPOSAL ============== -->
+<section class="s-proposal" data-slide="03">
+  <div class="marker"><span>03</span><span class="sep">·</span><span>PROPOSAL</span></div>
+  <div class="eyebrow">One layer up</div>
+  <div class="lead-big" style="margin-top:32px;">A feature-level workflow <em>above</em> per-repo OpenSpec changes.</div>
+
+  <div class="four">
+    <div class="col">
+      <div class="num">01</div>
+      <h3>One driver.</h3>
+      <p>A single person walks the feature from start to ship. Pause and handoff are first-class; concurrent drivers are not.</p>
+    </div>
+    <div class="col">
+      <div class="num">02</div>
+      <h3>One command family.</h3>
+      <p><span class="mono cmd">/feature:*</span> — one command per stage. Step-by-step, no skill lookup required.</p>
+    </div>
+    <div class="col">
+      <div class="num">03</div>
+      <h3>One umbrella per feature.</h3>
+      <p>A folder under <span class="mono">docs/en/design/</span> with state, design, QA packet, outcomes, and post-ship observations.</p>
+    </div>
+    <div class="col">
+      <div class="num">04</div>
+      <h3>One maturity signal.</h3>
+      <p>Every intervention classified by <em style="color:var(--lime);font-style:italic">blocker category</em>. The team sees where to invest — no single percentage to game.</p>
+    </div>
+  </div>
+</section>
+
+<section class="s-pipeline" data-slide="04">
+  <div class="marker"><span>04</span><span class="sep">·</span><span>THE FEATURE PIPELINE</span></div>
+  <div class="eyebrow">One shippable slice · one command each</div>
+  <h2 style="margin-top:12px;max-width:24ch;">Linear pipeline · one parallel fork · two conditional stages · <em style="color:var(--lime);font-style:italic">archive at ship</em>.</h2>
+
+  <div class="pipe">
+    <div class="row"><div class="n">01</div><div class="name">init <span class="cmd">/feature:init &lt;jira&gt; --profile=…</span></div><div class="desc">scaffold a standalone feature umbrella (or /feature:story-start from an epic)</div></div>
+    <div class="row cond"><div class="n">02</div><div class="name">research <span class="cmd">/feature:research</span></div><div class="desc">profile=full · story decomposition · inherited from epic when story-started</div></div>
+    <div class="row"><div class="n">03</div><div class="name">design <span class="cmd">/feature:design</span></div><div class="desc">goal-first · task breakdown · test design · dependencies.md · threat-model if sensitive</div></div>
+    <div class="row"><div class="n">04</div><div class="name">design-review <span class="cmd">/feature:design-review</span></div><div class="desc">gate · approved / pivot / rework · two pivots → offer POC</div></div>
+    <div class="row cond"><div class="n">4.5</div><div class="name">poc <span class="cmd">/feature:poc</span></div><div class="desc">optional · throwaway branch spike · outcome feeds next design pass</div></div>
+    <div class="row"><div class="n">05</div><div class="name">plan <span class="cmd">/feature:plan</span></div><div class="desc">story groups · changes classed design-change or mechanical-followup · per-story review</div></div>
+    <div class="row"><div class="n">06</div><div class="name">implement <span class="cmd">/feature:implement</span></div><div class="desc">parallel sub-agents · dispatch order from dependencies.md · drill-down available</div></div>
+    <div class="row"><div class="n">07</div><div class="name">integrate <span class="cmd">/feature:integrate</span></div><div class="desc">observe sync-install-manifests · record bundle tag</div></div>
+    <div class="row"><div class="n">08</div><div class="name">qa <span class="cmd">/feature:qa</span></div><div class="desc">executes the test design against the bundle · per-case pass/fail</div></div>
+    <div class="row fork"><div class="n">09a</div><div class="name">accept <span class="cmd">/feature:accept</span></div><div class="desc">↗ parallel · acceptance per AC against the bundle</div></div>
+    <div class="row fork"><div class="n">09b</div><div class="name">docs <span class="cmd">/feature:docs</span></div><div class="desc">↘ parallel · user-facing docs + release-notes.md</div></div>
+    <div class="row"><div class="n">10</div><div class="name">regress <span class="cmd">/feature:regress</span></div><div class="desc">regression suite against bundle · requires 09a + 09b</div></div>
+    <div class="row cond"><div class="n">10.5</div><div class="name">security-sign-off <span class="cmd">/feature:security-sign-off</span></div><div class="desc">conditional · risk = sensitive only</div></div>
+    <div class="row"><div class="n">11</div><div class="name">retro <span class="cmd">/feature:retro</span></div><div class="desc">lessons captured · feeds improvement log · opt-out for light</div></div>
+    <div class="row"><div class="n">12</div><div class="name">ship <span class="cmd">/feature:ship</span></div><div class="desc">Jira → Done · maturity-report.md · <strong style="color:var(--lime)">archive immediately</strong> · feedback to the epic from here</div></div>
+
+    <div class="legend">
+      <span><span class="dot" style="background:var(--lime)"></span>linear stage</span>
+      <span><span class="dot" style="background:var(--amber)"></span>parallel branch</span>
+      <span><span class="dot" style="background:var(--plum)"></span>conditional</span>
+      <span style="color:var(--cyan)">→ post-release feedback flows to the epic umbrella (slide 13)</span>
+    </div>
+  </div>
+</section>
+
+<section data-slide="05">
+  <div class="marker"><span>05</span><span class="sep">·</span><span>ONE DRIVER, ONE SURFACE</span></div>
+  <div class="eyebrow">Key idea · 01</div>
+  <h2 style="margin-top:14px;max-width:22ch;">The driver only learns <em style="font-style:italic;color:var(--lime)">one</em> command family — everything else is coordinator work.</h2>
+
+  <div class="commands">
+    <div>
+      <h3>Feature stage commands</h3>
+      <ul class="cmd-list">
+        <li><span><span class="glyph">/</span>feature:init <span style="color:var(--amber)">--profile=…</span></span><span class="gloss">standalone</span></li>
+        <li><span><span class="glyph">/</span>feature:research</span><span class="gloss">full only</span></li>
+        <li><span><span class="glyph">/</span>feature:design</span><span class="gloss">docs + deps</span></li>
+        <li><span><span class="glyph">/</span>feature:design-review</span><span class="gloss">gate</span></li>
+        <li><span><span class="glyph">/</span>feature:poc</span><span class="gloss">optional spike</span></li>
+        <li><span><span class="glyph">/</span>feature:plan</span><span class="gloss">story groups</span></li>
+        <li><span><span class="glyph">/</span>feature:implement</span><span class="gloss">fan-out</span></li>
+        <li><span><span class="glyph">/</span>feature:integrate</span><span class="gloss">bundle</span></li>
+        <li><span><span class="glyph">/</span>feature:qa</span><span class="gloss">execute</span></li>
+        <li><span><span class="glyph">/</span>feature:accept</span><span class="gloss">parallel a</span></li>
+        <li><span><span class="glyph">/</span>feature:docs</span><span class="gloss">parallel b</span></li>
+        <li><span><span class="glyph">/</span>feature:regress</span><span class="gloss">suite</span></li>
+        <li><span><span class="glyph">/</span>feature:retro</span><span class="gloss">learn</span></li>
+        <li><span><span class="glyph">/</span>feature:ship</span><span class="gloss">archive</span></li>
+      </ul>
+    </div>
+    <div>
+      <div class="always">
+        <div class="label">Always available</div>
+        <ul class="cmd-list">
+          <li><span><span class="glyph">/</span>feature:status</span><span class="gloss">where am I</span></li>
+          <li><span><span class="glyph">/</span>feature:next</span><span class="gloss">run next</span></li>
+        </ul>
+      </div>
+      <div class="always" style="border-color:var(--cyan);">
+        <div class="label" style="color:var(--cyan)">Epic umbrella · long-lived</div>
+        <ul class="cmd-list">
+          <li><span><span class="glyph" style="color:var(--cyan)">/</span>feature:epic-init &lt;jira&gt;</span><span class="gloss">open epic</span></li>
+          <li><span><span class="glyph" style="color:var(--cyan)">/</span>feature:story-start &lt;id&gt;</span><span class="gloss">branch feature</span></li>
+          <li><span><span class="glyph" style="color:var(--cyan)">/</span>feature:bug-link &lt;jira&gt;</span><span class="gloss">post-release</span></li>
+          <li><span><span class="glyph" style="color:var(--cyan)">/</span>feature:epic-status &lt;jira&gt;</span><span class="gloss">board</span></li>
+          <li><span><span class="glyph" style="color:var(--cyan)">/</span>feature:epic-close &lt;jira&gt;</span><span class="gloss">close</span></li>
+        </ul>
+      </div>
+      <div class="always" style="border-color:var(--plum);">
+        <div class="label" style="color:var(--plum)">Ownership · pause · mutate</div>
+        <ul class="cmd-list">
+          <li><span><span class="glyph" style="color:var(--plum)">/</span>feature:handoff &lt;driver&gt;</span><span class="gloss">transfer</span></li>
+          <li><span><span class="glyph" style="color:var(--plum)">/</span>feature:pause</span><span class="gloss">freeze</span></li>
+          <li><span><span class="glyph" style="color:var(--plum)">/</span>feature:resume</span><span class="gloss">unfreeze</span></li>
+          <li><span><span class="glyph" style="color:var(--plum)">/</span>feature:story --add|--split|--merge</span><span class="gloss">mutate</span></li>
+        </ul>
+      </div>
+      <div class="always" style="border-color:var(--paper-dim);">
+        <div class="label" style="color:var(--paper-dim)">Integrity · metrics</div>
+        <ul class="cmd-list">
+          <li><span><span class="glyph" style="color:var(--paper-dim)">/</span>feature:state-repair</span><span class="gloss">audited</span></li>
+          <li><span><span class="glyph" style="color:var(--paper-dim)">/</span>feature:maturity</span><span class="gloss">this feature</span></li>
+          <li><span><span class="glyph" style="color:var(--paper-dim)">/</span>feature:metrics</span><span class="gloss">rollup</span></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============== 06 · STORY GROUPS + MECHANICAL FOLLOWUP ============== -->
+<section data-slide="06">
+  <div class="marker"><span>06</span><span class="sep">·</span><span>STORIES ARE THE UNIT, REPOS ARE THE FAN-OUT</span></div>
+  <div class="eyebrow">Key idea · 02</div>
+  <h2 style="margin-top:14px;max-width:24ch;">A four-repo feature is not four independent designs — it&rsquo;s <em style="color:var(--lime);font-style:italic">one story</em> that fans out.</h2>
+
+  <div class="story-grid">
+    <div>
+      <div class="story-card" style="margin-bottom:18px;">
+        <div class="badge">Story 1 · backend · p0</div>
+        <h4>Shared OAuth-app credential model</h4>
+        <ul>
+          <li>connectors <span class="class-pill design">design-change</span></li>
+          <li>extensions <span class="class-pill design">design-change</span></li>
+          <li>operator (docs) <span class="class-pill mech">mechanical-followup</span></li>
+        </ul>
+      </div>
+      <div class="story-card">
+        <div class="badge">Story 4 · backend · p0 · deps: 1</div>
+        <h4>ConnectorsGit / GitLab CRD extensions</h4>
+        <ul>
+          <li>operator <span class="class-pill design">design-change</span></li>
+        </ul>
+      </div>
+    </div>
+    <div>
+      <p style="font-size:16px;line-height:1.55;margin-top:0">
+        <strong style="color:var(--paper)">Story group</strong> = one story + N per-repo OpenSpec changes linked to it.
+        Per-story review replaces per-repo-per-story review: one signature for the whole group.
+      </p>
+      <p style="font-size:14px;color:var(--paper-dim);margin-top:18px;">
+        <strong style="color:var(--lime)">design-change</strong> — full OpenSpec pre-apply cycle (proposal → specs → design → tasks → bdd-design) and an independent reviewer signature.
+      </p>
+      <p style="font-size:14px;color:var(--paper-dim);margin-top:10px;">
+        <strong style="color:var(--cyan)">mechanical-followup</strong> — only <code>tasks.md</code> + PR. Content is fully determined by a parent design-change. No independent design cycle. Inherits review.
+      </p>
+      <div style="margin-top:22px;padding:14px 16px;border:1px dashed var(--line-strong);font-family:JetBrains Mono,monospace;font-size:12px;color:var(--paper-dim);line-height:1.55">
+        <span style="color:var(--slate)">WHY &nbsp;→ </span>
+        The <code>connectors-operator</code> sync-install-manifests PR that follows a <code>connectors</code> annotation change is <strong style="color:var(--cyan)">mechanical</strong>. Classing it as such saves one reviewer handoff <em>and</em> one full OpenSpec cycle per feature.
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============== 07 · DEPENDENCY GRAPH / FAN-OUT ============== -->
+<section data-slide="07">
+  <div class="marker"><span>07</span><span class="sep">·</span><span>DISPATCH BY DEPENDENCY, NOT BY REPO</span></div>
+  <div class="eyebrow">Key idea · 03</div>
+  <h2 style="margin-top:14px;max-width:22ch;">The driver writes the graph once. Dispatch, rebase, unblock — <em style="color:var(--lime);font-style:italic">automatic</em>.</h2>
+
+  <div class="loop">
+    <svg class="loop-svg" viewBox="0 0 560 360" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <marker id="arrA" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#D4FF3D"/>
+        </marker>
+        <marker id="arrB" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#EBE4D5"/>
+        </marker>
+      </defs>
+      <!-- story 1 (root) -->
+      <rect x="20" y="150" width="120" height="60" rx="2" fill="none" stroke="#D4FF3D" stroke-width="1.6"/>
+      <text x="80" y="178" font-family="JetBrains Mono" font-size="12" fill="#D4FF3D" text-anchor="middle">story 1</text>
+      <text x="80" y="196" font-family="JetBrains Mono" font-size="10" fill="#8FA826" text-anchor="middle">credential model</text>
+
+      <!-- story 2 -->
+      <rect x="200" y="60" width="120" height="56" rx="2" fill="none" stroke="#EBE4D5" stroke-width="1"/>
+      <text x="260" y="86" font-family="JetBrains Mono" font-size="11" fill="#EBE4D5" text-anchor="middle">story 2</text>
+      <text x="260" y="104" font-family="JetBrains Mono" font-size="9" fill="#6E6960" text-anchor="middle">GitHub tokens</text>
+
+      <!-- story 3 -->
+      <rect x="200" y="150" width="120" height="56" rx="2" fill="none" stroke="#EBE4D5" stroke-width="1"/>
+      <text x="260" y="176" font-family="JetBrains Mono" font-size="11" fill="#EBE4D5" text-anchor="middle">story 3</text>
+      <text x="260" y="194" font-family="JetBrains Mono" font-size="9" fill="#6E6960" text-anchor="middle">GitLab tokens</text>
+
+      <!-- story 4 -->
+      <rect x="200" y="240" width="120" height="56" rx="2" fill="none" stroke="#EBE4D5" stroke-width="1"/>
+      <text x="260" y="266" font-family="JetBrains Mono" font-size="11" fill="#EBE4D5" text-anchor="middle">story 4</text>
+      <text x="260" y="284" font-family="JetBrains Mono" font-size="9" fill="#6E6960" text-anchor="middle">CRD fields</text>
+
+      <!-- story 6 (UI) -->
+      <rect x="380" y="240" width="120" height="56" rx="2" fill="none" stroke="#EBE4D5" stroke-width="1"/>
+      <text x="440" y="266" font-family="JetBrains Mono" font-size="11" fill="#EBE4D5" text-anchor="middle">story 6</text>
+      <text x="440" y="284" font-family="JetBrains Mono" font-size="9" fill="#6E6960" text-anchor="middle">UI form</text>
+
+      <!-- story 8 (e2e) -->
+      <rect x="380" y="105" width="120" height="56" rx="2" fill="none" stroke="#EBE4D5" stroke-width="1"/>
+      <text x="440" y="131" font-family="JetBrains Mono" font-size="11" fill="#EBE4D5" text-anchor="middle">story 8</text>
+      <text x="440" y="149" font-family="JetBrains Mono" font-size="9" fill="#6E6960" text-anchor="middle">e2e test</text>
+
+      <!-- edges from 1 -->
+      <path d="M 140 170 C 170 170, 175 88, 200 88" fill="none" stroke="#D4FF3D" stroke-width="1.2" marker-end="url(#arrA)" opacity="0.75"/>
+      <path d="M 140 180 L 200 180" fill="none" stroke="#D4FF3D" stroke-width="1.2" marker-end="url(#arrA)" opacity="0.75"/>
+      <path d="M 140 190 C 170 190, 175 268, 200 268" fill="none" stroke="#D4FF3D" stroke-width="1.2" marker-end="url(#arrA)" opacity="0.75"/>
+
+      <!-- edge from 4 -> 6 -->
+      <path d="M 320 268 L 380 268" fill="none" stroke="#EBE4D5" stroke-width="1.2" marker-end="url(#arrB)" opacity="0.7"/>
+
+      <!-- edges to 8 -->
+      <path d="M 320 90 C 350 90, 360 125, 380 125" fill="none" stroke="#EBE4D5" stroke-width="1" marker-end="url(#arrB)" opacity="0.5"/>
+      <path d="M 320 175 C 350 175, 365 135, 380 135" fill="none" stroke="#EBE4D5" stroke-width="1" marker-end="url(#arrB)" opacity="0.5"/>
+      <path d="M 320 255 C 355 255, 365 148, 380 145" fill="none" stroke="#EBE4D5" stroke-width="1" marker-end="url(#arrB)" opacity="0.4"/>
+
+      <text x="280" y="26" font-family="JetBrains Mono" font-size="10" fill="#6E6960" text-anchor="middle" letter-spacing="2">DEPENDENCIES.MD</text>
+      <text x="280" y="345" font-family="JetBrains Mono" font-size="9" fill="#6E6960" text-anchor="middle" letter-spacing="1">stories with no unmet deps dispatch first · rest auto-rebase on merge</text>
+    </svg>
+
+    <div>
+      <p style="font-size:15px;line-height:1.6;margin-top:0">
+        <code style="color:var(--lime)">/feature:implement</code> reads <code>dependencies.md</code> and dispatches stories in order.
+        Blocked stories stay as <code>draft</code> PRs with a banner; auto-rebase and re-dispatch happen when blockers merge — no human polling.
+      </p>
+      <p style="font-size:14px;color:var(--paper-dim);margin-top:14px">
+        <strong style="color:var(--amber)">Story mutation is first-class.</strong> Realise mid-build that story 6 is really two (GitHub + GitLab variants)? <code style="color:var(--amber)">/feature:story --split 6</code> runs a fast design-review on the two new stories and keeps the feature moving.
+      </p>
+      <div style="margin-top:18px;padding:12px 16px;border-left:2px solid var(--plum);font-size:12px;font-family:JetBrains Mono,monospace;color:var(--paper-dim);line-height:1.55">
+        <span style="color:var(--plum)">DRILL-DOWN</span><br/>
+        <code class="cmd">/feature:tracks</code> — story-grouped board<br/>
+        <code class="cmd">/feature:dispatch &lt;repo&gt;</code> — scope to one
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============== 08 · DESIGN REVIEW + POC LOOP ============== -->
+<section data-slide="08">
+  <div class="marker"><span>08</span><span class="sep">·</span><span>DESIGN REVIEW IS A REAL GATE</span></div>
+  <div class="eyebrow">Key idea · 04</div>
+  <h2 style="margin-top:14px;max-width:24ch;">Pivots are normal. Two in a row → the workflow <em style="color:var(--lime);font-style:italic">offers a POC</em>.</h2>
+
+  <div class="loop">
+    <svg class="loop-svg" viewBox="0 0 560 340" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#EBE4D5"/>
+        </marker>
+        <marker id="arrAmber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#FF8A47"/>
+        </marker>
+        <marker id="arrLime" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#D4FF3D"/>
+        </marker>
+        <marker id="arrCyan" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#7FE3D4"/>
+        </marker>
+      </defs>
+
+      <!-- design -->
+      <rect x="40" y="120" width="140" height="60" rx="2" fill="none" stroke="#EBE4D5" stroke-width="1"/>
+      <text x="110" y="148" font-family="Fraunces" font-size="18" fill="#EBE4D5" text-anchor="middle">design</text>
+      <text x="110" y="168" font-family="JetBrains Mono" font-size="10" fill="#6E6960" text-anchor="middle">stage 03</text>
+
+      <!-- review -->
+      <rect x="230" y="120" width="140" height="60" rx="2" fill="none" stroke="#EBE4D5" stroke-width="1"/>
+      <text x="300" y="148" font-family="Fraunces" font-size="18" fill="#EBE4D5" text-anchor="middle">review</text>
+      <text x="300" y="168" font-family="JetBrains Mono" font-size="10" fill="#6E6960" text-anchor="middle">gate · 04</text>
+
+      <!-- poc -->
+      <rect x="230" y="30" width="140" height="60" rx="2" fill="none" stroke="#7FE3D4" stroke-width="1" stroke-dasharray="3 3"/>
+      <text x="300" y="58" font-family="Fraunces" font-size="16" fill="#7FE3D4" text-anchor="middle">poc</text>
+      <text x="300" y="78" font-family="JetBrains Mono" font-size="10" fill="#7FE3D4" text-anchor="middle" opacity="0.7">stage 4.5 · optional</text>
+
+      <!-- plan -->
+      <rect x="420" y="120" width="80" height="60" rx="2" fill="none" stroke="#D4FF3D" stroke-width="1"/>
+      <text x="460" y="155" font-family="Fraunces" font-size="16" fill="#D4FF3D" text-anchor="middle">plan</text>
+
+      <!-- forward arrows -->
+      <path d="M 180 150 L 230 150" stroke="#EBE4D5" stroke-width="1.2" marker-end="url(#arr2)"/>
+      <path d="M 370 150 L 420 150" stroke="#D4FF3D" stroke-width="1.4" marker-end="url(#arrLime)"/>
+
+      <!-- review -> poc (2nd pivot) -->
+      <path d="M 300 120 L 300 90" stroke="#7FE3D4" stroke-width="1.4" marker-end="url(#arrCyan)" stroke-dasharray="4 4"/>
+      <text x="370" y="105" font-family="JetBrains Mono" font-size="9" fill="#7FE3D4" letter-spacing="1">after 2× pivot</text>
+
+      <!-- poc -> design -->
+      <path d="M 240 60 C 180 60, 110 60, 110 120" stroke="#7FE3D4" stroke-width="1.4" marker-end="url(#arrCyan)" stroke-dasharray="4 4" fill="none"/>
+
+      <!-- loop back (pivot/rework) -->
+      <path d="M 300 180 C 300 240, 110 240, 110 180" stroke="#FF8A47" stroke-width="1.4" fill="none" marker-end="url(#arrAmber)" stroke-dasharray="4 4"/>
+      <text x="205" y="270" font-family="JetBrains Mono" font-size="11" fill="#FF8A47" text-anchor="middle" letter-spacing="2">PIVOT / REWORK</text>
+
+      <text x="460" y="108" font-family="JetBrains Mono" font-size="10" fill="#D4FF3D" text-anchor="middle" letter-spacing="2">APPROVED</text>
+    </svg>
+
+    <div>
+      <ul class="outcomes">
+        <li><span class="pill ok">approved</span><p>Advances to <code>plan</code>. For sensitive features, requires a security-labeled reviewer.</p></li>
+        <li><span class="pill pivot">pivot</span><p>Direction change. Returns to <code>design</code>. Second consecutive pivot → workflow offers POC.</p></li>
+        <li><span class="pill rework">rework</span><p>Direction OK, details wrong. Same loop-back, smaller correction.</p></li>
+        <li><span class="pill poc">poc</span><p>Throwaway branch spike. Outcome feeds the next <code>/feature:design</code> pass. Excluded from maturity metrics.</p></li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ============== 09 · PAUSE VS HANDOFF ============== -->
+<section data-slide="09">
+  <div class="marker"><span>09</span><span class="sep">·</span><span>PAUSE AND HANDOFF ARE DIFFERENT OPERATIONS</span></div>
+  <div class="eyebrow">Key idea · 05</div>
+  <h2 style="margin-top:14px;max-width:22ch;">Stepping off for a week is not the same as <em style="color:var(--lime);font-style:italic">changing who owns it</em>.</h2>
+
+  <div class="pause-grid">
+    <div class="pause-col pause">
+      <h3>Pause</h3>
+      <div class="cmd-big">/feature:pause [--reason=…]</div>
+      <ul>
+        <li><strong>Same driver.</strong> <span class="em">You&rsquo;ll pick it back up.</span></li>
+        <li><strong>Sub-agents stay alive.</strong> Draft PRs stay open; banner comment added to each.</li>
+        <li><strong>No rebuild.</strong> <code>/feature:resume</code> picks up exactly where it was.</li>
+        <li>Jira comment notes the pause.</li>
+        <li>Only <code>/feature:resume</code>, <code>status</code>, <code>handoff</code>, <code>cancel</code> work while paused.</li>
+      </ul>
+    </div>
+    <div class="pause-col handoff">
+      <h3>Handoff</h3>
+      <div class="cmd-big">/feature:handoff &lt;new-driver&gt; [--reset]</div>
+      <ul>
+        <li><strong>New driver.</strong> <span class="em">Ownership transfers.</span></li>
+        <li><strong>Sub-agents NOT cancelled by default.</strong> New driver inherits in-flight draft PRs.</li>
+        <li><code>--reset</code> is opt-in when the new driver wants a clean slate.</li>
+        <li><code>handoff.md</code> snapshot: open questions, deferred decisions, context.</li>
+        <li>New driver&rsquo;s first command is just <code>/feature:status</code>.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div style="margin-top:32px;padding:14px 18px;border:1px dashed var(--line-strong);font-family:JetBrains Mono,monospace;font-size:12px;color:var(--paper-dim);line-height:1.7;max-width:1100px">
+    <span style="color:var(--slate)">COMPOSE &nbsp;→ </span>
+    a paused feature <em>can</em> be handed off (new driver inherits paused state).
+    An active feature <em>can</em> be handed off without pausing (new driver takes over mid-flight).
+    <span style="color:var(--slate)">&nbsp;|&nbsp; NOT SUPPORTED &nbsp;→ </span>
+    concurrent drivers. At any moment one driver; Jira handles multi-person via separate stories.
+  </div>
+</section>
+
+<!-- ============== 10 · RISK ============== -->
+<section data-slide="10">
+  <div class="marker"><span>10</span><span class="sep">·</span><span>SECURITY, PROPORTIONAL TO RISK</span></div>
+  <div class="eyebrow">Key idea · 06</div>
+  <h2 style="margin-top:14px;max-width:22ch;">Risk is <em style="color:var(--lime);font-style:italic">computed</em>, not guessed. The overlay does the rest.</h2>
+
+  <div class="risk-tiers">
+    <div class="tier low">
+      <div class="name">Risk · low</div>
+      <div class="level">low</div>
+      <ul>
+        <li>Docs-only / refactor-only / test-only</li>
+        <li>No security artifacts</li>
+        <li>CI scans as today</li>
+      </ul>
+    </div>
+    <div class="tier standard">
+      <div class="name">Risk · standard</div>
+      <div class="level">standard</div>
+      <ul>
+        <li>Most features land here</li>
+        <li>Security section in <code>design-review.md</code></li>
+        <li>CI scans enforced</li>
+      </ul>
+    </div>
+    <div class="tier sensitive">
+      <div class="name">Risk · sensitive</div>
+      <div class="level">sensitive</div>
+      <ul>
+        <li>Auth · secrets · TLS · RBAC · network egress</li>
+        <li>Standalone <code>threat-model.md</code></li>
+        <li>Security-labeled reviewer at design-review</li>
+        <li><code>/feature:security-sign-off</code> gate before ship</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="triggers">
+    <span class="label">TRIGGER CHECKLIST AT INIT &nbsp;→&nbsp;</span>
+    handles credentials? &nbsp;·&nbsp; touches TLS/CA? &nbsp;·&nbsp; modifies RBAC or admission? &nbsp;·&nbsp; changes egress to third party? &nbsp;·&nbsp; new exposed endpoint? &nbsp;·&nbsp; cluster-scoped resources?
+    <br/><span class="label">RESULT &nbsp;→&nbsp;</span>
+    any &ldquo;yes&rdquo; in the <strong class="red">sensitive</strong> list raises risk to <strong class="red">sensitive</strong>; otherwise <strong>standard</strong>. Overrides are logged and surfaced at every gate.
+  </div>
+</section>
+
+<!-- ============== 11 · MATURITY (replaces automation rate) ============== -->
+<section data-slide="11">
+  <div class="marker"><span>11</span><span class="sep">·</span><span>MATURITY, NOT AN AUTOMATION RATE</span></div>
+  <div class="eyebrow">Key idea · 07 · major change from rev 1</div>
+  <h2 style="margin-top:14px;max-width:26ch;">A single percentage hides what it is hiding. We measure <em style="color:var(--lime);font-style:italic">what blocked auto-complete</em> instead.</h2>
+
+  <div class="maturity-grid">
+    <div class="maturity-before">
+      <div class="target-mini">
+        <div class="inner">
+          <div>
+            <div class="pct">90<span style="font-size:0.5em;">%</span></div>
+            <div class="label">auto-complete target</div>
+          </div>
+        </div>
+      </div>
+      <p>
+        A single &ldquo;automation rate&rdquo; cannot distinguish <strong>weak AI</strong>, <strong>weak template/skill/KB</strong>, and <strong>genuine human judgment</strong>.
+        Aggregating them creates a number the team chases without knowing what to fix.
+      </p>
+    </div>
+
+    <div class="maturity-after">
+      <div style="font-family:Fraunces,serif;font-size:22px;color:var(--paper);margin-bottom:4px">
+        Per-feature blocker board
+      </div>
+      <div style="font-family:JetBrains Mono,monospace;font-size:11px;color:var(--slate);letter-spacing:0.1em;margin-bottom:14px;text-transform:uppercase">
+        DEVOPS-41818 · OAuth2 App · 12 stages
+      </div>
+
+      <div class="blocker-board">
+        <div class="blocker-row none">
+          <div class="bkey">none</div>
+          <div class="bbar"><div class="bfill" style="width:52%"></div></div>
+          <div class="bval">7</div>
+        </div>
+        <div class="blocker-row template">
+          <div class="bkey">template</div>
+          <div class="bbar"><div class="bfill" style="width:22%"></div></div>
+          <div class="bval">3</div>
+        </div>
+        <div class="blocker-row kb">
+          <div class="bkey">kb</div>
+          <div class="bbar"><div class="bfill" style="width:14%"></div></div>
+          <div class="bval">2</div>
+        </div>
+        <div class="blocker-row judgment">
+          <div class="bkey">judgment</div>
+          <div class="bbar"><div class="bfill" style="width:22%"></div></div>
+          <div class="bval">3</div>
+        </div>
+        <div class="blocker-row skill">
+          <div class="bkey">skill</div>
+          <div class="bbar"><div class="bfill" style="width:0%"></div></div>
+          <div class="bval">0</div>
+        </div>
+        <div class="blocker-row flake">
+          <div class="bkey">flake</div>
+          <div class="bbar"><div class="bfill" style="width:0%"></div></div>
+          <div class="bval">0</div>
+        </div>
+      </div>
+
+      <div class="maturity-callout">
+        <span class="label">the signal</span>
+        <strong>judgment = 3 is the honest floor</strong> for sensitive OAuth work.
+        The actionable signal is <em>template = 3</em> (threat-model OAuth example, callback-design template, research story-seed)
+        and <em>kb = 2</em> (proxy auth patterns, App-revoked prior art).
+      </div>
+
+      <div class="thresholds">
+        <div class="threshold almost">
+          <span class="name">Almost-autonomous</span>
+          template + skill + kb ≤ 2 per feature (rolling 30d)
+        </div>
+        <div class="threshold autonomous">
+          <span class="name">Autonomous</span>
+          same ≤ 0.5 · judgment steps prompt-able
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section data-slide="12">
+  <div class="marker"><span>12</span><span class="sep">·</span><span>RELEASE REALITY</span></div>
+  <div class="eyebrow">Key idea · 08</div>
+  <h2 style="margin-top:14px;max-width:22ch;">Customers can&rsquo;t test the week we ship. A 14-day window <em style="color:var(--lime);font-style:italic">was aspiration</em>.</h2>
+
+  <div class="release-cal">
+    <div class="rel">2026.04 <span class="month">monthly</span></div>
+    <div class="rel">2026.05 <span class="month">monthly</span></div>
+    <div class="rel">2026.06 <span class="month">monthly</span></div>
+    <div class="rel lts">2026.07 <span class="month">LTS · every 4th</span></div>
+    <div class="rel">2026.08 <span class="month">monthly</span></div>
+    <div class="rel">2026.09 <span class="month">monthly</span></div>
+  </div>
+
+  <p style="margin-top:22px;max-width:900px;font-size:15px;line-height:1.55">
+    Monthly non-LTS releases for most customers; LTS every 4th. Production feedback
+    on anything non-trivial takes <strong style="color:var(--paper)">weeks to months</strong> —
+    longer than any single-feature umbrella should stay open.
+  </p>
+
+  <div class="contrast-pair">
+    <div class="contrast-col was">
+      <h3>14-day landed window</h3>
+      <p>Ends before most customers touch the feature. Either catches nothing useful, or forces every umbrella to linger for months. The feature umbrella is the wrong container for this kind of feedback.</p>
+    </div>
+    <div class="contrast-col now">
+      <h3>Archive at ship · feedback on the epic</h3>
+      <p>Feature umbrella closes cleanly at ship. The Jira epic — long-lived by nature — is the right container for post-release bugs, tech debt discovered later, and new stories that spawn from customer feedback.</p>
+    </div>
+  </div>
+</section>
+
+<section data-slide="13">
+  <div class="marker"><span>13</span><span class="sep">·</span><span>TWO UMBRELLAS, ONE WORKFLOW</span></div>
+  <div class="eyebrow">Key idea · 09</div>
+  <h2 style="margin-top:14px;max-width:26ch;">The Jira epic is long-lived. The shippable slice is <em style="color:var(--lime);font-style:italic">bounded</em>.</h2>
+
+  <div class="umbrella-split">
+    <div class="umbrella epic">
+      <div class="u-badge">Epic umbrella · persistent</div>
+      <h3>docs/en/design/epics/&lt;jira&gt;-&lt;slug&gt;/</h3>
+      <p>One per Jira epic. Holds cross-story artifacts and survives many releases.</p>
+      <ul>
+        <li>research.md — cross-story findings</li>
+        <li>design-overview.md — architectural shape</li>
+        <li>stories.md — story list with priority</li>
+        <li>dependencies.md — story-level edges</li>
+        <li>post-release-log.md — bugs, tech debt, new stories</li>
+        <li>shipped-features/ — back-links to archived features</li>
+      </ul>
+      <div class="u-cmds">/feature:epic-init &nbsp;·&nbsp; story-start &nbsp;·&nbsp; bug-link &nbsp;·&nbsp; epic-status &nbsp;·&nbsp; epic-close</div>
+    </div>
+
+    <div class="umbrella feature">
+      <div class="u-badge">Feature umbrella · bounded</div>
+      <h3>docs/en/design/&lt;feature-jira&gt;-&lt;slug&gt;/</h3>
+      <p>One per shippable slice. Inherits from the epic when story-started. Runs the feature pipeline (slide 4) and <strong>archives at ship</strong>.</p>
+      <ul>
+        <li>feature.md, state.yaml, handoff.md</li>
+        <li>design + tech-design + test design</li>
+        <li>qa-packet / acceptance / regression</li>
+        <li>maturity-report.md</li>
+        <li>retrospective.md (runs before ship)</li>
+      </ul>
+      <div class="u-cmds">/feature:init (standalone) &nbsp;·&nbsp; /feature:story-start &lt;id&gt; (from epic)</div>
+    </div>
+  </div>
+
+  <div style="margin-top:26px;padding:14px 18px;border:1px dashed var(--line-strong);font-family:JetBrains Mono,monospace;font-size:12px;color:var(--paper-dim);line-height:1.7;max-width:1200px">
+    <span style="color:var(--slate)">ONE-STORY EPIC &nbsp;→ </span>
+    No separate epic umbrella needed. <code>/feature:init</code> is the entrypoint; the feature is the epic.
+    <span style="color:var(--slate)">&nbsp;|&nbsp; MULTI-STORY EPIC &nbsp;→ </span>
+    <code>/feature:epic-init</code> creates the long-lived container; each story gets its own feature umbrella via <code>/feature:story-start</code>.
+  </div>
+</section>
+
+<section data-slide="14">
+  <div class="marker"><span>14</span><span class="sep">·</span><span>WALKTHROUGH · PART 1 · THE FIRST RELEASE</span></div>
+  <div class="eyebrow">How a real epic plays out</div>
+  <h2 style="margin-top:14px;max-width:26ch;">DEVOPS-41818 · oAuth2 App support — <em style="color:var(--lime);font-style:italic">one epic, many releases</em>.</h2>
+
+  <div class="timeline">
+    <div class="tl-row tl-epic">
+      <div class="tl-when">2026-03-15</div>
+      <div class="tl-cmd">/feature:epic-init DEVOPS-41818</div>
+      <div class="tl-event">Epic umbrella created at <code>docs/en/design/epics/DEVOPS-41818-oauth2-app/</code>.</div>
+    </div>
+    <div class="tl-row tl-epic">
+      <div class="tl-when">2026-03-22 → 04-05</div>
+      <div class="tl-cmd">(research · design · design-review at epic scope)</div>
+      <div class="tl-event">9 stories decomposed. Dependency graph locked. Story 5 (OAuth callback) sent through <code>/feature:poc</code> after 2 pivots.</div>
+    </div>
+    <div class="tl-row tl-feat">
+      <div class="tl-when">2026-04-10</div>
+      <div class="tl-cmd">/feature:story-start 1</div>
+      <div class="tl-event">Feature umbrella for &ldquo;shared OAuth credential model&rdquo;. Inherits research + design from the epic.</div>
+    </div>
+    <div class="tl-row tl-feat">
+      <div class="tl-when">2026-04-10 → 04-19</div>
+      <div class="tl-cmd">design → plan → implement → integrate → qa → accept ∥ docs → regress → retro</div>
+      <div class="tl-event">Feature pipeline runs against one story. Per-story reviewer signs at plan.</div>
+    </div>
+    <div class="tl-row tl-feat">
+      <div class="tl-when">2026-04-20</div>
+      <div class="tl-cmd">/feature:ship</div>
+      <div class="tl-event">Story 1 ships. Feature umbrella archives immediately. Link recorded in epic&rsquo;s <code>shipped-features/</code>.</div>
+    </div>
+    <div class="tl-row tl-release">
+      <div class="tl-when">2026-05-02</div>
+      <div class="tl-cmd">RELEASE 2026.05</div>
+      <div class="tl-event">Public. Customers can now try the credential-model surface. Story 1 is the only shipped slice.</div>
+    </div>
+  </div>
+
+  <div class="tl-legend">
+    <span><span class="dot" style="background:var(--cyan)"></span>epic event</span>
+    <span><span class="dot" style="background:var(--lime)"></span>feature event</span>
+    <span><span class="dot" style="background:var(--amber)"></span>release</span>
+    <span><span class="dot" style="background:var(--rose)"></span>bug (slide 15)</span>
+    <span><span class="dot" style="background:var(--plum)"></span>tech debt (slide 15)</span>
+  </div>
+</section>
+
+<section data-slide="15">
+  <div class="marker"><span>15</span><span class="sep">·</span><span>WALKTHROUGH · PART 2 · BUGS, SECOND STORIES, TECH DEBT</span></div>
+  <div class="eyebrow">How the epic stays alive</div>
+  <h2 style="margin-top:14px;max-width:26ch;">Feedback has somewhere to go. <em style="color:var(--lime);font-style:italic">The epic.</em></h2>
+
+  <div class="timeline">
+    <div class="tl-row tl-bug">
+      <div class="tl-when">2026-05-18</div>
+      <div class="tl-cmd">Customer bug · DEVOPS-41999</div>
+      <div class="tl-event">Post-release 2026.05. A customer on self-hosted GitHub Enterprise hits the OAuth callback allowlist regex. Root-cause points at story 1&rsquo;s regex.</div>
+    </div>
+    <div class="tl-row tl-epic">
+      <div class="tl-when">2026-05-19</div>
+      <div class="tl-cmd">/feature:bug-link DEVOPS-41999 --epic=DEVOPS-41818</div>
+      <div class="tl-event">Recorded in the epic&rsquo;s <code>post-release-log.md</code>. Decision: fix in 2026.06.</div>
+    </div>
+    <div class="tl-row tl-feat">
+      <div class="tl-when">2026-05-19</div>
+      <div class="tl-cmd">/feature:story --add &ldquo;Allowlist regex fix&rdquo; --priority=p0 (story 10)</div>
+      <div class="tl-event">New story added to the epic&rsquo;s <code>stories.md</code>. Not blocking story 2, ships alongside.</div>
+    </div>
+    <div class="tl-row tl-feat">
+      <div class="tl-when">2026-05-05 → 05-28</div>
+      <div class="tl-cmd">/feature:story-start 2 &nbsp;·&nbsp; /feature:story-start 10</div>
+      <div class="tl-event">Parallel feature umbrellas: planned story 2 (GitHub token issuance) and hotfix story 10. Both inherit epic research/design.</div>
+    </div>
+    <div class="tl-row tl-debt">
+      <div class="tl-when">2026-05-22</div>
+      <div class="tl-cmd">/feature:story --add &ldquo;Credential cache in proxy&rdquo; --priority=p1 --defer (story 11)</div>
+      <div class="tl-event">Tech debt discovered during story 2&rsquo;s implementation. Added to the epic as p1, deferred to a later release — not blocking 2026.06.</div>
+    </div>
+    <div class="tl-row tl-feat">
+      <div class="tl-when">2026-05-28</div>
+      <div class="tl-cmd">/feature:ship &times; 2</div>
+      <div class="tl-event">Stories 2 and 10 ship. Both feature umbrellas archive. Epic&rsquo;s <code>shipped-features/</code> now lists 3 features.</div>
+    </div>
+    <div class="tl-row tl-release">
+      <div class="tl-when">2026-06-02</div>
+      <div class="tl-cmd">RELEASE 2026.06</div>
+      <div class="tl-event">Stories 2 and 10 reach customers. The bug that seeded story 10 is resolved against real usage.</div>
+    </div>
+    <div class="tl-row tl-feat">
+      <div class="tl-when">2026-07 → 08</div>
+      <div class="tl-cmd">/feature:story-start 3, 4, 5, 6, 7, 8, 11</div>
+      <div class="tl-event">Remaining stories (including the deferred cache) pulled in across releases 2026.07 (LTS) and 2026.08. Each is its own bounded feature umbrella.</div>
+    </div>
+    <div class="tl-row tl-close">
+      <div class="tl-when">2026-08-15</div>
+      <div class="tl-cmd">/feature:epic-close DEVOPS-41818</div>
+      <div class="tl-event">All p0 stories shipped. Epic umbrella archives to <code>docs/en/design/epics/archive/</code>. All feature links remain resolvable for future reference.</div>
+    </div>
+  </div>
+
+  <div style="margin-top:22px;padding:14px 18px;border:1px dashed var(--line-strong);font-family:JetBrains Mono,monospace;font-size:12px;color:var(--paper-dim);line-height:1.7;max-width:1260px">
+    <span style="color:var(--slate)">WHAT CHANGED &nbsp;→ </span>
+    post-release bugs, new stories, and tech debt all attach to the long-lived <strong style="color:var(--cyan)">epic umbrella</strong>, not to archived feature umbrellas.
+    No feature stays open waiting for customer feedback that may never arrive within 14 days.
+  </div>
+</section>
+
+<section data-slide="16">
+  <div class="marker"><span>16</span><span class="sep">·</span><span>DELIVERY</span></div>
+  <div class="eyebrow">How we ship this</div>
+  <h2 style="margin-top:14px;max-width:22ch;">Seven incremental phases. Each is its own OpenSpec change.</h2>
+
+  <div class="phases">
+    <div class="phase">
+      <h3>Scaffolding</h3>
+      <ul>
+        <li>this TEP merged</li>
+        <li>state schema committed (epic + feature)</li>
+        <li>/feature:init (standalone feature)</li>
+        <li>/feature:status · /feature:next</li>
+        <li>/feature:handoff · /feature:pause · /feature:resume</li>
+        <li>/feature:state-repair (audited)</li>
+        <li>--risk checklist · collision scan · WIP signal</li>
+      </ul>
+    </div>
+    <div class="phase">
+      <h3>Epic umbrella</h3>
+      <ul>
+        <li>/feature:epic-init (long-lived container)</li>
+        <li>/feature:story-start &lt;id&gt; (branch feature)</li>
+        <li>/feature:epic-status (board across releases)</li>
+        <li>/feature:bug-link (post-release)</li>
+        <li>/feature:epic-close (archive)</li>
+        <li>post-release-log.md append path</li>
+      </ul>
+    </div>
+    <div class="phase">
+      <h3>Design flow</h3>
+      <ul>
+        <li>/feature:research (full only · inherits from epic)</li>
+        <li>/feature:design (goal + breakdown + deps)</li>
+        <li>/feature:design-review (pivot / rework / POC)</li>
+        <li>/feature:poc (optional spike)</li>
+        <li>/feature:story (add / split / merge / defer)</li>
+      </ul>
+    </div>
+    <div class="phase">
+      <h3>Implement fan-out</h3>
+      <ul>
+        <li>/feature:plan (story groups · design-change vs mechanical)</li>
+        <li>/feature:implement (dispatch by dependencies.md)</li>
+        <li>/feature:tracks (story-grouped board)</li>
+        <li>/feature:dispatch &lt;repo&gt;</li>
+      </ul>
+    </div>
+    <div class="phase">
+      <h3>Post-merge</h3>
+      <ul>
+        <li>/feature:integrate (Tekton observe)</li>
+        <li>/feature:qa (executes test design)</li>
+        <li>/feature:accept ∥ /feature:docs</li>
+        <li>/feature:regress</li>
+      </ul>
+    </div>
+    <div class="phase">
+      <h3>Retro · ship · archive</h3>
+      <ul>
+        <li>/feature:security-sign-off (sensitive only)</li>
+        <li>/feature:retro (opt-out for light)</li>
+        <li>/feature:ship → immediate archive</li>
+        <li>maturity-report.md</li>
+        <li>shipped-features/&lt;feature&gt;.link on the epic</li>
+      </ul>
+    </div>
+    <div class="phase">
+      <h3>Maturity tracking</h3>
+      <ul>
+        <li>per-command blocker classification</li>
+        <li>/feature:maturity (this feature)</li>
+        <li>/feature:metrics (per-category trends)</li>
+        <li>post-release bug rate (via bug-link)</li>
+      </ul>
+    </div>
+    <div class="phase">
+      <h3>&nbsp;</h3>
+      <ul style="opacity:0.5">
+        <li>future · autonomous mode</li>
+        <li>enabled per stage once thresholds cross</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ============== 17 · WHAT THIS IS NOT ============== -->
+<section data-slide="17">
+  <div class="marker"><span>17</span><span class="sep">·</span><span>WHAT THIS IS NOT</span></div>
+  <div class="eyebrow">Scope guardrails</div>
+  <h2 style="margin-top:14px;max-width:18ch;">Just as important: what we are <em style="color:var(--rose);font-style:italic">not</em> building.</h2>
+
+  <div class="nots">
+    <div class="not">
+      <div class="x">✗</div>
+      <div>
+        <h3>Not a Jira replacement.</h3>
+        <p>Jira writes are comments and one state transition — nothing more. The integration is small enough to swap.</p>
+      </div>
+    </div>
+    <div class="not">
+      <div class="x">✗</div>
+      <div>
+        <h3>Not a new CI system.</h3>
+        <p>The Tekton pipelines stay. We observe them at integrate; we don&rsquo;t drive them.</p>
+      </div>
+    </div>
+    <div class="not">
+      <div class="x">✗</div>
+      <div>
+        <h3>Not a forced migration.</h3>
+        <p>Existing OpenSpec changes keep working. New features opt in at <code>/feature:init</code>.</p>
+      </div>
+    </div>
+    <div class="not">
+      <div class="x">✗</div>
+      <div>
+        <h3>Not a 90% automation chase.</h3>
+        <p>Maturity replaces rate. Judgment-only stages are the honest floor, not a miss.</p>
+      </div>
+    </div>
+    <div class="not">
+      <div class="x">✗</div>
+      <div>
+        <h3>Not a gate that blocks small fixes.</h3>
+        <p><code>light</code> profile shrinks artifacts but every validation gate still runs. Retro is opt-out for trivial fixes.</p>
+      </div>
+    </div>
+    <div class="not">
+      <div class="x">✗</div>
+      <div>
+        <h3>Not concurrent drivers.</h3>
+        <p>One driver at a time. Pause and handoff are first-class. Multi-person coordination is a Jira problem.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============== 18 · DISCUSSION ============== -->
+<section class="s-discussion" data-slide="18">
+  <div class="marker"><span>18</span><span class="sep">·</span><span class="live">DISCUSSION</span></div>
+  <div class="eyebrow">Open for the team</div>
+  <div class="ask" style="margin-top:32px;">What would <em>break</em> the first time we use this?</div>
+
+  <ol class="qs">
+    <li><span class="n">Q1</span><span>Does the two-tier umbrella (epic + feature) match how we actually plan multi-release work?</span></li>
+    <li><span class="n">Q2</span><span>Should <code>/feature:bug-link</code> always attach to an epic, or do we need a standalone post-release log for features that never had an epic?</span></li>
+    <li><span class="n">Q3</span><span>Is the blocker-stratified maturity signal the right replacement for a single automation percentage?</span></li>
+    <li><span class="n">Q4</span><span>Is the story-group + mechanical-followup split the right granularity for plan-time review?</span></li>
+    <li><span class="n">Q5</span><span>Who signs as the security-labeled reviewer for sensitive features, and how do we scale that role?</span></li>
+    <li><span class="n">Q6</span><span>Phase 1 first — do we ship the ownership/pause/state-repair stack before any design-flow commands?</span></li>
+  </ol>
+
+  <div class="links">
+    <span>READ →</span>
+    <a href="https://github.com/AlaudaDevops/connectors-operator/pull/888" target="_blank">PR #888</a>
+    <a href="../feature-workflow.md" target="_blank">TEP source</a>
+    <a href="DEVOPS-41818-walkthrough.md" target="_blank">DEVOPS-41818 walkthrough</a>
+  </div>
+</section>
+
+<script>
+  const sections = Array.from(document.querySelectorAll('section'));
+  const cur = document.getElementById('cur');
+  const tot = document.getElementById('tot');
+  tot.textContent = String(sections.length).padStart(2, '0');
+
+  // Track "current slide" by index updated from the IntersectionObserver.
+  // The earlier version derived it from `sections.find(s => s.classList.contains('in-view'))`,
+  // but `in-view` is never removed (it triggers one-shot rise animations),
+  // so after slide 2 became visible the lookup kept returning slide 1 and
+  // arrow keys stopped advancing. Tracking an index avoids fighting the
+  // animation class.
+  let currentIndex = 0;
+
+  const io = new IntersectionObserver((entries) => {
+    entries.forEach(e => {
+      if (e.intersectionRatio > 0.55) {
+        const i = sections.indexOf(e.target);
+        currentIndex = i;
+        cur.textContent = String(i + 1).padStart(2, '0');
+        e.target.classList.add('in-view');
+      }
+    });
+  }, { threshold: [0, 0.55, 1] });
+  sections.forEach(s => io.observe(s));
+
+  function go(delta) {
+    const next = Math.max(0, Math.min(sections.length - 1, currentIndex + delta));
+    sections[next].scrollIntoView({ behavior: 'smooth' });
+  }
+  window.addEventListener('keydown', (e) => {
+    if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return;
+    if (['ArrowDown', 'PageDown', ' ', 'j'].includes(e.key)) { e.preventDefault(); go(1); }
+    else if (['ArrowUp', 'PageUp', 'k'].includes(e.key)) { e.preventDefault(); go(-1); }
+    else if (e.key === 'Home') { sections[0].scrollIntoView({ behavior: 'smooth' }); }
+    else if (e.key === 'End') { sections[sections.length-1].scrollIntoView({ behavior: 'smooth' }); }
+  });
+</script>
+</body>
+</html>

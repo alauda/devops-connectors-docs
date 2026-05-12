@@ -1,0 +1,149 @@
+---
+weight: 26
+title: GitLab Connector Automatic Creation Tekton Task
+---
+
+# GitLab Connector Automatic Creation Tekton Task
+
+This page is the parameter, workspace, and result reference for the
+`gitlab-connector-automatic-creation` Tekton Task. For the operator
+walkthrough — Pattern A, Pattern B, rotate, recreate, expired-fall-through,
+and the operations runbook — see
+[Auto-Create GitLab Tenant Group and Connector with Tekton](./using_gitlab_connector_automatic_creation_task.mdx).
+For the underlying model — how the admin Connector is consumed through
+`gitlabconfig`, the three-path GAT lifecycle, and the tenant-side
+surface — see
+[GitLab CLI Configuration and Auto-Creation Patterns](../concepts/glab_cli_config.mdx).
+
+## Installation
+
+The Task is installed in the cluster by the connectors-operator together
+with the rest of the GitLab Connector component. After the operator's
+`ConnectorsGitLab` install manifest is applied, the Task is available in
+the namespace where the operator places connector tooling. Verify with:
+
+```bash
+kubectl get task gitlab-connector-automatic-creation -A
+```
+
+The Task expects two catalog tool images to be reachable from your
+internal registry:
+
+- `glab` — the GitLab CLI used by steps `ensure-group`, `ensure-subgroups`,
+  and `ensure-gat`.
+- `kubectl` — used by the final `apply-kubernetes-resources` step.
+
+The catalog tool-image ConfigMaps in `kube-public`
+(`catalog.tekton.dev/tool-image-glab`,
+`catalog.tekton.dev/tool-image-kubectl`) advertise the installed
+versions; the Task params `gitlabCliImage` and `kubectlImage` default to
+the catalog images and can be overridden per TaskRun if you need a
+different image (for example a registry-mirrored copy).
+
+## Description
+
+Use `glab` and `kubectl` to create or reuse a tenant GitLab group plus
+optional subgroups, mint a Group Access Token, and write the cluster-side
+tenant GitLab Connector + auth Secret in one TaskRun. Supports Pattern A
+(top-level group + `can_create_group` user PAT) and Pattern B (subgroup
+under a pre-existing umbrella + admin user PAT with Owner on the
+umbrella). Token refresh follows a three-path lifecycle: rotate,
+recreate, expired-fall-through.
+
+## Parameters
+
+| Name | Type | Default | Description |
+| ---- | ---- | ------- | ----------- |
+| `connector` | string | _required_ | Target GitLab Connector resource to create or update, in `<namespace>/<name>` format, for example `connectors-management/project-a-gitlab`. |
+| `tenantGroup` | string | _required_ | Tenant group path. Top-level (Pattern A) such as `acme-corp`, or `umbrella/tenant` (Pattern B). |
+| `subgroups` | array | `[]` | Optional per-team subgroup names created idempotently under the tenant group. Each entry is a single path segment (no slashes). |
+| `accessLevel` | string | `owner` | GitLab access level for the GAT. One of `guest`, `reporter`, `developer`, `maintainer`, `owner`. |
+| `scopes` | array | `["api"]` | GitLab GAT scope set. See [Validating scopes against your instance](./using_gitlab_connector_automatic_creation_task.mdx#validating-scopes-against-your-instance) for instance-specific gating. |
+| `tokenDuration` | string | `"30"` | Validity period of the GAT in days. Capped by the GitLab instance policy. Cron-friendly — every run computes `expires_at` as today + N days. |
+| `secret` | string | `""` | Bare name of the Kubernetes Secret that stores the tenant GAT in the connector namespace. Must not contain `/`. Leave empty to let the Task derive `<connector-name>-secret`. |
+| `accessTokenName` | string | `""` | Name prefix used for the GitLab Group Access Token managed by this Task. The full GAT name is `<accessTokenName>/<identity-suffix>`; the suffix encodes access level + scopes + subgroup set so re-runs can detect identity-affecting changes. Leave empty to derive `connector-<connector-namespace>-<connector-name>`. Mirrors Harbor's `robotAccount` parameter. |
+| `gitlabCliImage` | string | catalog `glab` | Tool image used by every `glab` step. |
+| `kubectlImage` | string | catalog `kubectl` | Tool image used by the final `kubectl` step. |
+| `imagePullPolicy` | string | `Always` | Controls when Kubernetes pulls the tool images used by this Task. |
+| `verbose` | string | `"false"` | Enable shell tracing on non-secret steps. The admin PAT and tenant GAT are NEVER traced regardless of this flag. |
+
+## Workspaces
+
+| Name | Required | Purpose | Expected files |
+| ---- | -------- | ------- | -------------- |
+| `gitlabconfig` | yes | connectors-csi mount of the **admin** GitLab Connector. The Task consumes the admin credential through this mount and never reads the raw PAT/GAT into the Pod environment. | `config.yml` (consumed by glab; carries the host alias and a short-lived proxy token) and `connector_address` (the admin Connector's `spec.address`, used as the tenant Connector's `spec.address`). |
+| `kubeconfig` | no | Optional CSI mount of a `kubernetes`-class Connector for cross-cluster apply. When bound the Task exports `KUBECONFIG`, otherwise `kubectl` falls back to the in-cluster service-account context. | `kubeconfig`. |
+
+The `gitlabconfig` workspace mirrors Harbor's `harbor-config`. The
+`kubeconfig` workspace mirrors Harbor's `kube-config`.
+
+## Results
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| `tenant-group` | string | The materialised tenant group path, for example `acme-corp` or `umbrella/acme-corp`. |
+| `subgroups` | array | JSON array of materialised subgroup paths. |
+| `access-token-name` | string | Identity-encoded GitLab GAT name minted or rotated by this run, in `<prefix>/<identity-suffix>` form. Useful for ops audit and `glab api` lookups. The numeric token id is recorded as a Secret annotation rather than exposed as a Task result. |
+| `connector-ref` | string | Namespaced reference of the tenant Connector handled by the Task, in `<namespace>/<name>` format. |
+
+## Steps
+
+The Task runs four sequential steps. All steps share an in-memory
+`emptyDir` volume mounted at `/workspace/state` for non-secret state and
+a tmpfs (`emptyDir.medium=Memory`) volume mounted at `/workspace/secrets`
+for the GAT. The tmpfs volume is removed on Task exit.
+
+| Step | Image | What it does |
+| ---- | ----- | ------------ |
+| `ensure-group` | `gitlabCliImage` | Look up `tenantGroup` via `glab api groups/:path`. If absent, create it (Pattern A: top-level; Pattern B: with `parent_id` resolved from the umbrella). Writes the group id and full path to `/workspace/state/`. |
+| `ensure-subgroups` | `gitlabCliImage` | Iterate `subgroups[]` and create each idempotently as a child of the tenant group. A 409 from `glab api` is treated as success. Writes a JSON array of materialised subgroup paths. |
+| `ensure-gat` | `gitlabCliImage` | List existing GATs at the tenant group, find the one whose name matches this Task's prefix, and pick one of three paths: rotate-in-place, recreate (identity drift or expired-fall-through), or create fresh. Writes the new GAT id to `/workspace/state/access-token-id` and the secret value to `/workspace/secrets/token`. |
+| `apply-kubernetes-resources` | `kubectlImage` | Server-side apply the tenant Connector and Secret into the connector namespace. The Connector's `spec.address` comes from `connector_address` in the `gitlabconfig` mount. The Secret is `type: connectors.cpaas.io/gitlab-pat-auth` with `stringData.token` set from `/workspace/secrets/token`. Honours the optional `kubeconfig` workspace for cross-cluster apply. |
+
+The Task `stepTemplate` enforces a non-root, capability-dropped security
+context (`runAsUser: 65532`, `runAsGroup: 65532`,
+`allowPrivilegeEscalation: false`, all capabilities dropped). The tool
+images need to be runnable as a non-root user.
+
+## Three-Path GAT Lifecycle Summary
+
+| Existing GAT state | Identity match? | Action |
+| ------------------ | --------------- | ------ |
+| None | n/a | **Create** a fresh GAT and write the Secret. |
+| Healthy and identity matches | yes | **Rotate in place** via `POST /groups/:id/access_tokens/:token_id/rotate`. Old token invalidated atomically; Secret updated in place. |
+| Healthy but identity differs (`scopes`, `accessLevel`, or `subgroups[]` changed) | no | **Recreate**: revoke the existing GAT, mint a fresh one with the requested identity, rewrite the Secret. |
+| Expired (`expires_at < now`) | n/a | **Expired-fall-through**: best-effort revoke, mint a fresh GAT, rewrite the Secret. The TaskRun reports `Succeeded`. No manual operator intervention required. |
+
+See
+[Three-Path GAT Lifecycle](../concepts/glab_cli_config.mdx#three-path-gat-lifecycle)
+for the model and
+[Step-by-Step — Expired-Fall-Through (Self-Healing)](./using_gitlab_connector_automatic_creation_task.mdx#step-by-step-expired-fall-through-self-healing)
+for the recovery walkthrough.
+
+## Security Notes
+
+- The admin GitLab credential never enters the Pod environment. The
+  `gitlabconfig` mount carries a short-lived proxy token; the real admin
+  PAT/GAT lives behind the Connectors proxy.
+- The tenant GAT is written to a tmpfs volume (`emptyDir.medium=Memory`)
+  with mode 0600 and removed on Task exit.
+- Shell tracing (`set -x`) is **never** active around code paths that
+  read the GAT, regardless of `verbose=true`.
+- The `secret` parameter is a bare resource name in the connector
+  namespace; values containing `/` are rejected so a typo cannot land
+  the GAT in a different namespace.
+- `apply-kubernetes-resources` calls `kubectl auth can-i create secrets
+  -n <connector-namespace>` before applying anything, surfacing missing
+  RBAC and typos in `connector=<ns>/<name>` together.
+
+## See Also
+
+- [Auto-Create GitLab Tenant Group and Connector with Tekton](./using_gitlab_connector_automatic_creation_task.mdx)
+  — operator walkthrough with Pattern A, Pattern B, rotate, recreate,
+  expired-fall-through, the rotation CronJob pattern, and the
+  operations runbook.
+- [GitLab CLI Configuration and Auto-Creation Patterns](../concepts/glab_cli_config.mdx)
+  — concept page covering the `gitlabconfig` CSI mount, Pattern A vs
+  Pattern B, and the three-path GAT lifecycle.
+- [GitLab Connector](../concepts/gitlab_connectorclass.mdx) — the
+  underlying GitLab ConnectorClass and its tenant-side configurations.
