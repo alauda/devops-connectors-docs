@@ -1,3 +1,5 @@
+# Template
+
 ## Summary
 
 This section is crucial for generating high-quality user documentation (e.g., release notes or development roadmaps). This information should be collected before implementation begins to avoid distracting the implementers while writing release notes and implementing features.

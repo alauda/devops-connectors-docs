@@ -1,3 +1,5 @@
+# GitLab Connector
+
 ## Summary
 
 目前 Connector 仅提供了 面向协议的 ConnectorClass， 考虑到在特定工具下更好的使用体验， 我们需要一套面向工具的 ConnectorClass。
