@@ -15,30 +15,1367 @@ For the underlying model — how the admin Connector is consumed through
 surface — see
 [GitLab CLI Configuration and Auto-Creation Patterns](../concepts/glab_cli_config.mdx).
 
-## Installation
+## Installation \{#installation}
 
-The Task is installed in the cluster by the connectors-operator together
-with the rest of the GitLab Connector component. After the operator's
-`ConnectorsGitLab` install manifest is applied, the Task is available in
-the namespace where the operator places connector tooling. Verify with:
+Set the variables, then run the command below:
+
+- `REGISTRY`: the registry host that mirrors `registry.alauda.cn:60070` (the catalog `glab` and `kubectl` tool images live under this prefix).
+- `TARGET_NS`: the namespace where you want to install the Task. The catalog tool-image ConfigMaps that the Task references are already installed in `kube-public` by the connectors-operator.
+
+{/* BEGIN GENERATED TASK YAML */}
+```bash
+export REGISTRY=<your-registry>
+export TARGET_NS=<target-namespace>
+
+cat <<'EOF' | envsubst '${REGISTRY} ${TARGET_NS}' | kubectl apply -f -
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  annotations:
+    tekton.dev/categories: CLI
+    tekton.dev/displayName: GitLab Connector Automatic Creation
+    tekton.dev/pipelines.minVersion: 0.56.0
+    tekton.dev/platforms: linux/amd64,linux/arm64
+    tekton.dev/tags: gitlab, connector, kubernetes, secret, group-access-token
+  labels:
+    app.kubernetes.io/version: "0.1"
+  name: gitlab-connector-automatic-creation
+  namespace: ${TARGET_NS}
+spec:
+  description: 'Use glab and kubectl to create or reuse a tenant GitLab group + optional subgroups, mint a Group Access Token, and write the cluster-side tenant GitLab Connector + auth Secret in one TaskRun. Supports Pattern A (top-level group + can_create_group user PAT) and Pattern B (subgroup + umbrella GAT). Token refresh follows a three-path lifecycle: rotate / recreate / expired-fall-through.'
+  params:
+    - description: Target GitLab Connector resource to create or update, in <namespace>/<name> format, for example connectors-management/project-a-gitlab
+      name: connector
+      type: string
+    - description: Tenant group path; top-level (Pattern A) or `umbrella/tenant` (Pattern B)
+      name: tenantGroup
+      type: string
+    - default: []
+      description: Optional per-team subgroup names created idempotently under the tenant group
+      name: subgroups
+      type: array
+    - default: owner
+      description: GitLab access level for the GAT (guest|reporter|developer|maintainer|owner)
+      name: accessLevel
+      type: string
+    - default:
+        - api
+      description: GitLab GAT scope set; defaults to ["api"]
+      name: scopes
+      type: array
+    - default: "30"
+      description: Validity period of the GitLab Group Access Token in days; capped by the GitLab instance policy. Cron-friendly — every run computes expires_at as today + N days.
+      name: tokenDuration
+      type: string
+    - default: ""
+      description: Name of the Kubernetes Secret that stores the tenant GAT in the connector namespace; leave empty to let the Task create or update <connector-name>-secret automatically
+      name: secret
+      type: string
+    - default: ""
+      description: Name prefix used for the GitLab Group Access Token managed by this Task. The full GAT name is `<accessTokenName>/<identity-suffix>`; the suffix encodes access level + scopes + subgroup set so reruns can detect identity-affecting changes. Leave empty to derive `connector-<connector-namespace>-<connector-name>`. Mirrors Harbor's `robotAccount` parameter.
+      name: accessTokenName
+      type: string
+    - default: ${REGISTRY}/devops/tektoncd/hub/glab:v1.82
+      description: Tool image used by every glab step. Defaults to the catalog tool-image-glab v1.82 image.
+      name: gitlabCliImage
+      type: string
+    - default: ${REGISTRY}/devops/tektoncd/hub/kubectl:v1.33
+      description: Tool image used by the kubectl step. Defaults to the catalog tool-image-kubectl v1.33 image.
+      name: kubectlImage
+      type: string
+    - default: Always
+      description: Controls when Kubernetes pulls the tool images used by this Task
+      name: imagePullPolicy
+      type: string
+    - default: "false"
+      description: Enable shell tracing on non-secret steps; the admin PAT and tenant GAT are NEVER traced regardless of this flag
+      name: verbose
+      type: string
+  results:
+    - description: The materialised tenant group path
+      name: tenant-group
+    - description: JSON array of materialised subgroup paths
+      name: subgroups
+      type: array
+    - description: Identity-encoded GitLab GAT name minted/rotated by this run (`<prefix>/<identity-suffix>`). Useful for ops audit and `glab api` lookups; the numeric token id is recorded as a Secret annotation, not exposed as a result.
+      name: access-token-name
+    - description: Namespaced reference of the tenant Connector handled by the Task
+      name: connector-ref
+  stepTemplate:
+    securityContext:
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop:
+          - ALL
+      runAsGroup: 65532
+      runAsNonRoot: true
+      runAsUser: 65532
+    volumeMounts:
+      - mountPath: /workspace/state
+        name: state
+      - mountPath: /workspace/secrets
+        name: secrets
+  steps:
+    - computeResources:
+        limits:
+          cpu: 500m
+          memory: 256Mi
+        requests:
+          cpu: 100m
+          memory: 128Mi
+      env:
+        - name: TENANT_GROUP
+          value: $(params.tenantGroup)
+        - name: VERBOSE
+          value: $(params.verbose)
+        - name: GLAB_CONFIG_DIR
+          value: $(workspaces.gitlabconfig.path)
+        - name: GLAB_CHECK_UPDATE
+          value: "false"
+        - name: GLAB_SEND_TELEMETRY
+          value: "false"
+        - name: STATE_DIR
+          value: /workspace/state
+      image: $(params.gitlabCliImage)
+      imagePullPolicy: $(params.imagePullPolicy)
+      name: ensure-group
+      script: |
+        #!/usr/bin/env bash
+        # ensure-group.sh -- step 1 of gitlab-connector-automatic-creation/0.1
+        #
+        # Create-or-reuse the tenant GitLab group at the configured `tenantGroup`
+        # path via `glab api groups`. Honours both deployment patterns:
+        #
+        #   Pattern A: tenantGroup is a top-level path (no slash). Admin
+        #              identity is a user PAT with `can_create_group`.
+        #   Pattern B: tenantGroup is `umbrella/tenant`. Admin identity is the
+        #              umbrella's GAT with owner access.
+        #
+        # Inputs (env): TENANT_GROUP, VERBOSE, GLAB_CONFIG_DIR (CSI mount).
+        # Outputs    : prints group id + path; writes the group id to
+        #              /workspace/state/tenant-group-id (next step reads it).
+        #
+        # This script never echoes the admin PAT/GAT. `set +x` is the default;
+        # `verbose=true` env enables tracing on non-secret paths only.
+        set -euo pipefail
+        set +o xtrace 2>/dev/null || true
+
+        : "${TENANT_GROUP:?ensure-group: TENANT_GROUP is required}"
+        : "${VERBOSE:=false}"
+        : "${GLAB_CONFIG_DIR:=/workspace/gitlabconfig}"
+        : "${STATE_DIR:=/workspace/state}"
+
+        mkdir -p "${STATE_DIR}"
+
+        # Logs follow Harbor's harbor-connector-automatic-creation style:
+        # sentence-case narrative ("Created tenant group ..."), no per-call API
+        # hints, no bash xtrace. ERROR lines carry full context to stderr.
+
+        # Run a glab/curl command up to 3 times if its combined output looks like
+        # a transient DNS resolution failure. Reason: in CI's kind cluster the
+        # in-cluster coredns occasionally returns NXDOMAIN/SERVFAIL for valid
+        # hostnames during heavy back-to-back BDD runs; live GitLab instances can
+        # also exhibit transient DNS in production.
+        with_dns_retry() {
+          local out rc attempt=1
+          while :; do
+            set +e
+            out="$("$@" 2>&1)"
+            rc=$?
+            set -e
+            if [[ ${rc} -eq 0 ]] || [[ ${attempt} -ge 3 ]]; then break; fi
+            case "${out}" in
+              *"no such host"*|*"server misbehaving"*|*"i/o timeout"*|*"dial tcp: lookup"*|*"Could not resolve host"*|*"Temporary failure in name resolution"*)
+                echo "WARN: transient DNS failure (attempt ${attempt}/3), retrying in 3s" >&2
+                sleep 3
+                attempt=$((attempt + 1))
+                continue
+                ;;
+            esac
+            break
+          done
+          printf '%s' "${out}"
+          return ${rc}
+        }
+
+        # Bootstrap glab credentials silently from the CSI mount. The mount is
+        # read-only with mode 0444 (CSI default); glab itself rejects any
+        # config.yml that isn't 0600 ("failed to read configuration"). Copy the
+        # config into a writable XDG home and re-point GLAB_CONFIG_DIR (which
+        # glab honours natively as the config-dir override) at that writable
+        # copy so glab no longer reaches into the read-only mount.
+        prepare_glab() {
+          local glab_home="${HOME:-/tmp}/.config/glab-cli"
+          mkdir -p "${glab_home}"
+          if [[ ! -f "${GLAB_CONFIG_DIR}/config.yml" ]]; then
+            echo "ERROR: glab config not found at ${GLAB_CONFIG_DIR}/config.yml -- is the gitlabconfig CSI mount bound?" >&2
+            exit 1
+          fi
+          cp "${GLAB_CONFIG_DIR}/config.yml" "${glab_home}/config.yml"
+          chmod 600 "${glab_home}/config.yml"
+          export GLAB_CONFIG_DIR="${glab_home}"
+
+          # glab v1.82+ resolves the target host from --hostname / GITLAB_HOST
+          # / the current git remote / config-default, in that order. Our config
+          # has exactly one host entry, but glab does NOT auto-pick it -- it
+          # falls through to gitlab.com by default, then 401s because the
+          # gitlab.com PAT we don't have. Pull the host + token out of the
+          # mounted config and export them so glab's env-var fallback works.
+          GITLAB_HOST=$(grep -E '^\s{2}[A-Za-z0-9._-]+:\s*$' "${glab_home}/config.yml" \
+                         | head -1 | tr -d ': ' )
+          GITLAB_TOKEN=$(awk '/^\s{4}token:/ { print $2; exit }' "${glab_home}/config.yml")
+          if [[ -z "${GITLAB_HOST}" || -z "${GITLAB_TOKEN}" ]]; then
+            echo "ERROR: could not parse host/token from ${glab_home}/config.yml" >&2
+            exit 1
+          fi
+          export GITLAB_HOST GITLAB_TOKEN
+        }
+
+        # URL-encode a path so `umbrella/tenant` survives `GET /groups/:id`.
+        url_encode_path() {
+          local p="$1"
+          printf '%s' "${p}" | sed 's|/|%2F|g'
+        }
+
+        # Read api_protocol from the glab config so direct-curl calls (used for
+        # endpoints that glab encodes incompatibly, e.g. POST /members) target
+        # the correct scheme.
+        read_glab_protocol() {
+          local cfg="${GLAB_CONFIG_DIR}/config.yml"
+          GLAB_PROTOCOL="$(awk -F'[: ]+' '/^[[:space:]]*api_protocol:[[:space:]]/{print $3; exit}' "${cfg}")"
+          if [[ -z "${GLAB_PROTOCOL}" ]]; then
+            GLAB_PROTOCOL="https"
+          fi
+        }
+
+        # Detect the admin token's user identity and whether it's a Group
+        # Access Token (Pattern B umbrella GAT) vs a regular user PAT.
+        #
+        # GitLab's `/api/v4/personal_access_tokens/self` returns the active
+        # token's metadata (works for PATs and GATs alike); the `user_id` field
+        # points at the underlying user record. Group bots have `bot: true` and
+        # a `username` of the shape `group_<id>_bot_<suffix>`.
+        #
+        # Sets globals on success:
+        #   ADMIN_USER_ID         numeric id of the user the token belongs to
+        #   ADMIN_IS_GAT_BOT      true|false
+        #   ADMIN_BOT_USER_ID     same as ADMIN_USER_ID when ADMIN_IS_GAT_BOT=true; else empty
+        detect_admin_identity() {
+          read_glab_protocol
+          local self_url user_url self_resp self_code user_resp user_code
+          self_url="${GLAB_PROTOCOL}://${GITLAB_HOST}/api/v4/personal_access_tokens/self"
+          set +x
+          self_code="$(with_dns_retry curl -skS -o /tmp/identity_self -w '%{http_code}' \
+            -H "PRIVATE-TOKEN: ${GITLAB_TOKEN}" "${self_url}" || true)"
+          self_resp="$(cat /tmp/identity_self 2>/dev/null || true)"
+          rm -f /tmp/identity_self
+          ADMIN_USER_ID=""
+          ADMIN_IS_GAT_BOT=false
+          ADMIN_BOT_USER_ID=""
+          if [[ "${self_code}" != "200" ]]; then
+            # Older GitLab releases (<14.5) lack /self -- ownership verification
+            # is skipped (Pattern A then proceeds without conflict-detection
+            # against pre-existing groups owned by other users).
+            return 0
+          fi
+          local user_id
+          user_id="$(printf '%s' "${self_resp}" | jq -r '.user_id // empty')"
+          if [[ -z "${user_id}" ]]; then
+            return 0
+          fi
+          ADMIN_USER_ID="${user_id}"
+
+          user_url="${GLAB_PROTOCOL}://${GITLAB_HOST}/api/v4/users/${user_id}"
+          user_code="$(with_dns_retry curl -skS -o /tmp/identity_user -w '%{http_code}' \
+            -H "PRIVATE-TOKEN: ${GITLAB_TOKEN}" "${user_url}" || true)"
+          user_resp="$(cat /tmp/identity_user 2>/dev/null || true)"
+          rm -f /tmp/identity_user
+          if [[ "${user_code}" != "200" ]]; then
+            return 0
+          fi
+
+          local is_bot username
+          is_bot="$(printf '%s' "${user_resp}" | jq -r '.bot // false')"
+          username="$(printf '%s' "${user_resp}" | jq -r '.username // empty')"
+          if [[ "${is_bot}" == "true" ]] && [[ "${username}" =~ ^group_[0-9]+_bot_ ]]; then
+            ADMIN_IS_GAT_BOT=true
+            ADMIN_BOT_USER_ID="${user_id}"
+          fi
+        }
+
+        # When the tenant group already exists, verify the admin actually has
+        # Owner access (direct OR inherited) before reusing it. Without this
+        # check, an unrelated user's group at the same path would be silently
+        # adopted -- catastrophic for the connector contract.
+        verify_admin_ownership() {
+          local group_id="$1"
+          if [[ -z "${ADMIN_USER_ID:-}" ]]; then
+            # /personal_access_tokens/self unavailable -- can't verify. Log and
+            # let the script proceed (older GitLab releases).
+            echo "WARN: Admin user id unknown; skipping ownership verification on group ${group_id}" >&2
+            return 0
+          fi
+          set +x
+          local url resp http_code
+          url="${GLAB_PROTOCOL}://${GITLAB_HOST}/api/v4/groups/${group_id}/members/all/${ADMIN_USER_ID}"
+          http_code="$(with_dns_retry curl -skS -o /tmp/own_resp -w '%{http_code}' \
+            -H "PRIVATE-TOKEN: ${GITLAB_TOKEN}" "${url}" || true)"
+          resp="$(cat /tmp/own_resp 2>/dev/null || true)"
+          rm -f /tmp/own_resp
+          if [[ "${http_code}" == "404" ]]; then
+            echo "ERROR: group path conflict; existing owner does not match admin (admin user_id=${ADMIN_USER_ID} is not a member of the existing group at ${TENANT_GROUP})" >&2
+            exit 1
+          fi
+          if [[ "${http_code}" != "200" ]]; then
+            echo "ERROR: failed to verify admin ownership of group ${group_id}: HTTP ${http_code} ${resp}" >&2
+            exit 1
+          fi
+          local access_level
+          access_level="$(printf '%s' "${resp}" | jq -r '.access_level // 0')"
+          if [[ "${access_level}" -lt 50 ]]; then
+            echo "ERROR: group path conflict; existing owner does not match admin (admin has access_level=${access_level}, requires Owner=50)" >&2
+            exit 1
+          fi
+        }
+
+        # NOTE: an earlier attempt added an `ensure_bot_owner_membership`
+        # helper to add the umbrella GAT's bot user as a *direct* Owner of
+        # freshly-created tenant subgroups (so that ensure-gat could mint a
+        # subgroup GAT). GitLab rejects this with
+        #   HTTP 400 {"message":{"user_id":["project bots cannot be added to other groups / projects"]}}
+        # Group share (`POST /groups/<sub>/share`) granted access but did NOT
+        # unblock the GAT-mint endpoint either. Pattern B's design needs to
+        # change before TC2/TC9 can be automated -- see the FIXME blocks on
+        # those scenarios in tektoncd.feature.
+
+        # Look up the group by full path. Returns the JSON object on stdout, or
+        # empty string + non-zero on 404.
+        lookup_group() {
+          local path_enc; path_enc="$(url_encode_path "$1")"
+          with_dns_retry glab api "groups/${path_enc}" 2>/dev/null || return 1
+        }
+
+        # Create a new group. Pattern A: no parent_id. Pattern B: parent_id of
+        # the umbrella, looked up by parent path.
+        #
+        # A "path has already been taken" rejection means a group already
+        # exists at this path, owned by someone we can't see (typically a
+        # different user's *private* group that lookup_group couldn't return).
+        # That is a path conflict we MUST surface clearly -- silently
+        # proceeding would mean adopting an unrelated org's tenant group.
+        create_group() {
+          local full_path="$1"
+          local name="${full_path##*/}"
+          local parent_path="${full_path%/*}"
+          local out rc
+
+          set +e
+          if [[ "${parent_path}" == "${full_path}" ]]; then
+            # No slash -- top-level group (Pattern A).
+            out="$(with_dns_retry glab api -X POST groups -f "name=${name}" -f "path=${name}" -f "visibility=private")"
+            rc=$?
+          else
+            # Subgroup -- need the parent's id (Pattern B).
+            set -e
+            local parent_json parent_id
+            parent_json="$(lookup_group "${parent_path}")" || {
+              echo "ERROR: parent group '${parent_path}' not found; admin identity must have owner on the parent path. See how-to: Pattern B setup." >&2
+              exit 1
+            }
+            parent_id="$(printf '%s' "${parent_json}" | jq -r '.id')"
+            set +e
+            out="$(with_dns_retry glab api -X POST groups -f "name=${name}" -f "path=${name}" -f "parent_id=${parent_id}" -f "visibility=private")"
+            rc=$?
+          fi
+          set -e
+
+          if [[ ${rc} -eq 0 ]]; then
+            return 0
+          fi
+          if [[ "${out}" == *"has already been taken"* ]] \
+             || [[ "${out}" == *"already exists"* ]]; then
+            echo "ERROR: group path conflict; existing owner does not match admin (path '${full_path}' is taken by another identity, or you lack permission to read it)" >&2
+            exit 1
+          fi
+          echo "ERROR: failed to create group '${full_path}': ${out}" >&2
+          exit 1
+        }
+
+        main() {
+          prepare_glab
+          detect_admin_identity
+
+          local existing id full
+          if existing="$(lookup_group "${TENANT_GROUP}")"; then
+            id="$(printf '%s' "${existing}" | jq -r '.id')"
+            full="$(printf '%s' "${existing}" | jq -r '.full_path')"
+            # Refuse to adopt someone else's group at this path.
+            verify_admin_ownership "${id}"
+            echo "Reusing existing tenant group id=${id} path=${full}"
+          else
+            echo "Ensuring tenant group ${TENANT_GROUP}"
+            create_group "${TENANT_GROUP}"
+            # Re-fetch to materialise the id we just created.
+            existing="$(lookup_group "${TENANT_GROUP}")" || {
+              echo "ERROR: tenant group '${TENANT_GROUP}' not found after create -- did the API call silently fail?" >&2
+              exit 1
+            }
+            id="$(printf '%s' "${existing}" | jq -r '.id')"
+            full="$(printf '%s' "${existing}" | jq -r '.full_path')"
+            echo "Created tenant group id=${id} path=${full}"
+          fi
+
+          printf '%s' "${id}" > "${STATE_DIR}/tenant-group-id"
+          printf '%s' "${full}" > "${STATE_DIR}/tenant-group-path"
+          echo "✅ Tenant group ready"
+        }
+
+        main "$@"
+    - args:
+        - $(params.subgroups[*])
+      computeResources:
+        limits:
+          cpu: 500m
+          memory: 256Mi
+        requests:
+          cpu: 100m
+          memory: 128Mi
+      env:
+        - name: VERBOSE
+          value: $(params.verbose)
+        - name: GLAB_CONFIG_DIR
+          value: $(workspaces.gitlabconfig.path)
+        - name: GLAB_CHECK_UPDATE
+          value: "false"
+        - name: GLAB_SEND_TELEMETRY
+          value: "false"
+        - name: STATE_DIR
+          value: /workspace/state
+      image: $(params.gitlabCliImage)
+      imagePullPolicy: $(params.imagePullPolicy)
+      name: ensure-subgroups
+      script: |
+        #!/usr/bin/env bash
+        # ensure-subgroups.sh -- step 2 of gitlab-connector-automatic-creation/0.1
+        #
+        # Iterates the SUBGROUPS array (newline-delimited stdin or repeated
+        # --subgroup args) and creates each idempotently as a child of the
+        # tenant group. Idempotent on rerun -- a 409 from `glab api` is treated
+        # as success.
+        #
+        # Inputs (env): TENANT_GROUP_ID, VERBOSE, GLAB_CONFIG_DIR.
+        # Inputs (argv): each remaining argument is a subgroup name (single
+        # path segment, no slashes -- subgroups under the tenant group only).
+        # Outputs    : prints created/reused subgroup paths; writes a JSON
+        #              array of materialised subgroup paths to
+        #              /workspace/state/subgroups.json.
+        set -euo pipefail
+        set +o xtrace 2>/dev/null || true
+
+        : "${VERBOSE:=false}"
+        : "${GLAB_CONFIG_DIR:=/workspace/gitlabconfig}"
+        : "${STATE_DIR:=/workspace/state}"
+
+        mkdir -p "${STATE_DIR}"
+
+        # Logs follow Harbor's narrative style. See ensure-group.sh top comment.
+
+        # See ensure-group.sh:with_dns_retry for rationale.
+        with_dns_retry() {
+          local out rc attempt=1
+          while :; do
+            set +e
+            out="$("$@" 2>&1)"
+            rc=$?
+            set -e
+            if [[ ${rc} -eq 0 ]] || [[ ${attempt} -ge 3 ]]; then break; fi
+            case "${out}" in
+              *"no such host"*|*"server misbehaving"*|*"i/o timeout"*|*"dial tcp: lookup"*|*"Could not resolve host"*|*"Temporary failure in name resolution"*)
+                echo "WARN: transient DNS failure (attempt ${attempt}/3), retrying in 3s" >&2
+                sleep 3
+                attempt=$((attempt + 1))
+                continue
+                ;;
+            esac
+            break
+          done
+          printf '%s' "${out}"
+          return ${rc}
+        }
+
+        prepare_glab() {
+          # See ensure-group.sh:prepare_glab — glab refuses 0444 configs and
+          # falls back to gitlab.com if it can't auto-detect the host, so we
+          # also export GITLAB_HOST + GITLAB_TOKEN explicitly.
+          local glab_home="${HOME:-/tmp}/.config/glab-cli"
+          mkdir -p "${glab_home}"
+          if [[ ! -f "${GLAB_CONFIG_DIR}/config.yml" ]]; then
+            echo "ERROR: glab config not found at ${GLAB_CONFIG_DIR}/config.yml" >&2
+            exit 1
+          fi
+          cp "${GLAB_CONFIG_DIR}/config.yml" "${glab_home}/config.yml"
+          chmod 600 "${glab_home}/config.yml"
+          export GLAB_CONFIG_DIR="${glab_home}"
+
+          GITLAB_HOST=$(grep -E '^\s{2}[A-Za-z0-9._-]+:\s*$' "${glab_home}/config.yml" \
+                         | head -1 | tr -d ': ' )
+          GITLAB_TOKEN=$(awk '/^\s{4}token:/ { print $2; exit }' "${glab_home}/config.yml")
+          if [[ -z "${GITLAB_HOST}" || -z "${GITLAB_TOKEN}" ]]; then
+            echo "ERROR: could not parse host/token from ${glab_home}/config.yml" >&2
+            exit 1
+          fi
+          export GITLAB_HOST GITLAB_TOKEN
+        }
+
+        # Resolve tenant-group id from state if not passed via env.
+        resolve_tenant_id() {
+          if [[ -n "${TENANT_GROUP_ID:-}" ]]; then
+            return
+          fi
+          if [[ -f "${STATE_DIR}/tenant-group-id" ]]; then
+            TENANT_GROUP_ID="$(<"${STATE_DIR}/tenant-group-id")"
+          else
+            echo "ERROR: TENANT_GROUP_ID not set and ${STATE_DIR}/tenant-group-id not present" >&2
+            exit 1
+          fi
+        }
+
+        # DNS-1123-compatible subgroup name validation. GitLab itself enforces
+        # stricter rules; this is a fast preflight.
+        require_subgroup_name() {
+          local name="$1"
+          if [[ ! "${name}" =~ ^[a-z0-9]([-a-z0-9_.]*[a-z0-9])?$ ]]; then
+            echo "ERROR: subgroup name '${name}' must be a valid GitLab path segment (lowercase, no slashes)" >&2
+            exit 1
+          fi
+        }
+
+        ensure_subgroup() {
+          local name="$1"
+          local out rc
+          set +e
+          out="$(with_dns_retry glab api -X POST groups \
+            -f "name=${name}" \
+            -f "path=${name}" \
+            -f "parent_id=${TENANT_GROUP_ID}" \
+            -f "visibility=private")"
+          rc=$?
+          set -e
+          if [[ $rc -eq 0 ]]; then
+            echo "Created subgroup: ${name}"
+            return 0
+          fi
+          if [[ "${out}" == *"has already been taken"* ]] \
+             || [[ "${out}" == *"409"* ]] \
+             || [[ "${out}" == *"already exists"* ]]; then
+            echo "Subgroup already exists, reusing: ${name}"
+            return 0
+          fi
+          echo "ERROR: failed to create subgroup '${name}': ${out}" >&2
+          exit 1
+        }
+
+        main() {
+          prepare_glab
+          resolve_tenant_id
+
+          if [[ "$#" -eq 0 ]]; then
+            echo "No subgroups requested"
+            printf '[]' > "${STATE_DIR}/subgroups.json"
+            echo "✅ Subgroups reconciled"
+            return 0
+          fi
+
+          local materialised=()
+          for sg in "$@"; do
+            [[ -z "${sg}" ]] && continue
+            require_subgroup_name "${sg}"
+            ensure_subgroup "${sg}"
+            materialised+=("${sg}")
+          done
+
+          # Emit the materialised list as a JSON array for the Task result.
+          if [[ ${#materialised[@]} -eq 0 ]]; then
+            printf '[]' > "${STATE_DIR}/subgroups.json"
+          else
+            # jq -nc keeps the encoding compact and strict.
+            printf '%s\n' "${materialised[@]}" | jq -Rcn '[inputs]' > "${STATE_DIR}/subgroups.json"
+          fi
+          echo "✅ Subgroups reconciled (${#materialised[@]})"
+        }
+
+        main "$@"
+    - args:
+        - $(params.scopes[*])
+      computeResources:
+        limits:
+          cpu: 500m
+          memory: 256Mi
+        requests:
+          cpu: 100m
+          memory: 128Mi
+      env:
+        - name: CONNECTOR
+          value: $(params.connector)
+        - name: ACCESS_LEVEL
+          value: $(params.accessLevel)
+        - name: TOKEN_DURATION_DAYS
+          value: $(params.tokenDuration)
+        - name: ACCESS_TOKEN_NAME
+          value: $(params.accessTokenName)
+        - name: VERBOSE
+          value: $(params.verbose)
+        - name: GLAB_CONFIG_DIR
+          value: $(workspaces.gitlabconfig.path)
+        - name: GLAB_CHECK_UPDATE
+          value: "false"
+        - name: GLAB_SEND_TELEMETRY
+          value: "false"
+        - name: STATE_DIR
+          value: /workspace/state
+        - name: SECRETS_DIR
+          value: /workspace/secrets
+        - name: SUBGROUPS_JSON_FILE
+          value: /workspace/state/subgroups.json
+      image: $(params.gitlabCliImage)
+      imagePullPolicy: $(params.imagePullPolicy)
+      name: ensure-gat
+      script: |
+        #!/usr/bin/env bash
+        # ensure-gat reads the tenant-group id written by step 1.
+        TENANT_GROUP_ID="$(cat /workspace/state/tenant-group-id)"
+        export TENANT_GROUP_ID
+        # Reassemble scopes from positional args. The Task contract treats
+        # scopes as an array param; passing them via args avoids Tekton's
+        # array-in-env validation rejection.
+        SCOPES="$*"
+        export SCOPES
+        #!/usr/bin/env bash
+        # ensure-gat.sh -- step 3 of gitlab-connector-automatic-creation/0.1
+        #
+        # Three-path Group Access Token lifecycle (per design.md):
+        #
+        #   1. List existing GATs at TENANT_GROUP_ID via `glab api`.
+        #   2. Find the GAT whose name encodes this Task's identity.
+        #       a. matched + not expired   -> ROTATE in place via
+        #          POST /groups/:id/access_tokens/:token_id/rotate
+        #       b. matched + expired       -> fall through to RECREATE
+        #          (revoke old + mint fresh)  -- self-heal
+        #       c. exists with different
+        #          identity                -> RECREATE (revoke + mint fresh)
+        #       d. no match                -> CREATE fresh
+        #
+        # Identity = { ACCESS_LEVEL, SCOPES, SUBGROUPS[] }. Other inputs
+        # (TOKEN_DURATION_DAYS, SECRET name) are NOT identity-affecting.
+        #
+        # The GAT name is `connector-<conn_ns>-<conn_name>/<identity>`. The
+        # `connector-<conn_ns>-<conn_name>` prefix mirrors Harbor's
+        # `connector-<ns>-<name>` robot-account naming convention -- so the
+        # Task does not need a separate `taskIdentityTag` param to find its
+        # own tokens across reruns.
+        #
+        # Inputs (env):
+        #   TENANT_GROUP_ID         -- numeric id from ensure-group.sh state file
+        #   CONNECTOR               -- <namespace>/<name> ref of the tenant
+        #                              Connector; used to derive the GAT name
+        #                              prefix.
+        #   ACCESS_LEVEL            -- guest|reporter|developer|maintainer|owner
+        #   SCOPES                  -- space- or comma-separated GitLab scope set
+        #   TOKEN_DURATION_DAYS     -- string integer of days; computed expiry
+        #                              is `today UTC + N days`. Capped by GitLab
+        #                              instance policy.
+        #   SUBGROUPS_JSON_FILE     -- path to JSON array from ensure-subgroups.sh
+        #   VERBOSE
+        #   GLAB_CONFIG_DIR
+        # Outputs:
+        #   writes the GAT secret to /workspace/secrets/token (tmpfs, mode 0600)
+        #   writes the GAT id     to /workspace/state/access-token-id
+        #
+        # IMPORTANT: this script handles the tenant-side GAT secret. We
+        # explicitly disable xtrace before any code path that touches the
+        # token; verbose tracing only wraps non-secret API calls.
+        set -euo pipefail
+        set +o xtrace 2>/dev/null || true
+
+        : "${TENANT_GROUP_ID:?ensure-gat: TENANT_GROUP_ID is required}"
+        : "${CONNECTOR:?ensure-gat: CONNECTOR is required (<namespace>/<name>)}"
+        : "${ACCESS_LEVEL:=owner}"
+        : "${SCOPES:=api}"
+        : "${TOKEN_DURATION_DAYS:=30}"
+        : "${ACCESS_TOKEN_NAME:=}"
+        : "${SUBGROUPS_JSON_FILE:=/workspace/state/subgroups.json}"
+        : "${VERBOSE:=false}"
+        : "${GLAB_CONFIG_DIR:=/workspace/gitlabconfig}"
+        : "${STATE_DIR:=/workspace/state}"
+        : "${SECRETS_DIR:=/workspace/secrets}"
+
+        # Validate ACCESS_LEVEL up front, in the script (no command substitution),
+        # so a bad value fails fast. access_level_int's `exit 2` is otherwise
+        # swallowed when called inside `$(...)` -- exit only kills the subshell,
+        # the parent script proceeds and mints a GAT with the bad value embedded
+        # in its identity hash.
+        case "${ACCESS_LEVEL,,}" in
+          guest|reporter|developer|maintainer|owner) ;;
+          *)
+            echo "ERROR: invalid accessLevel '${ACCESS_LEVEL}' (expected guest|reporter|developer|maintainer|owner)" >&2
+            exit 2
+            ;;
+        esac
+
+        mkdir -p "${STATE_DIR}" "${SECRETS_DIR}"
+        # Token files written below get umask 077 explicitly; no dir-level chmod
+        # needed (and chmodding an emptyDir owned by a different fsGroup fails
+        # with EPERM on some clusters).
+
+        # Logs follow Harbor's narrative style. See ensure-group.sh top comment.
+        # RESULT: ... lines below are machine-readable contract markers consumed
+        # by tektoncd.feature/script.feature BDD log-pattern checks; keep verbatim.
+
+        # See ensure-group.sh:with_dns_retry for rationale.
+        with_dns_retry() {
+          local out rc attempt=1
+          while :; do
+            set +e
+            out="$("$@" 2>&1)"
+            rc=$?
+            set -e
+            if [[ ${rc} -eq 0 ]] || [[ ${attempt} -ge 3 ]]; then break; fi
+            case "${out}" in
+              *"no such host"*|*"server misbehaving"*|*"i/o timeout"*|*"dial tcp: lookup"*|*"Could not resolve host"*|*"Temporary failure in name resolution"*)
+                echo "WARN: transient DNS failure (attempt ${attempt}/3), retrying in 3s" >&2
+                sleep 3
+                attempt=$((attempt + 1))
+                continue
+                ;;
+            esac
+            break
+          done
+          printf '%s' "${out}"
+          return ${rc}
+        }
+
+        prepare_glab() {
+          # See ensure-group.sh:prepare_glab — glab refuses 0444 configs, and
+          # falls back to gitlab.com when it can't auto-detect the host (it does
+          # NOT auto-pick the single host in our config). Export GITLAB_HOST +
+          # GITLAB_TOKEN so glab's env-var fallback always finds the right host.
+          local glab_home="${HOME:-/tmp}/.config/glab-cli"
+          mkdir -p "${glab_home}"
+          if [[ ! -f "${GLAB_CONFIG_DIR}/config.yml" ]]; then
+            echo "ERROR: glab config not found at ${GLAB_CONFIG_DIR}/config.yml" >&2
+            exit 1
+          fi
+          cp "${GLAB_CONFIG_DIR}/config.yml" "${glab_home}/config.yml"
+          chmod 600 "${glab_home}/config.yml"
+          export GLAB_CONFIG_DIR="${glab_home}"
+
+          GITLAB_HOST=$(grep -E '^\s{2}[A-Za-z0-9._-]+:\s*$' "${glab_home}/config.yml" \
+                         | head -1 | tr -d ': ' )
+          GITLAB_TOKEN=$(awk '/^\s{4}token:/ { print $2; exit }' "${glab_home}/config.yml")
+          if [[ -z "${GITLAB_HOST}" || -z "${GITLAB_TOKEN}" ]]; then
+            echo "ERROR: could not parse host/token from ${glab_home}/config.yml" >&2
+            exit 1
+          fi
+          export GITLAB_HOST GITLAB_TOKEN
+        }
+
+        # GitLab REST `access_level` integer mapping.
+        access_level_int() {
+          case "${1,,}" in
+            guest)      printf '10' ;;
+            reporter)   printf '20' ;;
+            developer)  printf '30' ;;
+            maintainer) printf '40' ;;
+            owner)      printf '50' ;;
+            *) echo "ERROR: invalid accessLevel '$1' (expected guest|reporter|developer|maintainer|owner)" >&2; exit 2 ;;
+          esac
+        }
+
+        # Normalise SCOPES into a comma-free, sorted, space-joined list so that
+        # scope-set comparison is stable (identity check uses this).
+        normalise_scopes() {
+          printf '%s' "$1" | tr ',' ' ' | tr -s ' ' '\n' \
+            | awk 'NF' | sort -u | paste -sd ' ' -
+        }
+
+        # Compute the identity hash that gets embedded in the GAT name. We do
+        # NOT cryptographically hash; we just emit a short, stable, plain
+        # string that is easy to grep in GitLab's GAT list UI. Using a plain
+        # encoding of (accessLevel, scopes, subgroups) keeps the identity check
+        # trivially auditable.
+        compute_identity() {
+          local subs scopes
+          scopes="$(normalise_scopes "${SCOPES}")"
+          if [[ -f "${SUBGROUPS_JSON_FILE}" ]]; then
+            subs="$(jq -r '. | sort | join(",")' < "${SUBGROUPS_JSON_FILE}")"
+          else
+            subs=""
+          fi
+          printf 'al=%s|scopes=%s|subs=%s' "${ACCESS_LEVEL,,}" "${scopes// /,}" "${subs}"
+        }
+
+        # Derive the GAT name prefix. Driver may override via ACCESS_TOKEN_NAME
+        # (param `accessToken`); empty falls back to `connector-<ns>-<name>`.
+        # Mirrors Harbor's `robotAccount` parameter pattern.
+        make_token_prefix() {
+          if [[ -n "${ACCESS_TOKEN_NAME}" ]]; then
+            printf '%s' "${ACCESS_TOKEN_NAME}"
+            return
+          fi
+          local conn_ns conn_name
+          conn_ns="${CONNECTOR%%/*}"
+          conn_name="${CONNECTOR#*/}"
+          printf 'connector-%s-%s' "${conn_ns}" "${conn_name}"
+        }
+
+        # Token names embed prefix + identity so reruns can locate "this Task's"
+        # tokens without colliding with manually-created GATs.
+        make_token_name() {
+          printf '%s/%s' "$(make_token_prefix)" "$(compute_identity)"
+        }
+
+        # Compute expires_at = today UTC + TOKEN_DURATION_DAYS. Empty/zero days
+        # triggers an explicit error -- GitLab GATs require a non-empty expiry.
+        # Uses epoch arithmetic so it works against GNU date, BSD date, AND
+        # busybox date (the catalog glab image is alpine-based -- busybox).
+        compute_token_expiry() {
+          local days="${TOKEN_DURATION_DAYS}"
+          if [[ -z "${days}" || ! "${days}" =~ ^[0-9]+$ || "${days}" -le 0 ]]; then
+            echo "ERROR: tokenDuration must be a positive integer number of days (got '${TOKEN_DURATION_DAYS}'); GitLab GATs require a non-empty expiry" >&2
+            exit 2
+          fi
+          local now future
+          now="$(date -u +%s)"
+          future=$((now + days * 86400))
+          # `-d @<epoch>` is supported by GNU date AND busybox date.
+          date -u -d "@${future}" +%Y-%m-%d 2>/dev/null \
+            || date -u -r "${future}" +%Y-%m-%d
+        }
+
+        # Reuse the host + token already exported by prepare_glab() (so we
+        # don't reparse the config two ways). Falls back to a config-file scan
+        # for git_protocol since prepare_glab doesn't track that.
+        read_glab_host_and_token() {
+          if [[ -z "${GITLAB_HOST:-}" || -z "${GITLAB_TOKEN:-}" ]]; then
+            echo "ERROR: GITLAB_HOST/GITLAB_TOKEN not exported -- prepare_glab must run first" >&2
+            exit 1
+          fi
+          GLAB_HOST="${GITLAB_HOST}"
+          GLAB_TOKEN="${GITLAB_TOKEN}"
+          local cfg="${GLAB_CONFIG_DIR}/config.yml"
+          # awk's FS=[: ]+ collapses runs of [: ] into one separator, so on the
+          # line "    api_protocol: https" $1 is empty (pre-space), $2 is the
+          # key "api_protocol", $3 is the value "https".
+          GLAB_PROTOCOL="$(awk -F'[: ]+' '/^[[:space:]]*api_protocol:[[:space:]]/{print $3; exit}' "${cfg}")"
+          if [[ -z "${GLAB_PROTOCOL}" ]]; then
+            GLAB_PROTOCOL="https"
+          fi
+        }
+
+        list_gats() {
+          with_dns_retry glab api "groups/${TENANT_GROUP_ID}/access_tokens"
+        }
+
+        # Find the GAT (if any) whose name matches the Task's prefix. We match
+        # on the prefix rather than the full identity so that an
+        # identity-affecting change still yields a hit (returning the stale
+        # token id) which we then recreate. Skips revoked tokens because the
+        # GitLab API still lists them but rejects rotate/delete on them
+        # ("400 Bad request - Token already revoked").
+        #
+        # IMPORTANT: validate the response IS a JSON array before piping into
+        # `jq '[.[] | …]'`. When the admin token lacks the required scope or
+        # `owner` access on the tenant group (Pattern B mis-fixture), GitLab
+        # returns `{"message":"403 Forbidden"}` (a JSON object, not an array)
+        # and `glab api` exits non-zero. Without this guard, jq iterates the
+        # object's values and emits an opaque
+        #   `Cannot index string with string "revoked"`
+        # message instead of the real API error.
+        find_matching_gat() {
+          local prefix raw rc api_msg
+          prefix="$(make_token_prefix)/"
+          set +e
+          raw="$(list_gats)"
+          rc=$?
+          set -e
+          if [[ ${rc} -ne 0 ]]; then
+            api_msg="$(printf '%s' "${raw}" | jq -r '.message // .error // empty' 2>/dev/null || true)"
+            [[ -z "${api_msg}" ]] && api_msg="${raw}"
+            echo "ERROR: GitLab refused to list access tokens at group id=${TENANT_GROUP_ID}: ${api_msg}" >&2
+            echo "       admin Connector likely lacks 'api' scope or 'owner' access on the tenant group." >&2
+            exit 1
+          fi
+          if ! printf '%s' "${raw}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+            api_msg="$(printf '%s' "${raw}" | jq -r '.message // .error // empty' 2>/dev/null || true)"
+            [[ -z "${api_msg}" ]] && api_msg="${raw}"
+            echo "ERROR: unexpected GitLab response when listing access tokens at group id=${TENANT_GROUP_ID}: ${api_msg}" >&2
+            echo "       admin Connector likely lacks the permissions required to mint a Group Access Token at this group." >&2
+            exit 1
+          fi
+          printf '%s' "${raw}" | jq --arg prefix "${prefix}" \
+            '[.[] | select(.revoked == false and (.name | startswith($prefix)))] | first // null'
+        }
+
+        is_expired_now() {
+          # GitLab returns "expires_at": "YYYY-MM-DD" (UTC). A null expiry
+          # means non-expiring -- treat as not expired.
+          local expires_at="$1"
+          [[ -z "${expires_at}" || "${expires_at}" == "null" ]] && return 1
+          local today; today="$(date -u +%Y-%m-%d)"
+          # Lexical compare on YYYY-MM-DD is correct.
+          [[ "${expires_at}" < "${today}" ]]
+        }
+
+        mint_gat() {
+          local name="$1"
+          read_glab_host_and_token
+          # Compose form-encoded body; scopes[]= repeats once per scope.
+          local body
+          body="$(printf 'name=%s' "$(printf '%s' "${name}" | jq -sRr '@uri')")"
+          body+="$(printf '&access_level=%s' "$(access_level_int "${ACCESS_LEVEL}")")"
+          local scope; for scope in $(normalise_scopes "${SCOPES}"); do
+            body+="$(printf '&scopes[]=%s' "${scope}")"
+          done
+          body+="$(printf '&expires_at=%s' "$(compute_token_expiry)")"
+          # Trace OFF for the mint call (response carries the secret).
+          set +x
+          local url="${GLAB_PROTOCOL}://${GLAB_HOST}/api/v4/groups/${TENANT_GROUP_ID}/access_tokens"
+          local resp http_code
+          local curl_rc
+          set +e
+          resp="$(with_dns_retry curl -skS -o /tmp/mint_resp -w '%{http_code}' \
+            -X POST "${url}" \
+            -H "PRIVATE-TOKEN: ${GLAB_TOKEN}" \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            --data "${body}")"
+          curl_rc=$?
+          set -e
+          if [[ ${curl_rc} -ne 0 ]] || [[ ! -s /tmp/mint_resp ]]; then
+            echo "ERROR: GitLab GAT mint request failed before HTTP response: rc=${curl_rc} curl_out=${resp}" >&2
+            rm -f /tmp/mint_resp
+            exit 1
+          fi
+          http_code="${resp}"
+          resp="$(cat /tmp/mint_resp)"
+          rm -f /tmp/mint_resp
+          if [[ "${http_code}" != "200" && "${http_code}" != "201" ]]; then
+            if [[ "${resp}" == *"quota"* ]] || [[ "${resp}" == *"limit"* ]]; then
+              echo "ERROR: GitLab refused to mint GAT (token quota likely exhausted at this group): HTTP ${http_code} ${resp}" >&2
+              echo "       Recommend revoking unused tokens at this tenant group." >&2
+              exit 1
+            fi
+            if [[ "${resp}" == *"expires_at"* ]]; then
+              echo "ERROR: GitLab rejected token expiry; check the instance-wide max_token_expiry policy: HTTP ${http_code} ${resp}" >&2
+              exit 1
+            fi
+            echo "ERROR: GitLab refused to mint GAT: HTTP ${http_code} ${resp}" >&2
+            exit 1
+          fi
+          local id token
+          id="$(printf '%s' "${resp}" | jq -r '.id')"
+          token="$(printf '%s' "${resp}" | jq -r '.token')"
+          if [[ -z "${id}" || "${id}" == "null" || -z "${token}" || "${token}" == "null" ]]; then
+            echo "ERROR: GitLab response missing id/token after mint" >&2
+            exit 1
+          fi
+          printf '%s' "${id}" > "${STATE_DIR}/access-token-id"
+          umask 077
+          printf '%s' "${token}" > "${SECRETS_DIR}/token"
+          chmod 600 "${SECRETS_DIR}/token"
+        }
+
+        revoke_gat() {
+          local id="$1"
+          with_dns_retry glab api -X DELETE "groups/${TENANT_GROUP_ID}/access_tokens/${id}" >/dev/null
+        }
+
+        rotate_gat() {
+          local id="$1"
+          set +x
+          local resp
+          if ! resp="$(with_dns_retry glab api -X POST "groups/${TENANT_GROUP_ID}/access_tokens/${id}/rotate")"; then
+            echo "ERROR: GitLab refused to rotate GAT id=${id}: ${resp}" >&2
+            exit 1
+          fi
+          local new_id token
+          new_id="$(printf '%s' "${resp}" | jq -r '.id')"
+          token="$(printf '%s' "${resp}" | jq -r '.token')"
+          if [[ -z "${new_id}" || "${new_id}" == "null" || -z "${token}" || "${token}" == "null" ]]; then
+            echo "ERROR: GitLab rotate response missing id/token" >&2
+            exit 1
+          fi
+          printf '%s' "${new_id}" > "${STATE_DIR}/access-token-id"
+          umask 077
+          printf '%s' "${token}" > "${SECRETS_DIR}/token"
+          chmod 600 "${SECRETS_DIR}/token"
+        }
+
+        main() {
+          prepare_glab
+
+          local desired_name; desired_name="$(make_token_name)"
+          printf '%s' "${desired_name}" > "${STATE_DIR}/access-token-name"
+          local existing existing_id existing_name existing_expires
+          existing="$(find_matching_gat)"
+
+          if [[ "${existing}" == "null" || -z "${existing}" ]]; then
+            echo "No existing access token for this Task — minting new"
+            mint_gat "${desired_name}"
+            echo "Minted access token id=$(<"${STATE_DIR}/access-token-id") name=${desired_name}"
+            echo "RESULT: ensure-gat status=created reason=no-existing-gat"
+            echo "✅ Access token ready"
+            return 0
+          fi
+
+          existing_id="$(printf '%s' "${existing}" | jq -r '.id')"
+          existing_name="$(printf '%s' "${existing}" | jq -r '.name')"
+          existing_expires="$(printf '%s' "${existing}" | jq -r '.expires_at // empty')"
+
+          if is_expired_now "${existing_expires}"; then
+            echo "Existing access token id=${existing_id} expired on ${existing_expires} — recreating"
+            revoke_gat "${existing_id}"
+            mint_gat "${desired_name}"
+            echo "Recreated access token id=$(<"${STATE_DIR}/access-token-id") name=${desired_name}"
+            echo "RESULT: ensure-gat status=recreated reason=expired-fallthrough"
+            echo "✅ Access token ready"
+            return 0
+          fi
+
+          if [[ "${existing_name}" != "${desired_name}" ]]; then
+            echo "Existing access token name=${existing_name} differs from desired=${desired_name} — recreating (identity changed)"
+            revoke_gat "${existing_id}"
+            mint_gat "${desired_name}"
+            echo "Recreated access token id=$(<"${STATE_DIR}/access-token-id") name=${desired_name}"
+            echo "RESULT: ensure-gat status=recreated reason=identity-changed"
+            echo "✅ Access token ready"
+            return 0
+          fi
+
+          echo "Existing access token id=${existing_id} matches identity — rotating in place"
+          rotate_gat "${existing_id}"
+          echo "Rotated access token id=$(<"${STATE_DIR}/access-token-id") name=${desired_name}"
+          echo "RESULT: ensure-gat status=rotated reason=identity-match"
+          echo "✅ Access token ready"
+        }
+
+        main "$@"
+    - computeResources:
+        limits:
+          cpu: 500m
+          memory: 256Mi
+        requests:
+          cpu: 100m
+          memory: 128Mi
+      env:
+        - name: CONNECTOR
+          value: $(params.connector)
+        - name: SECRET
+          value: $(params.secret)
+        - name: VERBOSE
+          value: $(params.verbose)
+        - name: GLAB_CONFIG_DIR
+          value: $(workspaces.gitlabconfig.path)
+        - name: SECRETS_DIR
+          value: /workspace/secrets
+        - name: TOKEN_FILE
+          value: /workspace/secrets/token
+        - name: SUBGROUPS_JSON_FILE
+          value: /workspace/state/subgroups.json
+        - name: WORKSPACE_KUBECONFIG_BOUND
+          value: $(workspaces.kubeconfig.bound)
+        - name: WORKSPACE_KUBECONFIG_PATH
+          value: $(workspaces.kubeconfig.path)
+        - name: RESULT_TENANT_GROUP_PATH
+          value: $(results.tenant-group.path)
+        - name: RESULT_SUBGROUPS_PATH
+          value: $(results.subgroups.path)
+        - name: RESULT_ACCESS_TOKEN_NAME_PATH
+          value: $(results.access-token-name.path)
+        - name: RESULT_CONNECTOR_REF_PATH
+          value: $(results.connector-ref.path)
+      image: $(params.kubectlImage)
+      imagePullPolicy: $(params.imagePullPolicy)
+      name: apply-kubernetes-resources
+      script: |
+        #!/usr/bin/env bash
+        # apply-kubernetes-resources reads tenant-group path + GAT id from
+        # the in-memory state volume and the GAT itself from the tmpfs
+        # secrets volume. The tenant Connector's spec.address is read from
+        # the gitlabconfig workspace (`connector_address` field added by
+        # the GitLab connectorclass), mirroring Harbor's `serveraddress`
+        # pattern. No `kubectl get connector` lookup, no admin PAT in env.
+        TENANT_GROUP_PATH="$(cat /workspace/state/tenant-group-path)"
+        export TENANT_GROUP_PATH
+        ACCESS_TOKEN_ID="$(cat /workspace/state/access-token-id)"
+        export ACCESS_TOKEN_ID
+        ACCESS_TOKEN_NAME="$(cat /workspace/state/access-token-name)"
+        export ACCESS_TOKEN_NAME
+        #!/usr/bin/env bash
+        # apply-kubernetes-resources.sh -- step 4 of gitlab-connector-automatic-creation/0.1
+        #
+        # Reads the freshly-minted tenant GAT from /workspace/secrets/token and
+        # server-side-applies the tenant `Connector` (kind: Connector,
+        # apiVersion: connectors.alauda.io/v1alpha1) plus the auth Secret of
+        # class `connectors.cpaas.io/connector-class: gitlab-pat-auth`.
+        #
+        # Discovery model mirrors Harbor:
+        # - Admin endpoint comes from the `gitlabconfig` workspace's `config.yml`
+        #   (`connector_address:` field, populated by the GitLab connectorclass
+        #   from the admin Connector's `spec.address`). No `kubectl get connector`
+        #   lookup; no admin PAT/GAT in env.
+        # - Cluster apply uses KUBECONFIG from the optional `kubeconfig`
+        #   workspace if bound (kubernetes-class Connector mount); falls back to
+        #   the in-cluster service-account context otherwise.
+        #
+        # Inputs (env):
+        #   CONNECTOR               -- <namespace>/<name> ref of the tenant
+        #                              Connector to create or update.
+        #   SECRET                  -- name of the auth Secret in the connector
+        #                              namespace; defaults to
+        #                              <connector-name>-secret. Bare name only;
+        #                              <namespace>/<name> refs are rejected so a
+        #                              typo cannot land the GAT outside the
+        #                              connector namespace (T4 mitigation).
+        #   TENANT_GROUP_PATH       -- the materialised tenant group path (used
+        #                              in a Connector annotation for traceability).
+        #   ACCESS_TOKEN_ID         -- the GitLab GAT id (recorded as a Secret
+        #                              annotation for revocation lookup).
+        #   ACCESS_TOKEN_NAME       -- the GitLab GAT name (`<prefix>/<identity>`),
+        #                              emitted as the access-token-name result.
+        #   GLAB_CONFIG_DIR         -- path of the gitlabconfig workspace.
+        #   WORKSPACE_KUBECONFIG_BOUND -- "true" when the optional kubeconfig
+        #                              workspace is bound.
+        #   WORKSPACE_KUBECONFIG_PATH  -- path of the optional kubeconfig
+        #                              workspace; the file is named `kubeconfig`.
+        #   VERBOSE                 -- "true" to log progress.
+        #
+        # Inputs (files):
+        #   ${GLAB_CONFIG_DIR}/config.yml -- glab config; the
+        #                              `connector_address` top-level field
+        #                              carries the admin Connector's
+        #                              spec.address.
+        #   /workspace/secrets/token  -- tmpfs file (medium=Memory) holding the
+        #                              GAT secret. Removed in trap-on-EXIT.
+        #
+        # IMPORTANT: tracing is disabled before the secret-bearing code paths.
+        set -euo pipefail
+        set +o xtrace 2>/dev/null || true
+
+        : "${CONNECTOR:?apply-kubernetes-resources: CONNECTOR is required (<namespace>/<name>)}"
+        : "${SECRET:=}"
+        : "${TENANT_GROUP_PATH:=}"
+        : "${ACCESS_TOKEN_ID:=}"
+        : "${ACCESS_TOKEN_NAME:=}"
+        : "${VERBOSE:=false}"
+        : "${GLAB_CONFIG_DIR:=/workspace/gitlabconfig}"
+        : "${SECRETS_DIR:=/workspace/secrets}"
+        : "${TOKEN_FILE:=${SECRETS_DIR}/token}"
+        : "${WORKSPACE_KUBECONFIG_BOUND:=false}"
+        : "${WORKSPACE_KUBECONFIG_PATH:=}"
+
+        # Always rm -f the tmpfs token file on exit -- success or fail.
+        cleanup() {
+          rm -f "${TOKEN_FILE}" 2>/dev/null || true
+        }
+        trap cleanup EXIT
+
+        require_ref() {
+          local name="$1" value="$2"
+          if [[ ! "$value" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?/[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]]; then
+            echo "ERROR: ${name} must be <namespace>/<name> with DNS-1123 names, got '${value}'" >&2
+            exit 1
+          fi
+        }
+
+        # Logs follow Harbor's narrative style. See ensure-group.sh top comment.
+
+        # Optional kubeconfig from a kubernetes-class Connector workspace; falls
+        # back to the in-cluster service-account context if the workspace is
+        # unbound. Mirrors Harbor's prepare_kubeconfig_environment.
+        prepare_kubeconfig() {
+          if [[ "${WORKSPACE_KUBECONFIG_BOUND}" != "true" ]]; then
+            unset KUBECONFIG || true
+            return
+          fi
+          if [[ -z "${WORKSPACE_KUBECONFIG_PATH}" || ! -f "${WORKSPACE_KUBECONFIG_PATH}/kubeconfig" ]]; then
+            echo "ERROR: kubeconfig workspace bound but ${WORKSPACE_KUBECONFIG_PATH}/kubeconfig is missing" >&2
+            exit 1
+          fi
+          export KUBECONFIG="${WORKSPACE_KUBECONFIG_PATH}/kubeconfig"
+        }
+
+        # Read the admin Connector's spec.address from gitlabconfig. The GitLab
+        # connectorclass writes a top-level `connector_address:` field for this
+        # purpose. Glab itself ignores unknown top-level keys.
+        load_admin_endpoint() {
+          local cfg="${GLAB_CONFIG_DIR}/config.yml"
+          if [[ ! -f "${cfg}" ]]; then
+            echo "ERROR: glab config not found at ${cfg} -- is the gitlabconfig workspace bound?" >&2
+            exit 1
+          fi
+          ADMIN_CONNECTOR_ENDPOINT="$(awk '/^connector_address:/{print $2; exit}' "${cfg}")"
+          ADMIN_CONNECTOR_ENDPOINT="${ADMIN_CONNECTOR_ENDPOINT%\"}"
+          ADMIN_CONNECTOR_ENDPOINT="${ADMIN_CONNECTOR_ENDPOINT#\"}"
+          if [[ -z "${ADMIN_CONNECTOR_ENDPOINT}" ]]; then
+            echo "ERROR: connector_address missing from ${cfg} -- the GitLab connectorclass must expose the admin Connector's spec.address" >&2
+            exit 1
+          fi
+          if [[ ! "${ADMIN_CONNECTOR_ENDPOINT}" =~ ^https?:// ]]; then
+            echo "ERROR: connector_address in ${cfg} is not a valid URL: '${ADMIN_CONNECTOR_ENDPOINT}'" >&2
+            exit 1
+          fi
+          export ADMIN_CONNECTOR_ENDPOINT
+        }
+
+        main() {
+          require_ref CONNECTOR "${CONNECTOR}"
+
+          local conn_ns conn_name secret_name
+          conn_ns="${CONNECTOR%%/*}"
+          conn_name="${CONNECTOR#*/}"
+
+          # T4 mitigation: SECRET is a bare resource name in the connector
+          # namespace; reject any value that contains '/' so a typo cannot
+          # land the GAT outside the connector namespace.
+          if [[ "${SECRET}" == */* ]]; then
+            echo "ERROR: secret param '${SECRET}' must be a bare name (no namespace prefix); the Secret is always created in the connector namespace '${conn_ns}'" >&2
+            exit 1
+          fi
+          if [[ -z "${SECRET}" ]]; then
+            secret_name="${conn_name}-secret"
+          else
+            secret_name="${SECRET}"
+          fi
+
+          if [[ ! -f "${TOKEN_FILE}" ]]; then
+            echo "ERROR: tenant GAT not found at ${TOKEN_FILE} -- did step 3 (ensure-gat.sh) run?" >&2
+            exit 1
+          fi
+
+          prepare_kubeconfig
+          load_admin_endpoint
+
+          # T4 mitigation: confirm we have permission to write into the connector
+          # namespace before we apply anything. SelfSubjectAccessReview is callable
+          # by every authenticated user, so this avoids a hard cluster-RBAC
+          # requirement.
+          if ! kubectl auth can-i create secrets -n "${conn_ns}" >/dev/null 2>&1; then
+            echo "ERROR: cannot create secrets in namespace '${conn_ns}' -- check that the namespace exists and that the Task's ServiceAccount has RBAC to write Secret + Connector there" >&2
+            exit 1
+          fi
+
+          # Read the token without leaking via set -x. Don't echo it.
+          set +x
+          local token
+          token="$(<"${TOKEN_FILE}")"
+          if [[ -z "${token}" ]]; then
+            echo "ERROR: tenant GAT file at ${TOKEN_FILE} is empty" >&2
+            exit 1
+          fi
+
+          echo "Applying Kubernetes resources for connector ${CONNECTOR} using secret ${secret_name}"
+
+          # Build the Secret manifest in-memory and pipe to kubectl apply.
+          # We use stringData so kubectl handles base64 encoding for us; we
+          # never base64-encode in shell to avoid leaving the token in argv.
+          local secret_yaml
+          secret_yaml="$(jq -n \
+            --arg ns "${conn_ns}" \
+            --arg name "${secret_name}" \
+            --arg token "${token}" \
+            --arg gat_id "${ACCESS_TOKEN_ID}" \
+            '{
+              apiVersion: "v1",
+              kind: "Secret",
+              metadata: {
+                name: $name,
+                namespace: $ns,
+                labels: {
+                  "connectors.cpaas.io/connector-class": "gitlab-pat-auth"
+                },
+                annotations: ({} + (if $gat_id == "" then {} else {"connectors.cpaas.io/gitlab-access-token-id": $gat_id} end))
+              },
+              type: "connectors.cpaas.io/gitlab-pat-auth",
+              stringData: { token: $token }
+            }')"
+
+          if ! printf '%s\n' "${secret_yaml}" \
+            | kubectl apply --server-side --field-manager=connectors-operator -f -; then
+            echo "ERROR: kubectl apply Secret failed" >&2
+            exit 1
+          fi
+
+          local connector_yaml
+          connector_yaml="$(cat <<EOF
+        apiVersion: connectors.alauda.io/v1alpha1
+        kind: Connector
+        metadata:
+          name: ${conn_name}
+          namespace: ${conn_ns}
+          labels:
+            connectors.cpaas.io/gitlab: "true"
+          annotations:
+            connectors.cpaas.io/tenant-group-path: "${TENANT_GROUP_PATH}"
+        spec:
+          connectorClassName: gitlab
+          address: ${ADMIN_CONNECTOR_ENDPOINT}
+          auth:
+            name: patAuth
+            secretRef:
+              name: ${secret_name}
+              namespace: ${conn_ns}
+        EOF
+        )"
+          printf '%s\n' "${connector_yaml}" \
+            | kubectl apply --server-side --field-manager=connectors-operator -f -
+
+          # Emit Task results so downstream Pipeline steps can consume them.
+          if [[ -n "${RESULT_TENANT_GROUP_PATH:-}" ]]; then
+            printf '%s' "${TENANT_GROUP_PATH}" > "${RESULT_TENANT_GROUP_PATH}"
+          fi
+          if [[ -n "${RESULT_SUBGROUPS_PATH:-}" && -f "${SUBGROUPS_JSON_FILE:-/workspace/state/subgroups.json}" ]]; then
+            cat "${SUBGROUPS_JSON_FILE:-/workspace/state/subgroups.json}" > "${RESULT_SUBGROUPS_PATH}"
+          fi
+          if [[ -n "${RESULT_ACCESS_TOKEN_NAME_PATH:-}" ]]; then
+            printf '%s' "${ACCESS_TOKEN_NAME}" > "${RESULT_ACCESS_TOKEN_NAME_PATH}"
+          fi
+          if [[ -n "${RESULT_CONNECTOR_REF_PATH:-}" ]]; then
+            printf '%s' "${CONNECTOR}" > "${RESULT_CONNECTOR_REF_PATH}"
+          fi
+
+          echo "✅ Kubernetes apply completed"
+        }
+
+        main "$@"
+  volumes:
+    - emptyDir:
+        medium: Memory
+      name: state
+    - emptyDir:
+        medium: Memory
+      name: secrets
+  workspaces:
+    - description: connectors-csi mount of the admin GitLab Connector. Provides `config.yml` (consumed by glab for authentication and host) and `connector_address` (the admin Connector's `spec.address`, used as the tenant Connector's `spec.address`). Mirrors Harbor's harbor-config workspace.
+      name: gitlabconfig
+    - description: Optional kubeconfig CSI mount of a kubernetes-class Connector for cross-cluster apply; when bound the Task exports KUBECONFIG, otherwise kubectl falls back to the in-cluster service-account context. Mirrors Harbor's kube-config workspace.
+      name: kubeconfig
+      optional: true
+EOF
+```
+{/* END GENERATED TASK YAML */}
+
+Verify the Task landed in the chosen namespace:
 
 ```bash
-kubectl get task gitlab-connector-automatic-creation -A
+kubectl get task gitlab-connector-automatic-creation -n "${TARGET_NS}"
 ```
 
-The Task expects two catalog tool images to be reachable from your
-internal registry:
+The Task uses two catalog tool images:
 
-- `glab` — the GitLab CLI used by steps `ensure-group`, `ensure-subgroups`,
-  and `ensure-gat`.
+- `glab` — the GitLab CLI used by steps `ensure-group`, `ensure-subgroups`, and `ensure-gat`.
 - `kubectl` — used by the final `apply-kubernetes-resources` step.
 
-The catalog tool-image ConfigMaps in `kube-public`
-(`catalog.tekton.dev/tool-image-glab`,
-`catalog.tekton.dev/tool-image-kubectl`) advertise the installed
-versions; the Task params `gitlabCliImage` and `kubectlImage` default to
-the catalog images and can be overridden per TaskRun if you need a
-different image (for example a registry-mirrored copy).
+The catalog tool-image ConfigMaps in `kube-public` (`catalog.tekton.dev/tool-image-glab`, `catalog.tekton.dev/tool-image-kubectl`) advertise the installed versions; the Task params `gitlabCliImage` and `kubectlImage` default to those catalog references and can be overridden per TaskRun if you need a different image (for example a registry-mirrored copy).
 
 ## Description
 

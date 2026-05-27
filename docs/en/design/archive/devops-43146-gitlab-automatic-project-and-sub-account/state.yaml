@@ -22,10 +22,10 @@ feature:
   paused_at: null
   paused_reason: null
   profile_history: []
-  shipped_at: null
+  shipped_at: "2026-05-15T01:55:00Z"
 
 stage:
-  current: implement
+  current: archived
   history:
     - stage: init
       outcome: auto-complete
@@ -63,6 +63,30 @@ stage:
     - stage: plan
       outcome: advance
       closed_at: "2026-05-06T10:20:00Z"
+    - stage: implement
+      outcome: advance
+      closed_at: "2026-05-13T01:25:00Z"
+    - stage: qa
+      outcome: advance
+      closed_at: "2026-05-13T04:20:00Z"
+    - stage: accept
+      outcome: advance
+      closed_at: "2026-05-14T05:25:00Z"
+    - stage: docs
+      outcome: advance
+      closed_at: "2026-05-14T05:38:00Z"
+    - stage: regress
+      outcome: advance
+      closed_at: "2026-05-14T22:55:00Z"
+    - stage: security-sign-off
+      outcome: approved
+      closed_at: "2026-05-14T23:15:00Z"
+    - stage: retrospective
+      outcome: advance
+      closed_at: "2026-05-14T23:25:00Z"
+    - stage: ship
+      outcome: shipped
+      closed_at: "2026-05-15T01:55:00Z"
 
 story: null
 stories:
@@ -157,22 +181,23 @@ story_groups:
         pr_state: merged
 
 bundle:
-  synced_manifests: []
-  bundle_image: null
-  bundle_tag: null
+  synced_manifests:
+    - cmd/kodata/connectors-gitlab-tektoncd/1.0.0/install.yaml
+  bundle_image: build-harbor.alauda.cn/devops/connectors-operator-bundle:v1.11.0-beta.146.g1aecd74@sha256:81bc56523b3c097da8247a09a0dda32c6b4da786c8665371b29c90e81d5c0396
+  bundle_tag: v1.11.0-beta.146.g1aecd74
 
 qa:
-  packet_path: null
-  owner: null
-  assigned_at: null
+  packet_path: docs/en/design/devops-43146-gitlab-automatic-project-and-sub-account/qa-packet.md
+  owner: daniel
+  assigned_at: "2026-05-13T04:15:00Z"
 
 acceptance:
-  status: pending
-  report_path: null
+  status: passed
+  report_path: docs/en/design/devops-43146-gitlab-automatic-project-and-sub-account/acceptance.md
 
 regression:
-  status: pending
-  report_path: null
+  status: passed
+  report_path: docs/en/design/devops-43146-gitlab-automatic-project-and-sub-account/regression.md
 
 maturity:
   entries:
@@ -526,17 +551,320 @@ maturity:
       opened_at: "2026-05-12T13:30:00Z"
       closed_at: "2026-05-12T13:30:00Z"
       closed_by: human
+    - stage: implement
+      command: /feature:integrate
+      primary_blocker: none
+      ai_turns: 3
+      driver_edits:
+        files_touched: 0
+        lines_changed: 0
+      custom_prompts: 0
+      duration_min: 5
+      opened_at: "2026-05-13T01:25:00Z"
+      closed_at: "2026-05-13T01:25:00Z"
+      closed_by: ai
+      notes: >
+        Recorded bundle from PipelineRun connectors-operator-rcfjd on
+        commit 51835d3 (completed 2026-05-13T01:01:09Z). Single synced
+        manifest: cmd/kodata/connectors-gitlab-tektoncd/1.0.0/install.yaml
+        (landed via PR #1000 squash, which also carried the
+        sync_install_manifests.sh wiring + values.yaml entry — so this
+        is the first bundle build whose input contains the new manifest).
+        Bundle tag v1.11.0-beta.141.g51835d3, digest
+        sha256:85019b60...01401687. Operator image
+        v1.11.0-g51835d3 sha256:9fdb5b35....
+        Two prior bundle attempts failed on infra (Harbor maintenance at
+        14:02Z; buildx-pod DNS flake at 23:10Z); third attempt succeeded.
+        Those flakes belong to the implement stage's overall waiting cost,
+        not /feature:integrate itself — this entry only logs the command.
+    - stage: qa
+      command: /feature:qa
+      primary_blocker: judgment
+      ai_turns: 10
+      driver_edits:
+        files_touched: 0
+        lines_changed: 0
+      custom_prompts: 0
+      duration_min: 12
+      opened_at: "2026-05-13T04:10:00Z"
+      closed_at: "2026-05-13T04:20:00Z"
+      closed_by: ai
+      notes: >
+        QA packet assembled from tech-design.md ## Test Design + feature.md ACs;
+        all 15 design-listed test cases mapped to BDD scenarios shipped in
+        connectors-extensions PR #269 (tektoncd.feature + script.feature).
+        Evidence collected: (1) `Pipelines as Code CI / gitlab-connector-automatic-creation`
+        success on PR #269 head SHA d3d6148; (2) live smoke on daniel-5shk6:
+        Pattern A TaskRun smoke-tenant-jvzsv + Pattern B TaskRun
+        smoke-tenant-b-2l4bq both Succeeded, resulting Connectors
+        test-smoke-gitlab and test-smoke-b-gitlab Ready+LivenessReady; (3)
+        static Task contract on the deployed bundle matches design
+        (12 params, 4 results, gitlabconfig required + kubeconfig optional,
+        non-root stepTemplate securityContext); (4) cmd/kodata/.../1.0.0/install.yaml
+        present at 1329 lines on operator HEAD 51835d3; (5) doc-sync helper
+        hack/sync_gitlab_connector_automatic_creation_task_doc.sh present.
+        Deviation note: design enumerated 15 cases, BDD ships 17 scenarios
+        (numbering reshuffled during implement — design case 6 split into
+        impl-#6/#7, design case 7 reshaped into impl-#10/#13, design case 13
+        refined into impl-#15). Substance preserved, no AC lost coverage; QA
+        reviewer (= design reviewer per the standard-profile two-approver
+        pattern) accepted the deviations as-shipped. Outcome: advance.
+        Two acknowledged drift items recorded in qa-results.md and not
+        blocking: (a) ConnectorClass gitlab connector_address line auto-sync
+        gap (workaround applied in env; bundle-side fix lands on next
+        operator rebuild); (b) PR #1000 connector-operator-test flake at
+        merge time (separate pipeline; admin-merge override; subsequent
+        bundle build succeeded). Primary blocker = judgment because the
+        slot-reshuffle deviation between design and implementation required
+        a per-case substance review rather than a mechanical 1:1 match.
+    - stage: accept
+      command: /feature:accept
+      primary_blocker: none
+      ai_turns: 3
+      driver_edits:
+        files_touched: 0
+        lines_changed: 0
+      custom_prompts: 0
+      duration_min: 8
+      opened_at: "2026-05-14T05:17:43Z"
+      closed_at: "2026-05-14T05:25:00Z"
+      closed_by: ai
+      notes: >
+        AC-by-AC verification on bundle v146 (post-fix). One general-purpose
+        sub-agent ran /workflow:accept on Story 1's design-change
+        (gitlab-connector-automatic-creation-task in connectors-extensions);
+        Stories 2/3/4 are mechanical-followups with no separate AC list and
+        are covered by Story 1's verification. All 11 ACs PASS with code +
+        BDD scenario + live evidence cited per AC. Substance check confirmed
+        post-amendment AC-7 (idempotent-rerun recovery, F1+F2 verified live
+        as qa9-v146f-zt6xh + reg146-case8-q9bk7); D1+D2 doc-drift items left
+        open as /feature:docs followups (not feature defects). All
+        gitlab-connector-automatic-creation-task/tasks.md items checked.
+        acceptance.md written and signed by daniel as accept reviewer.
+        stage.current advances to docs (the parallel branch of the
+        accept||docs fork) since /feature:docs hasn't been run yet; both
+        must close before /feature:regress can start. primary_blocker=none
+        because evidence was already concentrated in qa-results.md from the
+        /feature:qa pass — the per-AC mapping was mechanical.
+    - stage: docs
+      command: /feature:docs
+      primary_blocker: none
+      ai_turns: 4
+      driver_edits:
+        files_touched: 0
+        lines_changed: 0
+      custom_prompts: 0
+      duration_min: 7
+      opened_at: "2026-05-14T05:31:38Z"
+      closed_at: "2026-05-14T05:38:00Z"
+      closed_by: ai
+      notes: >
+        Drafted release-notes.md mirroring v1.10.0's "Harbor Connector
+        Enhancements" entry shape (the Harbor analogue is the spec-mirror
+        for this feature, so the release-note paragraph reads as the
+        GitLab counterpart). Bundle tag v1.11.0-beta.146.g1aecd74 +
+        digest captured. Enumerated 6 user-facing doc edits in
+        docs-changes.md: 3 already shipped via Story 3 / PR #1002 (concept
+        page glab_cli_config.mdx + how-to using_gitlab_connector_automatic_creation_task.mdx
+        + reference page gitlab_connector_automatic_creation_task.mdx);
+        1 follow-up (overview/release_notes.mdx v1.11.0 entry — left for
+        the v1.11 release-cut owner per the per-release composite-entry
+        convention); 2 design-doc drift fixes applied on this branch
+        (D1 case 5 wording rotate→recreate; D2 case 3 wording on
+        Connector resourceVersion → generation/observedGeneration);
+        1 explicit no-edit-needed (quick_start.mdx — Task has its own
+        how-to + release-notes mention is enough). Both /feature:accept
+        and /feature:docs now closed → stage.current advances to
+        regress. primary_blocker=none because Story 3 had already
+        shipped the substantive docs in PR #1002; this stage only
+        consolidated the release-notes draft + applied the QA-flagged
+        D1+D2 drift fixes — both mechanical from the qa-results.md
+        evidence already on disk.
+    - stage: regress
+      command: /feature:state-repair
+      primary_blocker: flake
+      excluded: true
+      exclusion_reason: state-repair
+      ai_turns: 1
+      driver_edits:
+        files_touched: 1
+        lines_changed: 2
+      custom_prompts: 0
+      duration_min: 5
+      opened_at: "2026-05-14T09:42:00Z"
+      closed_at: "2026-05-14T09:45:00Z"
+      closed_by: human
+      notes: >
+        Bundle drift v141 -> v146 captured. The QA + accept + docs runs all
+        passed against bundle v1.11.0-beta.146.g1aecd74 (after F1+F2 fixes
+        on the jq-error guard and AC-7 idempotent-rerun amendment), but
+        state.yaml.bundle still recorded v1.11.0-beta.141.g51835d3 from the
+        initial /feature:integrate run. /feature:integrate has no
+        stage-aware re-run mode — its skill unconditionally advances
+        stage.current to qa — so re-running it from stage=regress would
+        backtrack past three already-passed stages. state-repair is the
+        documented integrity path for this kind of drift correction
+        per _shared.md.
+    - stage: ship
+      command: /feature:ship
+      primary_blocker: none
+      ai_turns: 1
+      driver_edits:
+        files_touched: 0
+        lines_changed: 0
+      custom_prompts: 0
+      duration_min: 5
+      opened_at: "2026-05-15T01:51:48Z"
+      closed_at: "2026-05-15T01:55:00Z"
+      closed_by: ai
+      notes: >
+        Mechanical ship — wrote maturity-report.md, set feature.shipped_at,
+        advanced stage.current=archived, archived umbrella from
+        docs/en/design/<slug>/ to docs/en/design/archive/<slug>/.
+        feature.parent_epic=DEVOPS-42609 is set in the feature umbrella but
+        no epic umbrella exists at docs/en/design/epics/<epic-slug>/ on this
+        repo (no /feature:epic-init was ever run for DEVOPS-42609 — the
+        feature was effectively standalone with the parent_epic field
+        carried as a Jira reference only). Skipped step 7 (epic state
+        update) for that reason; documented under jira_pending so that if
+        an epic umbrella is created later, the back-link can be added at
+        that time. Jira transition to Done queued in jira_pending[]
+        because jira CLI is not configured in this env (same situation as
+        state-repair Repair#3); driver to flush manually or from a
+        jira-configured env. category_totals.flake corrected from 1 to 0
+        (the prior value was a stale running-total artifact from when
+        Repair#3 was added; the actual non-excluded flake count is 0 — all
+        3 state-repair invocations are excluded entries, which the
+        maturity-report surfaces separately under "Excluded stages").
+        primary_blocker=none because ship is mechanical (template fill +
+        directory move + state-yaml mutation) — no qualitative tradeoffs.
+    - stage: retrospective
+      command: /feature:retro
+      primary_blocker: judgment
+      ai_turns: 3
+      driver_edits:
+        files_touched: 0
+        lines_changed: 0
+      custom_prompts: 0
+      duration_min: 6
+      opened_at: "2026-05-14T23:18:51Z"
+      closed_at: "2026-05-14T23:25:00Z"
+      closed_by: ai
+      notes: >
+        retrospective.md written, 6 Worked + 7 Didn't-Work + 7 Change
+        entries (the 7th — "(template) extend retrospective.md with
+        a PR ledger section" — was added in an in-PR amendment after
+        the driver asked whether PR links belonged in the retro doc;
+        same commit added a ## PR ledger section to retrospective.md
+        listing all 14 DEVOPS-43146 PRs across both repos).
+        7 Change entries appended to docs/en/design/improvement-log.md
+        (4 tooling, 2 template, 1 process). High Change-entry count
+        reflects this being the first risk=sensitive feature through
+        the workflow at scale — so workflow stress-test signal is
+        highest here. Most-actionable: (a) /feature:integrate stage-
+        awareness gap (caused state-repair Repair#3); (b) /feature:
+        record-merge command absent (caused Repair#1+#2); (c)
+        security-reviewers.md unfilled-stub (silently degrades the
+        sign-off gate to self-acting). primary_blocker=judgment
+        because retro is qualitative judgment work synthesized from
+        the lived session arc + project memory + maturity.entries
+        signals. Drafted unilaterally from session context rather
+        than via AskUserQuestion because the driver had already
+        flagged via Discord 22:48Z that the regress-decision details
+        + main-pipeline-flake observation should be captured here
+        verbatim — instructed-style retro, not interactive-elicitation
+        retro.
+    - stage: security-sign-off
+      command: /feature:security-sign-off
+      primary_blocker: judgment
+      ai_turns: 4
+      driver_edits:
+        files_touched: 0
+        lines_changed: 0
+      custom_prompts: 0
+      duration_min: 20
+      opened_at: "2026-05-14T23:10:44Z"
+      closed_at: "2026-05-14T23:15:00Z"
+      closed_by: ai
+      notes: >
+        Pre-ship security sign-off for risk=sensitive feature. Decision:
+        approved. Surface review captured zero net-new operator RBAC
+        across cmd/kodata vs v1.10.0 (no new ClusterRole, Role,
+        ClusterRoleBinding, RoleBinding, ServiceAccount, or Secret;
+        the connectors-gitlab-tektoncd install.yaml ships a single
+        Tekton Task only — RBAC for tenant TaskRuns is the cluster
+        admin's responsibility per threat-model.md T8/T10). Zero new
+        exposed in-cluster endpoints. One third-party egress (configured
+        GitLab API), routed via the existing connectors-proxy path that
+        was already on the v1.10.0 egress allowlist — not a new
+        destination. Reviewer = Daniel under the threat-model.md
+        documented self-acting fallback (security-reviewers.md template
+        is unfilled — flagged as non-blocker finding #1; follow-up PR
+        out of scope here). Two other non-blocker findings (Pattern A
+        owned-groups audit alert deferred to cluster admin; Pattern B
+        umbrella GAT rotation out of scope per next epic story) are
+        consistent with threat-model.md residual-risk acceptance.
+        primary_blocker=judgment because security review is human-
+        judgment work by design (see _shared.md); per the skill notes:
+        "Judgment-classified maturity entries are the honest floor —
+        not a miss." Sign-off at security-sign-off.md.
+    - stage: regress
+      command: /feature:regress
+      primary_blocker: judgment
+      ai_turns: 6
+      driver_edits:
+        files_touched: 0
+        lines_changed: 0
+      custom_prompts: 4
+      duration_min: 240
+      opened_at: "2026-05-14T08:46:27Z"
+      closed_at: "2026-05-14T22:55:00Z"
+      closed_by: ai
+      notes: >
+        R3-relaxed regression decision. Skill offers three execution paths
+        (Tekton PipelineRun lift / make integration / driver-triggered
+        Allure URL); R3 (lift latest green main PipelineRun) was attempted
+        first but no green connector-operator-test PipelineRun exists
+        against v146 (1aecd74) on main — path filters in
+        .tekton/integration-test.yaml didn't fire on the 3 docs-only
+        commits since v146 (8bfebad/292c076/b296cce), and the push on
+        1aecd74 itself wasn't retriggered after a likely flake. Latest
+        green main run was connector-operator-test-v6cv5 against parent
+        SHA 5a9d041 (~1d before this decision). Pipeline pass-rate on
+        main was ~10% over the past 17h (17 Failed incl 5 timeouts / 2
+        Succeeded / 1 Running) so R1 (fresh trigger) had ~80% chance of
+        false-fail + retest. R3-relaxed (cite parent + reason on delta)
+        chosen because: (a) /feature:qa already exercised v146 live on
+        daniel-5shk6 with 11/11 ACs passing — strongest evidence; (b)
+        v146 delta vs 5a9d041 is genuinely outside test/integration
+        scope — F1+F2 are bash inside Tekton script blocks (Tasks run
+        in tenant TaskRuns, not exercised by integration suite),
+        connectors-core image bump validated upstream by core's own
+        suite, sonarqube field add is schema-additive; (c) R1 economics
+        actively bad on this main pipeline; (d) security-sign-off (next
+        gate, mandatory for risk=sensitive) is where audit weight lands,
+        not CI rerun. primary_blocker=judgment because this was a
+        qualitative "evidence-by-reasoning vs evidence-by-run" call
+        with explicit driver alignment — the AI laid out 3 options
+        with tradeoffs and the driver picked. duration_min=240 spans
+        the full session-arc from resume (08:46Z) through bundle-
+        drift fix (state-repair Repair#3 at 09:45Z) through R3 lookup
+        (15:43Z) through option presentation + driver selection
+        (22:49Z) through regression.md write. Regression report at
+        regression.md. Side observation worth flagging in retrospective:
+        the connector-operator-test pipeline on main is in genuinely
+        poor shape — separate Jira candidate, out of scope here.
   category_totals:
-    none: 1
+    none: 5
     template: 0
     skill: 0
     kb: 2
-    judgment: 1
+    judgment: 5
     flake: 0
 
 security:
   threat_model_path: docs/en/design/devops-43146-gitlab-automatic-project-and-sub-account/threat-model.md
-  signoff_path: null
+  signoff_path: docs/en/design/devops-43146-gitlab-automatic-project-and-sub-account/security-sign-off.md
   override:
     from: standard
     to: sensitive
@@ -551,10 +879,36 @@ security:
 
 collisions: []
 
+jira_pending:
+  - command: /feature:ship
+    queued_at: "2026-05-15T01:55:00Z"
+    action: transition_to_done
+    issue: DEVOPS-43146
+    comment: >
+      Feature shipped. Bundle v1.11.0-beta.146.g1aecd74@sha256:81bc56523b3c097da8247a09a0dda32c6b4da786c8665371b29c90e81d5c0396.
+      Maturity report at docs/en/design/archive/devops-43146-gitlab-automatic-project-and-sub-account/maturity-report.md.
+      Category totals (non-excluded): none=5 template=0 skill=0 kb=2 judgment=5 flake=0.
+      Excluded entries (separately tracked): 8 design-loop iterations + 3 state-repair invocations.
+      Reason for queueing: jira CLI not configured in this env at ship time
+      (same situation as state-repair Repair#3 audit-comment).
+  - command: /feature:ship
+    queued_at: "2026-05-15T01:55:00Z"
+    action: epic_back_link
+    epic: DEVOPS-42609
+    note: >
+      feature.parent_epic=DEVOPS-42609 is set on this feature, but no epic
+      umbrella exists at docs/en/design/epics/<epic-slug>/ in this repo
+      (/feature:epic-init was never run for DEVOPS-42609; the feature was
+      effectively standalone with the parent_epic field carried as a Jira
+      reference only). If an epic umbrella is created retroactively via
+      /feature:epic-init DEVOPS-42609, this feature should be added to its
+      shipped_features[] with the archived path
+      docs/en/design/archive/devops-43146-gitlab-automatic-project-and-sub-account/.
+
 integrity:
-  last_hash: "sha256:3d73332e51725802824aa7768435c68f8c5d24c915a1fb29e324a22bc3df1ad2"
-  last_written_by: /feature:state-repair
-  last_written_at: "2026-05-12T13:30:00Z"
+  last_hash: "sha256:f9c6dfaedf495b81e093813a7d34d1e73b89fe36bdb9845447c53b1645cbae09"
+  last_written_by: /feature:ship
+  last_written_at: "2026-05-15T01:55:00Z"
   repairs:
     - at: "2026-05-11T12:15:20Z"
       driver: daniel
@@ -570,3 +924,20 @@ integrity:
       driver: daniel
       audit_reason: >
         Mark Story 1-4 pr_state: ready -> merged after manual admin-squash merges on 2026-05-12 (PR #269 d3d6148 by daniel 08:54Z, PR #1000 12cedc9 by claude 13:12Z, PR #1002 c2847a1 by claude 13:20Z). No /feature:* command exists to auto-record merge events; state-repair is the documented integrity path for this transition before /feature:integrate. PRs #997 and #888 also closed as superseded by #1000's 27-commit rebase squash (their content was already on main via that squash).
+    - at: "2026-05-14T09:45:00Z"
+      driver: daniel
+      audit_reason: >
+        bundle drift v141 -> v146. /feature:integrate (run 2026-05-13)
+        recorded bundle v1.11.0-beta.141.g51835d3 in state.yaml.bundle,
+        but the bundle that actually passed /feature:qa, /feature:accept
+        (11/11 ACs), and /feature:docs was v1.11.0-beta.146.g1aecd74 -
+        a retest after F1 (jq-on-error guard in ensure-gat.sh) and F2
+        (no transactional rollback; AC-7 amended to document
+        idempotent-rerun recovery) fixes were merged into the bundle
+        pipeline. v146 is what was verified end-to-end on daniel-5shk6.
+        /feature:integrate has no stage-aware re-run mode - its skill
+        advances stage.current to qa unconditionally - so re-running it
+        from stage=regress would have backtracked past three
+        already-passed stages. This state-repair updates
+        bundle.{tag,image} to the v146 values that the QA chain
+        actually validated, before /feature:regress kicks off.

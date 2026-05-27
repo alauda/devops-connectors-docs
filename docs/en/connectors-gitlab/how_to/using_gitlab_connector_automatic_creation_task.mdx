@@ -50,8 +50,14 @@ Make sure the environment meets these requirements:
   installed.
 - The
   [`gitlab-connector-automatic-creation` Task](./gitlab_connector_automatic_creation_task.mdx)
-  is installed in the cluster. The connectors-operator installs it
-  together with the rest of the GitLab Connector component.
+  is installed in the namespace where you will run the TaskRun. Apply
+  it from the `cmd/kodata/connectors-gitlab-tektoncd/1.0.0/install.yaml`
+  source manifest (or the published catalog shape) — see the
+  [Installation section of the Task reference](./gitlab_connector_automatic_creation_task.mdx#installation)
+  for the `REGISTRY` + `TARGET_NS` + `envsubst | kubectl apply` recipe.
+  The connectors-operator installs only the framework (CRDs, RBAC,
+  ConnectorClass, ResourceInterface) — the Task itself is user-applied
+  per Tekton convention.
 - The catalog `glab` and `kubectl` tool images are reachable from your
   internal registry. The Task uses the existing
   `catalog.tekton.dev/tool-image-glab` and
@@ -200,11 +206,152 @@ from a `kubernetes`-class Connector:
       configuration.names: kubeconfig
 ```
 
-When the workspace is unbound the Task uses the in-cluster ServiceAccount
-context; that SA needs RBAC to create Secrets and Connectors in the
-connector namespace. See
+**Recommended:** mount a `kubeconfig` workspace from a `kubernetes`-class
+Connector even on the same cluster. It keeps the Task's effective identity
+explicit (the SA whose token the Connector serves) and uniform across
+same-cluster and cross-cluster setups. See
 [Using Kubernetes Connector in Tekton Task](../../connectors-k8s/how_to/using-in-tekton-task.mdx)
-for the Kubernetes Connector setup.
+for the Connector setup.
+
+When the `kubeconfig` workspace is unbound the Task falls back to the
+TaskRun's in-cluster ServiceAccount — viable for same-cluster usage, but
+the platform team usually prefers the kubernetes-Connector path so the
+provisioning identity lives on a Connector, not on a TaskRun's SA.
+
+### ServiceAccount Permissions \{#serviceaccount-permissions}
+
+This Task is intended for **platform teams** who provision GitLab groups
+and `gitlab` Connectors on behalf of many application teams. The
+permission set is small, generic across Connector types (Harbor, GitLab,
+…), and best expressed as a cluster-scoped role bound per tenant
+namespace.
+
+The provisioning ServiceAccount needs write access to two resource kinds
+in each tenant **connector namespace** (the `<conn_ns>` portion of the
+`connector` parameter — e.g. `connectors-management/acme-corp` →
+`connectors-management`):
+
+| API group | Resource | Verbs | Why |
+|---|---|---|---|
+| `""` (core) | `secrets` | `get`, `patch`, `create` | Apply the GAT-bearing Secret (server-side apply uses PATCH; CREATE is needed on first run) |
+| `connectors.alauda.io` | `connectors` | `get`, `patch`, `create` | Apply the tenant `Connector` CR that points at the Secret |
+
+The Task also calls `kubectl auth can-i create secrets` as a pre-flight
+check; that uses `SelfSubjectAccessReview`, which every authenticated
+user can call without explicit RBAC.
+
+**Whose permissions are these?**
+
+- **Recommended path** — the SA whose token is embedded in the kubeconfig
+  served by the kubernetes Connector mounted on the `kubeconfig` workspace.
+- **Same-cluster fallback** — the TaskRun's `serviceAccountName`.
+
+The permission shape is identical either way. Use the same SA (and the
+same ClusterRole + RoleBinding pair below) for the Harbor automatic
+creation Task too — the rules are not GitLab-specific.
+
+#### A dedicated, least-privilege ClusterRole
+
+The operator ships a broad `connectors-connector-editor-role` ClusterRole
+that grants the full edit verb set
+(`{create,delete,get,list,patch,update,watch}`). **The Task does not need
+that surface.** It only ever runs `kubectl apply --server-side` against
+two object kinds — so the supported recipe is **one dedicated** ClusterRole
+with exactly the three verbs the Task uses, named to make the apply-only
+intent obvious:
+
+| ClusterRole | Rules | Verbs |
+|---|---|---|
+| `connectors-tenant-task-writer` | core/`secrets` + `connectors.alauda.io/connectors` | `get`, `patch`, `create` |
+
+Naming convention: `tenant-` prefix flags that the binding scope is the
+tenant namespace (not cluster-wide); `-writer` (vs `-editor`) signals the
+narrow apply-only verb set; `task-` makes clear this is the role for
+Tekton-Task-driven provisioning. Does not collide with anything shipped
+under `cmd/kodata/*/install.yaml`.
+
+#### Platform-team pattern: cluster-scoped role, per-tenant binding
+
+Define the provisioning SA **once**, in a platform namespace, then bind
+the ClusterRole into each tenant namespace via a per-namespace
+`RoleBinding`. This keeps the SA's reach scoped to the namespaces where
+you actually want to provision Connectors (no cluster-wide secret or
+connector write):
+
+```yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: connectors-task-runner
+  namespace: connectors-system
+---
+# Reusable rule template — least-privilege apply set for the Task.
+# Deliberately narrower than the shipped connectors-connector-editor-role
+# (no delete/list/update/watch) since the Task only ever applies.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: connectors-tenant-task-writer
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "patch", "create"]
+  - apiGroups: ["connectors.alauda.io"]
+    resources: ["connectors"]
+    verbs: ["get", "patch", "create"]
+---
+# Per-tenant binding — repeat in each tenant connector namespace the SA
+# is allowed to provision into.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: connectors-task-runner
+  namespace: connectors-management   # ← tenant namespace
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: connectors-tenant-task-writer
+subjects:
+  - kind: ServiceAccount
+    name: connectors-task-runner
+    namespace: connectors-system
+```
+
+To onboard a new tenant namespace later, the platform team applies only
+the RoleBinding (rebound to the new namespace) — no SA or ClusterRole
+churn.
+
+If you need cluster-wide reach (e.g. trust the SA in every namespace),
+swap the per-namespace RoleBinding for a ClusterRoleBinding. This trades
+scoped safety for one less manifest per tenant; pick deliberately.
+
+#### Wiring the SA into the TaskRun
+
+For the **recommended** kubernetes-Connector path, the TaskRun does not
+reference this SA directly — bind it via the kubernetes Connector
+instead, so the SA's token is what the kubeconfig embeds. For the
+**same-cluster fallback**, set it on the TaskRun:
+
+```yaml
+apiVersion: tekton.dev/v1
+kind: TaskRun
+metadata:
+  generateName: gitlab-pattern-a-top-level-
+  namespace: connectors-management
+spec:
+  serviceAccountName: connectors-task-runner   # same-cluster fallback
+  taskRef:
+    name: gitlab-connector-automatic-creation
+  # ... params + workspaces
+```
+
+:::tip
+A future connectors-operator release will likely ship the
+`connectors-tenant-task-writer` ClusterRole above out of the box —
+mirroring the role-shape convention already used by
+`connectors-connector-editor-role` / `connectors-connector-viewer-role`.
+Until then, the platform team owns it.
+:::
 
 ## Step-by-Step — Pattern A: Fresh Creation
 

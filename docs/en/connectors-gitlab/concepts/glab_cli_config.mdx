@@ -72,36 +72,32 @@ trusts GitLab to enforce the resulting permissions. The two supported
 patterns differ only in what kind of credential the admin Connector
 carries and where the tenant group sits in the GitLab namespace tree.
 
-```
-Pattern A — top-level + can_create_group user PAT
-========================================================
-   GitLab instance (root)
-        |
-        +-- acme            <- tenantGroup (top-level)
-        |     +-- backend   <- subgroup
-        |     +-- frontend  <- subgroup
-        |
-        admin user PAT    -> creates `acme`; owner because creator
-        Blast radius     -> every group this user owns instance-wide
+**Pattern A — top-level + `can_create_group` user PAT**
 
-Pattern B — subgroup of umbrella + admin user PAT with Owner on umbrella
-========================================================
-   GitLab instance (root)
-        |
-        +-- umbrella                <- pre-existing umbrella group
-        |     |
-        |     +-- acme              <- tenantGroup (subgroup of umbrella)
-        |     |     +-- backend
-        |     |     +-- frontend
-        |
-        admin user PAT       -> user is direct Owner of `umbrella`,
-                                so it can create subgroups beneath it
-                                AND mint per-tenant GATs on those
-                                subgroups (GAT-creation requires direct
-                                Owner membership; Group Access Tokens
-                                cannot satisfy this)
-        Blast radius         -> the umbrella subtree only
+```mermaid
+graph TD
+    Root["GitLab instance (root)"]
+    Root --> Acme["<b>acme</b><br/>tenantGroup (top-level)"]
+    Acme --> Backend["backend<br/>(subgroup)"]
+    Acme --> Frontend["frontend<br/>(subgroup)"]
 ```
+
+- **Admin user PAT** — creates `acme`; the user becomes Owner because it is the creator.
+- **Blast radius** — every group this user owns instance-wide.
+
+**Pattern B — subgroup of umbrella + admin user PAT with Owner on umbrella**
+
+```mermaid
+graph TD
+    Root["GitLab instance (root)"]
+    Root --> Umbrella["<b>umbrella</b><br/>(pre-existing)"]
+    Umbrella --> Acme["<b>acme</b><br/>tenantGroup (subgroup of umbrella)"]
+    Acme --> Backend["backend"]
+    Acme --> Frontend["frontend"]
+```
+
+- **Admin user PAT** — the user is a direct Owner of `umbrella`, which lets it create subgroups beneath it AND mint per-tenant GATs on those subgroups. GAT-creation requires direct Owner membership; Group Access Tokens cannot satisfy that requirement (see the sidebar below).
+- **Blast radius** — the umbrella subtree only.
 
 | Aspect | Pattern A | Pattern B |
 |---|---|---|
@@ -155,31 +151,17 @@ state and the input parameters:
    [Operations runbook](../how_to/using_gitlab_connector_automatic_creation_task.mdx#operations-runbook)
    covers the alerting that should detect the missed-rotation window.
 
-The lifecycle is depicted below:
+The decision tree below summarises the three paths:
 
-```
-                +-----------------------------+
-                |  Existing tenant GAT?       |
-                +--------------+--------------+
-                               |
-        +----------------------+----------------------+
-        |                                             |
-       no                                            yes
-        |                                             |
-   create new                              +----------+----------+
-   (first run)                             | expired_at < now ?  |
-                                           +----+--------+-------+
-                                                |        |
-                                              yes        no
-                                                |        |
-                                       fall-through   +--+--+
-                                       to recreate    |     |
-                                                identity unchanged?
-                                                      |     |
-                                                     yes    no
-                                                      |     |
-                                                   rotate  recreate
-                                                  in place
+```mermaid
+flowchart TD
+    Start{"Existing tenant GAT?"}
+    Start -- "no" --> CreateNew["Create new<br/>(first run)"]
+    Start -- "yes" --> ExpiredCheck{"expires_at &lt; now?"}
+    ExpiredCheck -- "yes" --> Fallthrough["Fall through<br/>to recreate"]
+    ExpiredCheck -- "no" --> IdentityCheck{"Identity unchanged?"}
+    IdentityCheck -- "yes" --> Rotate["Rotate in place"]
+    IdentityCheck -- "no" --> Recreate["Recreate"]
 ```
 
 ## Tenant-Side Surface

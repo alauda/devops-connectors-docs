@@ -22,6 +22,69 @@ Before upgrading the `Alauda DevOps Connectors` Operator, ensure you:
 - Verify that your existing Connector components configurations are compatible with the new version
 - Confirm that all current components are in a ready state
 
+## Migration to `ConnectorsConfig` \{#migration}
+
+Earlier Connectors releases required administrators to create each
+component CR (`ConnectorsCore`, `ConnectorsGit`, …) directly. Starting
+from the release that ships `ConnectorsConfig`, a single cluster-wide
+`ConnectorsConfig` replaces them all. When such a cluster upgrades,
+the operator absorbs every existing standalone CR into a new
+`ConnectorsConfig` and deletes the originals — **automatically, with
+no manual step**. If the source cluster never had standalone
+component CRs, this section does not apply.
+
+:::warning Migration is one-way
+The bootstrap deletes the original standalone component CRs after
+absorbing their spec. There is no automated rollback — downgrading
+requires re-creating the standalone CRs from your own backup. Back
+up every standalone CR **before** rolling the upgrade:
+:::
+
+```bash
+kubectl get connectorscore,connectorsgit,connectorsgithub,connectorsgitlab,\
+connectorsoci,connectorsharbor,connectorsk8s,connectorsmaven,connectorsnpm,\
+connectorspypi,connectorssonarqube,connectorsnexus,connectorsjfrog \
+  -A -o yaml > connectors-standalone-backup.yaml
+```
+
+### Pre-upgrade Decisions \{#pre-upgrade-decisions}
+
+The migration runs automatically and cannot be paused. Review the
+following **before** the operator upgrade rolls out:
+
+- **Target namespace.** The new `ConnectorsConfig` lands in the
+  namespace of your existing `ConnectorsCore`, or in the operator's
+  install namespace if no `ConnectorsCore` exists. See
+  [Auto-creation namespace priority](../install/install.mdx#auto-creation)
+  for the full rule.
+- **Cross-namespace consolidation.** If standalone CRs span multiple
+  namespaces, every managed child consolidates into the
+  `ConnectorsCore` namespace: originals are deleted, managed children
+  are re-created there. Confirm your standalone-CR layout matches the
+  intended post-upgrade topology.
+
+### Verifying the Migration \{#verifying-migration}
+
+After the operator upgrade reports `Succeeded`, watch the new
+`ConnectorsConfig`:
+
+```bash
+kubectl get connectorsconfig -A
+kubectl describe connectorsconfig connectors-config -n <namespace>
+```
+
+A `BootstrapCompleted` event marks the migration finished, and
+`status.conditions[Ready]=True` indicates every component has
+re-converged. While the operator is still cleaning up the original
+standalone CRs you may briefly see components in the
+[`Migrating`](../install/install.mdx#per-component-phases) phase —
+this is a benign transient state, distinct from `Failed`.
+
+If a component stays in `Failed`, the cause is almost always a stale
+standalone CR the bootstrap could not delete. Follow
+[A Component Is Stuck in `Failed`](../install/install.mdx#failed-component)
+for the diagnostic and recovery steps.
+
 ## Upgrade Process
 
 ### Using `Marketplace`/`OperatorHub`
@@ -100,6 +163,14 @@ After the upgrade completes successfully:
    - Refer to the release notes for specific migration steps
 
 ## Rollback Procedure
+
+:::warning Crossing the ConnectorsConfig migration boundary
+If the upgrade went from a pre-`ConnectorsConfig` release to a release
+that ships `ConnectorsConfig`, downgrading is **not** just an
+uninstall — see [Migration is one-way](#migration). You also need to
+restore the standalone component CRs from your pre-upgrade backup
+before the older operator can re-adopt them.
+:::
 
 If you encounter issues with the new version, you can roll back to the previous version:
 

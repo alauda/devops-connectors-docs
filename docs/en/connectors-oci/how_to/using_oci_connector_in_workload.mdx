@@ -25,6 +25,7 @@ When deploying workloads with the OCI Connector, keep the following key points i
 - **ConnectorOCI is installed and exposed externally (NodePort or Ingress):** Deploy ConnectorOCI and expose it outside the cluster. See the [Installation Guide](../../../install) for details.
 - **Access to a private OCI registry:** You must have valid credentials and access to the target registry.
 - **kubectl configured:** Ensure `kubectl` is installed and configured to access your cluster.
+- **Feature flag enabled:** Set `spec.featureFlags.enable-pod-image-pull-via-connector: "true"` on the `ConnectorsCore` CR. By default this capability is disabled; see [Feature Flags](../../overview/feature_flags.mdx#enable-pod-image-pull-via-connector) for details.
 
 With the OCI Connector, you can securely pull images from private registries in your Kubernetes cluster without storing credentials on the client side. This approach ensures that sensitive credentials are managed centrally and never exposed to individual workloads or users.
 

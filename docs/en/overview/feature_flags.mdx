@@ -25,6 +25,7 @@ data:
   enable-connectors-approval: "false"
   enable-multi-connector: "false"
   enable-custom-ca-certs: "false"
+  enable-pod-image-pull-via-connector: "false"
 ```
 
 All values are string booleans (`"true"` or `"false"`). Because the flags are stored in one shared ConfigMap, they apply to the current Connectors installation rather than to a single Connector.
@@ -48,37 +49,40 @@ This API requires permission to access `ConnectorClass`. For the endpoint detail
 
 ## Update a Feature Flag
 
-Feature flags are configured through the `ConnectorsCore` CR's `spec.featureFlags` field. The operator merges these values into the `connectors-config` ConfigMap during reconciliation, with CR values overriding manifest defaults.
+Feature flags are configured through `ConnectorsConfig.spec.components.core.spec.featureFlags`. The Connectors Operator propagates the value through the managed `ConnectorsCore` child CR, which merges it into the `connectors-config` ConfigMap during reconciliation. CR values override manifest defaults.
 
-### Via ConnectorsCore CR (Recommended)
+### Via ConnectorsConfig (Recommended)
 
-Edit the `ConnectorsCore` CR to set feature flags declaratively:
+Edit the cluster-singleton [`ConnectorsConfig`](../install/install.mdx#how-it-works) to set feature flags declaratively:
 
 ```bash
-kubectl edit connectorscore connectorscore
+kubectl edit connectorsconfig connectors-config -n connectors-operator
 ```
 
 ```yaml
 apiVersion: operator.connectors.alauda.io/v1alpha1
-kind: ConnectorsCore
+kind: ConnectorsConfig
 metadata:
-  name: connectorscore
+  name: connectors-config
 spec:
-  featureFlags:
-    enable-multi-connector: "true"
-    enable-custom-ca-certs: "true"
+  components:
+    core:
+      spec:
+        featureFlags:
+          enable-multi-connector: "true"
+          enable-custom-ca-certs: "true"
 ```
 
 Or use `kubectl patch`:
 
 ```bash
-kubectl patch connectorscore connectorscore --type merge \
-  -p '{"spec":{"featureFlags":{"enable-multi-connector":"true"}}}'
+kubectl patch connectorsconfig connectors-config -n connectors-operator --type merge \
+  -p '{"spec":{"components":{"core":{"spec":{"featureFlags":{"enable-multi-connector":"true"}}}}}}'
 ```
 
-Feature flags declared in `spec.featureFlags` override the manifest defaults in `connectors-config`. Keys not listed in the CR keep their manifest default values. When a new version introduces additional feature flags, they appear automatically with their default values.
+Feature flags declared here override the manifest defaults in `connectors-config`. Keys not listed keep their manifest default values. When a new version introduces additional feature flags, they appear automatically with their default values.
 
-> **Note:** Direct modifications to the `connectors-config` ConfigMap (e.g., via `kubectl edit configmap`) are overwritten during the next reconciliation. Always use the `ConnectorsCore` CR to configure feature flags.
+> **Note:** Do **not** edit the managed `ConnectorsCore` child CR or the `connectors-config` ConfigMap directly — both are reconciled back from `ConnectorsConfig` on the next reconcile. Always update `ConnectorsConfig.spec.components.core.spec.featureFlags`.
 
 ## Built-in Feature Flags
 
@@ -89,6 +93,7 @@ Feature flags declared in `spec.featureFlags` override the manifest defaults in 
 | `enable-connectors-approval` | `"false"` | Enables the Connectors approval workflow for gated access to Connectors Proxy. This flag should be enabled together with `enable-connector-proxy-permissions`. |
 | `enable-multi-connector` | `"false"` | Enables mounting and rendering configuration for multiple Connectors in a single CSI volume. |
 | `enable-custom-ca-certs` | `"false"` | Enables trusting custom CA certificates (global labeled Secrets and per-Connector `spec.caCertSecretRef`) when verifying TLS connections to tools. |
+| `enable-pod-image-pull-via-connector` | `"false"` | Gates the OCI/Harbor PodWebhook's auto-rewrite of Pod image addresses to the Connector Proxy URL. When disabled, Pods that explicitly declare `connectors.cpaas.io/connector` annotation are rejected at admission with a clear error message. |
 
 ## Feature Flag Details
 
@@ -159,6 +164,17 @@ Related reading:
 
 - [Configure Custom CA Certificates](../connectors/how_to/configure_custom_ca_certificates.mdx)
 - [Connector concepts: Custom CA Certificates](../connectors/concepts/connector.mdx#custom-ca-certificates)
+
+### `enable-pod-image-pull-via-connector` \{#enable-pod-image-pull-via-connector}
+
+When this flag is enabled, the OCI and Harbor Connector PodWebhooks rewrite Pod container image addresses to the Connector Proxy URL when the Pod has the `connectors.cpaas.io/connector: <namespace>/<connector-name>` annotation. The kubelet then pulls images through the Connector Proxy using a ServiceAccount-token-based imagePullSecret, so long-term registry credentials do not need to be distributed to user namespaces.
+
+When the flag is disabled (the default), the PodWebhook **rejects** Pod creation requests that carry the `connectors.cpaas.io/connector` annotation, with an error message pointing to this flag and the `ConnectorsCore` CR field for enabling it. Pods without that annotation are unaffected, and existing manual `imagePullSecrets` workflows continue to work normally.
+
+Related reading:
+
+- [Using OCI Connector to Deploy Workloads](../connectors-oci/how_to/using_oci_connector_in_workload.mdx)
+- [Using Harbor Connector to Deploy Workloads](../connectors-harbor/how_to/using_harbor_connector_in_workload.mdx)
 
 ## Next Steps
 

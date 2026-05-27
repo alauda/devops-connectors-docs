@@ -103,6 +103,63 @@ spec:
                   required:
                     - name
                   type: object
+                addressExtensions:
+                  description: |-
+                    AddressExtensions indicates address extension constraints for this ConnectorClass of connectors.
+                    It reuses the same schema as params (name/type/description/default).
+                    A param without default is considered required.
+                  items:
+                    description: |-
+                      ParamSpec defines arbitrary parameters needed beyond typed inputs (such as
+                      resources).
+                    properties:
+                      annotations:
+                        additionalProperties:
+                          type: string
+                        description: |-
+                          Annotations is an unstructured key value map stored with a resource that may be
+                          set by external tools to store and retrieve arbitrary metadata.
+                        type: object
+                      default:
+                        description: Default is the value a parameter takes if no input value is supplied.
+                        x-kubernetes-preserve-unknown-fields: true
+                      description:
+                        description: |-
+                          Description is a user-facing description of the parameter that may be
+                          used to populate a UI.
+                        type: string
+                      enum:
+                        description: |-
+                          Enum declares a set of allowed param input values.
+                          If Enum is not set, no input validation is performed for the param.
+                        items:
+                          type: string
+                        type: array
+                      name:
+                        description: Name declares the name by which a parameter is referenced.
+                        type: string
+                      properties:
+                        additionalProperties:
+                          description: PropertySpec defines the struct for object keys
+                          properties:
+                            type:
+                              description: |-
+                                ParamType indicates the type of an input parameter;
+                                Used to distinguish between a single string and an array of strings.
+                              type: string
+                          type: object
+                        description: Properties is the JSON Schema properties to support key-value pairs parameter.
+                        type: object
+                      type:
+                        description: |-
+                          Type is the user-specified type of the parameter. The possible types
+                          are currently "string", "array" and "object", and "string" is the default.
+                        type: string
+                    required:
+                      - name
+                    type: object
+                  type: array
+                  x-kubernetes-list-type: atomic
                 api:
                   description: |-
                     API defines connectorclass plugin api address and openapi specification

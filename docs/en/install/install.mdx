@@ -3,800 +3,482 @@ weight: 10
 i18n:
   title:
     en: Installation Guide
-sourceSHA: a1eb8934e9479e19453155276f9ffe733039638d332f38f4d0b4ed662827991d
 title: Installation Guide
 ---
 
 # Installation Guide
 
+This guide installs the Connectors system on a Kubernetes cluster. A
+single `ConnectorsConfig` resource drives the whole install — the
+Connectors Operator reconciles it into one managed child CR per
+component (`ConnectorsCore`, `ConnectorsGit`, `ConnectorsOCI`, …).
+
 ## Introduction
 
-The Connectors system has a modular architecture with the following components:
-- **Connectors Operator**: The central management component that handles the deployment and lifecycle of other connector components
-- **ConnectorsCore**: Required core component that provides the foundation for all connector types
-- **ConnectorsGit**: Optional component that adds support for generic Git services.
-- **ConnectorsGitHub**: Optional component that adds support for GitHub-specific features.
-- **ConnectorsGitLab**: Optional component that adds support for GitLab-specific features (GitLab CLI, enhanced authentication)
-- **ConnectorsOCI**: Optional component that adds support for container registries (Harbor, Distribution, etc.)
-- **ConnectorsK8S**: Optional component that adds support for Kubernetes clusters
-- **ConnectorsMaven**: Optional component that adds support for Maven registries (e.g., Maven Central, or Maven repositories hosted on Sonatype Nexus).
-- **ConnectorsPyPI**: Optional component that adds support for Python package registries (e.g., PyPI, or Python repositories hosted on Sonatype Nexus).
-- **ConnectorsNPM**: Optional component that adds support for Node.js package registries (e.g., npm, or Node.js repositories hosted on Sonatype Nexus).
-- **ConnectorsHarbor**: Optional component that adds support for Harbor container registries.
-- **ConnectorsSonarQube**: Optional component that adds support for SonarQube and SonarCloud platforms for code quality analysis.
-This document provides instructions for installing and configuring the Connectors system.
-
-### Prerequisites
-
-Before installing, ensure you have:
-
-- A kubernetes cluster
-- A kubectl cli configured to communicate with your cluster
-- Admin permissions on the cluster
-- Connectors Operator is `Ready` on ACP Operator Hub
-
-### Pod Security Requirements for Installation \{#pod-security-requirements-for-installation}
-
-Kubernetes enforces [Pod Security Standards](https://kubernetes.io/docs/concepts/security/pod-security-standards/) (PSS) at the namespace level. The Connectors system consists of components with different privilege requirements:
-
-| Component  | Suggested Policy | Rationale |
-| ---------- | ---------------- | --------- |
-| **Connectors Operator**                                                                 | `restricted`     | Runs as a standard Kubernetes controller and does not rely on privileged capabilities. The Operator also runs correctly under the less-permissive `baseline`, but `restricted` aligns better with least-privilege practices. |
-| **Other Connectors Components** (ConnectorsCore, ConnectorsGit, ConnectorsGitLab, etc.) | `privileged`     | The Connectors-CSI component requires host-level access (e.g., hostPath mounts, privileged syscalls) to provide CSI driver functionality. This requirement forces the entire namespace to adopt the `privileged` policy.     |
-
-**Note**: If the namespace is configured with an insufficient policy (e.g., `restricted` or `baseline` for CSI components), the CSI driver will fail to start due to blocked privileged operations. Conversely, applying `privileged` where not needed broadens the namespace's attack surface.
-
-### Install Connectors Operator
-
-First, install the Connectors Operator which manages the lifecycle of all other components.
-
-1. Create a namespace for the operator:
-
-   ```bash
-   kubectl create namespace connectors-operator
-   ```
-
-2. Apply the operator subscription YAML:
-
-    ```bash
-    cat <<EOF | kubectl apply -f -
-    apiVersion: operators.coreos.com/v1alpha1
-    kind: Subscription
-    metadata:
-      annotations:
-        cpaas.io/target-namespaces: ""
-      labels:
-        catalog: platform
-      name: connectors-operator
-      namespace: connectors-operator
-    spec:
-      channel: alpha
-      installPlanApproval: Manual
-      name: connectors-operator
-      source: platform
-      sourceNamespace: cpaas-system
-    EOF
-
-    kubectl wait --for=condition=InstallPlanPending subscription.operators.coreos.com/connectors-operator -n connectors-operator
-
-    installplanname=$(kubectl get subscription.operators.coreos.com -n connectors-operator connectors-operator -ojsonpath='{.status.installPlanRef.name}')
-    kubectl patch installplan -n connectors-operator ${installplanname} --type='merge' -p='{"spec":{"approved":true}}'
-    ```
-
-3. Verify the operator is running:
-
-   ```bash
-   kubectl get pods -n connectors-operator
-   ```
-
-   You should see the connectors-operator pod running:
-   ```
-   NAME                                                  READY   STATUS    RESTARTS   AGE
-   connectors-operator-controller-manager-xxxxxx-xxxxx   2/2     Running   0          1m
-   ```
-
-4. Verify that the Custom Resource Definitions (CRDs) have been created:
-
-   ```bash
-   kubectl get crds | grep connectors
-   ```
-
-   You should see CRDs including:
-   ```
-   connectorscore.operator.connectors.alauda.io
-   connectorsgit.operator.connectors.alauda.io
-   connectorsoci.operator.connectors.alauda.io
-   ```
-
-### Install ConnectorsCore
-
-After the operator is running, install the required ConnectorsCore component:
-
-1. Create a namespace for connector components (if not already created):
-
-   ```bash
-   kubectl create namespace connectors-system
-   ```
-
-2. Create the ConnectorsCore custom resource:
-
-   ```bash
-   cat <<EOF | kubectl apply -f -
-   apiVersion: operator.connectors.alauda.io/v1alpha1
-   kind: ConnectorsCore
-   metadata:
-     name: connectors-core
-     namespace: connectors-system
-   spec: {}
-   EOF
-   ```
-
-3. Monitor the deployment progress:
-
-   ```bash
-   kubectl get connectorscore -n connectors-system
-   ```
-
-4. Wait until the status shows that ConnectorsCore is ready:
-
-   ```bash
-   kubectl wait --for=condition=Ready connectorscore/connectors-core -n connectors-system --timeout=300s
-   ```
-
-5. Verify that the core pods are running:
-
-   ```bash
-   kubectl get pods -n connectors-system
-   ```
-
-   You should see core components including:
-   ```
-   NAME                                              READY   STATUS    RESTARTS   AGE
-   connectors-api-xxxxxx                             1/1     Running   0          2m
-   connectors-controller-manager-xxxxxx              1/1     Running   0          2m
-   connectors-proxy-xxxxxx                           1/1     Running   0          2m
-   ```
-
-6. Verify that the CRDs required for connector functionality are installed:
-
-   ```bash
-   kubectl get crds | grep connectors.alauda.io
-   ```
-
-   You should see:
-   ```
-   connectorclasses.connectors.alauda.io
-   connectors.connectors.alauda.io
-   ```
-
-### Install ConnectorsGit (Optional)
-
-To add support for Git services like GitHub, GitLab, etc., install the ConnectorsGit component:
-
-1. Create the ConnectorsGit custom resource:
-
-   ```bash
-   cat <<EOF | kubectl apply -f -
-   apiVersion: operator.connectors.alauda.io/v1alpha1
-   kind: ConnectorsGit
-   metadata:
-     name: connectors-git
-     namespace: connectors-system
-   spec: {}
-   EOF
-   ```
-
-2. Monitor the deployment progress:
-
-   ```bash
-   kubectl get connectorsgit -n connectors-system
-   ```
-
-3. Wait until the status shows that ConnectorsGit is ready:
-
-   ```bash
-   kubectl wait --for=condition=Ready connectorsgit/connectors-git -n connectors-system --timeout=300s
-   ```
-
-4. Verify that the Git plugin is running:
-
-   ```bash
-   kubectl get pods -n connectors-system | grep git
-   ```
-
-   You should see:
-   ```
-   NAME                                   READY   STATUS    RESTARTS   AGE
-   connectors-git-plugin-xxxxxx           1/1     Running   0          1m
-   ```
-
-5. Verify that the Git ConnectorClass has been created:
-
-   ```bash
-   kubectl get connectorclass git
-   ```
-
-   You should see:
-   ```
-   NAME  READY  AGE
-   git   True       1m
-   ```
-
-### Install ConnectorsGitHub (Optional)
-
-To add support for GitHub integration, install the ConnectorsGitHub component:
-
-1. Create the ConnectorsGitHub custom resource:
-
-   ```bash
-   cat <<EOF | kubectl apply -f -
-   apiVersion: operator.connectors.alauda.io/v1alpha1
-   kind: ConnectorsGitHub
-   metadata:
-     name: connectors-github
-     namespace: connectors-system
-   spec: {}
-   EOF
-   ```
-
-2. Monitor the deployment progress:
-
-   ```bash
-   kubectl get connectorsgithub -n connectors-system
-   ```
-
-3. Wait until the status shows that ConnectorsGitHub is ready:
-
-   ```bash
-   kubectl wait --for=condition=Ready connectorsgithub/connectors-github -n connectors-system --timeout=300s
-   ```
-
-4. Verify that the GitHub ConnectorClass has been created:
-
-   ```bash
-   kubectl get connectorclass github
-   ```
-
-### Install ConnectorsGitLab (Optional)
-
-To add support for GitLab-specific features (GitLab CLI, enhanced authentication), install the ConnectorsGitLab component:
-
-1. Create the ConnectorsGitLab custom resource:
-
-   ```bash
-   cat <<EOF | kubectl apply -f -
-   apiVersion: operator.connectors.alauda.io/v1alpha1
-   kind: ConnectorsGitLab
-   metadata:
-     name: connectors-gitlab
-     namespace: connectors-system
-   spec: {}
-   EOF
-   ```
-
-2. Monitor the deployment progress:
-
-   ```bash
-   kubectl get connectorsgitlab -n connectors-system
-   ```
-
-3. Wait until the status shows that ConnectorsGitLab is ready:
-
-   ```bash
-   kubectl wait --for=condition=Ready connectorsgitlab/connectors-gitlab -n connectors-system --timeout=300s
-   ```
-
-4. Verify that the GitLab ConnectorClass has been created:
-
-   ```bash
-   kubectl get connectorclass gitlab
-   ```
-
-   You should see:
-   ```
-   NAME     READY  AGE
-   gitlab   True   1m
-   ```
-
-### Install ConnectorsOCI (Optional)
-
-To add support for container registries, like Harbor, Distribution, etc., install the ConnectorsOCI component:
-
-1. Create the ConnectorsOCI custom resource:
-
-   ClusterIP Expose:
-   ```bash
-   cat <<EOF | kubectl apply -f -
-   apiVersion: operator.connectors.alauda.io/v1alpha1
-   kind: ConnectorsOCI
-   metadata:
-     name: connectors-oci
-     namespace: connectors-system
-   spec: {}
-   EOF
-   ```
-
-   NodePort Expose:
-   ```bash
-   cat <<EOF | kubectl apply -f -
-   apiVersion: operator.connectors.alauda.io/v1alpha1
-   kind: ConnectorsOCI
-   metadata:
-     name: connectors-oci
-     namespace: connectors-system
-   spec:
-    expose:
-      type: NodePort
-      domain: 192.168.1.123
-      nodePort:
-        port: 30000
-   EOF
-   ```
-
-   Ingress Expose:
-
-   ```bash
-   cat <<EOF | kubectl apply -f -
-   apiVersion: operator.connectors.alauda.io/v1alpha1
-   kind: ConnectorsOCI
-   metadata:
-     name: connectors-oci
-     namespace: connectors-system
-   spec:
-    expose:
-      type: Ingress
-      domain: connectors.proxy.com
-   ```
-
-2. Monitor the deployment progress:
-
-   ```bash
-   kubectl get connectorsoci -n connectors-system
-   ```
-
-3. Wait until the status shows that ConnectorsOCI is ready:
-
-   ```bash
-   kubectl wait --for=condition=Ready connectorsoci/connectors-oci -n connectors-system --timeout=300s
-   ```
-
-4. Verify that the OCI plugin is running:
-
-   ```bash
-   kubectl get pods -n connectors-system | grep oci
-   ```
-
-5. Verify that the OCI ConnectorClass has been created:
-
-   ```bash
-   kubectl get connectorclass oci
-   ```
-
-### Install ConnectorsK8S (Optional)
-
-To add support for integration with Kubernetes clusters, install the ConnectorsK8S component:
-
-1. Create the ConnectorsK8S custom resource:
-
-   ```bash
-   cat <<EOF | kubectl apply -f -
-   apiVersion: operator.connectors.alauda.io/v1alpha1
-   kind: ConnectorsK8S
-   metadata:
-     name: connectors-k8s
-     namespace: connectors-system
-   spec: {}
-   EOF
-   ```
-
-2. Monitor the deployment progress:
-
-   ```bash
-   kubectl get connectorsk8s -n connectors-system
-   ```
-
-3. Wait until the status shows that ConnectorsOCI is ready:
-
-   ```bash
-   kubectl wait --for=condition=Ready connectorsk8s/connectors-k8s -n connectors-system --timeout=300s
-   ```
-
-4. Verify that the Kubernetes ConnectorClass is ready:
-
-   ```bash
-   kubectl get connectorclass k8s
-   ```
-
-### Install ConnectorsMaven (Optional)
-
-To add support for integration with Maven registries, install the ConnectorsMaven component:
-
-1. Create the ConnectorsMaven custom resource:
-
-   ```bash
-   cat <<EOF | kubectl apply -f -
-   apiVersion: operator.connectors.alauda.io/v1alpha1
-   kind: ConnectorsMaven
-   metadata:
-     name: connectors-maven
-     namespace: connectors-system
-   spec: {}
-   EOF
-   ```
-
-2. Monitor the deployment progress:
-
-   ```bash
-   kubectl get connectorsmaven -n connectors-system
-   ```
-
-3. Wait until the status shows that ConnectorsMaven is ready:
-
-   ```bash
-   kubectl wait --for=condition=Ready connectorsmaven/connectors-maven -n connectors-system --timeout=300s
-   ```
-
-4. Verify that the Kubernetes ConnectorClass is ready:
-
-   ```bash
-   kubectl get connectorclass maven
-   ```
-
-### Install ConnectorsPyPI (Optional)
-
-To add support for integration with PyPI registries, install the ConnectorsPyPI component:
-
-1. Create the ConnectorsPyPI custom resource:
-
-   ```bash
-   cat <<EOF | kubectl apply -f -
-   apiVersion: operator.connectors.alauda.io/v1alpha1
-   kind: ConnectorsPyPI
-   metadata:
-     name: connectors-pypi
-     namespace: connectors-system
-   spec: {}
-   EOF
-   ```
-
-2. Monitor the deployment progress:
-
-   ```bash
-   kubectl get connectorspypi -n connectors-system
-   ```
-
-3. Verify that the Kubernetes ConnectorClass is ready:
-
-   ```bash
-   kubectl get connectorclass pypi
-   ```
-
-### Install ConnectorsNPM (Optional)
-
-To add support for integration with NPM registries, install the ConnectorsNPM component:
-
-1. Create the ConnectorsNPM custom resource:
-
-   ```bash
-   cat <<EOF | kubectl apply -f -
-   apiVersion: operator.connectors.alauda.io/v1alpha1
-   kind: ConnectorsNPM
-   metadata:
-     name: connectors-npm
-     namespace: connectors-system
-   spec: {}
-   EOF
-   ```
-
-2. Monitor the deployment progress:
-
-   ```bash
-   kubectl get connectorsnpm -n connectors-system
-   ```
-
-3. Verify that the NPM ConnectorClass is ready:
-
-   ```bash
-   kubectl get connectorclass npm
-   ```
-
-### Install ConnectorsHarbor (Optional)
-
-To add support for integration with Harbor registries, install the ConnectorsHarbor component:
-
-1. Create the ConnectorsHarbor custom resource:
-
-   ```bash
-   cat <<EOF | kubectl apply -f -
-   apiVersion: operator.connectors.alauda.io/v1alpha1
-   kind: ConnectorsHarbor
-   metadata:
-     name: connectors-harbor
-     namespace: connectors-system
-   spec: {}
-   EOF
-   ```
-
-2. Monitor the deployment progress:
-
-   ```bash
-   kubectl get connectorsharbor -n connectors-system
-   ```
-
-3. Verify that the Harbor ConnectorClass is ready:
-
-   ```bash
-   kubectl get connectorclass harbor
-   ```
-
-### Install ConnectorsSonarQube (Optional)
-
-To add support for integration with SonarQube and SonarCloud platforms, install the ConnectorsSonarQube component:
-
-1. Create the ConnectorsSonarQube custom resource:
-
-   ```bash
-   cat <<EOF | kubectl apply -f -
-   apiVersion: operator.connectors.alauda.io/v1alpha1
-   kind: ConnectorsSonarQube
-   metadata:
-     name: connectors-sonarqube
-     namespace: connectors-system
-   spec: {}
-   EOF
-   ```
-
-2. Monitor the deployment progress:
-
-   ```bash
-   kubectl get connectorssonarqube -n connectors-system
-   ```
-
-3. Verify that the SonarQube ConnectorClass is ready:
-
-   ```bash
-   kubectl get connectorclass sonarqube
-   ```
-
-### Install ConnectorsNexus (Optional)
-
-To add support for integration with Nexus repositories, install the ConnectorsNexus component:
-
-1. Create the ConnectorsNexus custom resource:
-
-   ```bash
-   cat <<EOF | kubectl apply -f -
-   apiVersion: operator.connectors.alauda.io/v1alpha1
-   kind: ConnectorsNexus
-   metadata:
-     name: connectors-nexus
-     namespace: connectors-system
-   spec: {}
-   EOF
-   ```
-
-2. Monitor the deployment progress:
-
-   ```bash
-   kubectl get connectorsnexus -n connectors-system
-   ```
-
-3. Verify that the Nexus ConnectorClass is ready:
-
-   ```bash
-   kubectl get connectorclass nexus
-   ```
-
-
-## Uninstall Connectors
-
-To uninstall the Connectors system, remove components in the reverse order of installation.
-
-1. Delete the optional components first (if installed):
-
-   ```bash
-   # Delete ConnectorsOCI
-   kubectl delete connectorsoci --all -n connectors-system
-
-   # Delete ConnectorsGit
-   kubectl delete connectorsgit --all -n connectors-system
-
-   # Delete ConnectorsGitHub
-   kubectl delete connectorsgithub --all -n connectors-system
-
-   # Delete ConnectorsGitLab
-   kubectl delete connectorsgitlab --all -n connectors-system
-
-   # Delete ConnectorsK8S
-   kubectl delete connectorsk8s --all -n connectors-system
-
-   # Delete ConnectorsMaven
-   kubectl delete connectorsmaven --all -n connectors-system
-
-   # Delete ConnectorsPyPI
-   kubectl delete connectorspypi --all -n connectors-system
-
-   # Delete ConnectorsNPM
-   kubectl delete connectorsnpm --all -n connectors-system
-
-   # Delete ConnectorsHarbor
-   kubectl delete connectorsharbor --all -n connectors-system
-
-   # Delete ConnectorsSonarQube
-   kubectl delete connectorssonarqube --all -n connectors-system
-
-   # Delete ConnectorsNexus
-   kubectl delete connectorsnexus --all -n connectors-system
-   ```
-
-2. Delete the core component:
-
-   ```bash
-   kubectl delete connectorscore --all -n connectors-system
-   ```
-
-3. Delete the operator:
-
-   ```bash
-   kubectl delete -n connectors-operator subscription.operators.coreos.com/connectors-operator
-   ```
-
-4. Delete the namespaces:
-
-   ```bash
-   kubectl delete namespace connectors-system
-   kubectl delete namespace connectors-operator
-   ```
-
-## Custom Configuration
-
-You can customize the deployment of connector components to better suit your environment. All connector components share a similar configuration structure.
-
-### ConnectorsCore Configuration
-
-When creating the ConnectorsCore resource, you can specify custom configuration:
+The Connectors system has a modular architecture composed of:
+
+- **Connectors Operator** — the management component that reconciles
+  `ConnectorsConfig` and installs every other component.
+- **ConnectorsConfig** — the single cluster-wide resource that declares
+  which components are installed.
+- **Connectors components** — `ConnectorsCore` plus optional per-tool
+  components.
+
+| Component               | Required | Purpose                                                       |
+| ----------------------- | -------- | ------------------------------------------------------------- |
+| **ConnectorsCore**      | Yes      | Foundation used by every other component.                     |
+| **ConnectorsGit**       | No       | Generic Git services.                                         |
+| **ConnectorsGitHub**    | No       | GitHub-specific features.                                     |
+| **ConnectorsGitLab**    | No       | GitLab-specific features.                                     |
+| **ConnectorsOCI**       | No       | OCI container registries.                                     |
+| **ConnectorsK8S**       | No       | Kubernetes clusters.                                          |
+| **ConnectorsMaven**     | No       | Maven repositories.                                           |
+| **ConnectorsPyPI**      | No       | Python package registries.                                    |
+| **ConnectorsNPM**       | No       | Node.js package registries.                                   |
+| **ConnectorsHarbor**    | No       | Harbor-specific APIs in addition to the OCI capability.       |
+| **ConnectorsSonarQube** | No       | SonarQube and SonarCloud platforms.                           |
+| **ConnectorsNexus**     | No       | Sonatype Nexus repository manager.                            |
+| **ConnectorsJFrog**     | No       | JFrog Artifactory repository manager.                         |
+
+Administrators only need to manage `ConnectorsConfig`. The operator
+creates, updates, and deletes every component child resource derived
+from it.
+
+## Prerequisites
+
+- A Kubernetes cluster.
+- A `kubectl` CLI configured to communicate with the cluster.
+- Cluster-admin permissions.
+- The `Alauda DevOps Connectors` operator package available on the
+  platform's OperatorHub.
+
+### Pod Security Requirements \{#pod-security-requirements-for-installation}
+
+Kubernetes enforces [Pod Security Standards](https://kubernetes.io/docs/concepts/security/pod-security-standards/) (PSS)
+at the namespace level. The Connectors system uses two namespaces with
+different privilege requirements:
+
+| Namespace                                                                        | Suggested Policy | Rationale                                                                                                                                                              |
+| -------------------------------------------------------------------------------- | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Operator namespace** (`connectors-operator`)                                   | `restricted`     | Runs a standard Kubernetes controller and does not require privileged capabilities. `baseline` also works, but `restricted` better aligns with least-privilege.        |
+| **Components namespace** (where `ConnectorsConfig` and its children are created) | `privileged`     | The [`connectors-csi`](../connectors/concepts/connectors_csi.mdx) DaemonSet shipped by `ConnectorsCore` requires host-level access (hostPath volumes, privileged syscalls). The entire namespace must allow this. |
+
+If the components namespace is configured with `restricted` or `baseline`,
+the CSI driver fails to start. See [Troubleshooting](#troubleshooting)
+for the recovery procedure.
+
+## How ConnectorsConfig Works \{#how-it-works}
+
+`ConnectorsConfig` is the cluster-wide control resource for the whole
+Connectors install. Platform administrators edit `ConnectorsConfig`;
+the operator reconciles it into per-component child CRs. Do **not**
+edit the managed child CRs (`ConnectorsCore`, `ConnectorsGit`, …)
+directly — the operator overwrites them on the next reconcile.
+
+### Cluster Singleton \{#cluster-singleton}
+
+Although `ConnectorsConfig` is namespaced, the admission webhook lists
+across all namespaces on every create and rejects the request if any
+other `ConnectorsConfig` already exists — including one that is
+currently being deleted (its finalizer may still be cleaning up child
+CRs). This enforces a cluster-wide singleton: every managed child CR
+belongs to exactly one parent, and the cluster has a single source of
+truth for which components are installed.
+
+### Auto-creation on Operator Startup \{#auto-creation}
+
+When the operator starts and no `ConnectorsConfig` exists, it creates a
+default one with every supported component enabled at defaults. The
+target namespace is resolved with the following priority:
+
+1. **The namespace of an existing `ConnectorsCore`** — preserved on the
+   upgrade path so the managed children land where the previous
+   standalone install lived. See
+   [Migration to ConnectorsConfig](../upgrade/upgrade.mdx#migration)
+   in the upgrade guide.
+2. **The operator's own install namespace** (`SYSTEM_NAMESPACE`
+   injected via the Downward API) — used for fresh installs.
+
+The bootstrap runs as a leader-elected runnable, so it re-executes on
+every leader election (first deploy, rolling restart, leader pod
+replacement). The work is **idempotent** — if a `ConnectorsConfig`
+already exists, the bootstrap exits without touching the cluster
+state.
+
+Confirm the bootstrap ran by looking for `BootstrapStarted` and
+`BootstrapCompleted` events:
+
+```bash
+kubectl describe connectorsconfig connectors-config -n <namespace>
+```
+
+### Deletion Cascade \{#deletion-cascade}
+
+Deleting the `ConnectorsConfig` triggers cascading deletion of every
+managed child CR through the owner reference (`Controller=true`,
+`BlockOwnerDeletion=true`). The parent's finalizer prevents
+`ConnectorsConfig` itself from being removed until every child CR has
+finished its own finalizer, so deletion is safe even when a component
+takes time to drain.
+
+## Step 1: Install the Connectors Operator \{#install-operator}
+
+Install the `Alauda DevOps Connectors` operator from the platform's
+OperatorHub — do **not** create the operator `Subscription` by hand.
+
+1. Log in to the platform as an administrator.
+2. Navigate to **Administrator → Marketplace → OperatorHub**.
+3. Search for `Alauda DevOps Connectors` and open the operator's detail page.
+4. Click **Install**, then choose:
+   - **Channel** — pick the release channel you intend to track.
+   - **Install namespace** — the operator's own namespace
+     (`connectors-operator` is the recommended default; any namespace works).
+   - **Approval strategy** — Automatic or Manual, per your upgrade policy.
+5. Approve the install plan if you chose **Manual**.
+6. Wait until the operator's subscription reports `Succeeded` on the
+   operator detail page.
+
+Once the operator is reported as `Ready`, verify the controller pod
+and the expected CRDs from the command line:
+
+```bash
+kubectl get pods -n connectors-operator
+```
+
+```
+NAME                                                  READY   STATUS    RESTARTS   AGE
+connectors-operator-controller-manager-xxxxxx-xxxxx   2/2     Running   0          1m
+```
+
+```bash
+kubectl get crds | grep operator.connectors.alauda.io
+```
+
+You should see CRDs including `connectorsconfigs.operator.connectors.alauda.io`,
+`connectorscores.operator.connectors.alauda.io`, and one CRD per
+supported component.
+
+## Step 2: Install Connectors Components \{#install-components}
+
+Components are installed through a single `ConnectorsConfig` resource.
+See [Cluster Singleton](#cluster-singleton) for the one-per-cluster
+constraint.
+
+### Default Install (Recommended) \{#default-install}
+
+When the operator starts and no `ConnectorsConfig` exists, it
+automatically creates a default one, enabling every supported
+component at defaults:
 
 ```yaml
 apiVersion: operator.connectors.alauda.io/v1alpha1
-kind: ConnectorsCore
+kind: ConnectorsConfig
 metadata:
-  name: connectors-core
-  namespace: connectors-system
-spec:
-  # Configure specific workloads
-  workloads:
-  - name: connectors-api
-    replicas: 2
-    template:
-      spec:
-        containers:
-        - name: api
-          imagePullPolicy: Always
-          resources:
-            limits:
-              cpu: 500m
-              memory: 512Mi
-            requests:
-              cpu: 200m
-              memory: 256Mi
-          securityContext:
-            readOnlyRootFilesystem: true
-        nodeSelector:
-          kubernetes.io/os: linux
-
-  - name: connectors-controller-manager
-    replicas: 1
-    template:
-      spec:
-        containers:
-        - name: manager
-          resources:
-            limits:
-              cpu: 300m
-              memory: 512Mi
-
-  - name: connectors-proxy
-    replicas: 2
-    template:
-      spec:
-        containers:
-        - name: proxy
-          resources:
-            limits:
-              cpu: 200m
-              memory: 256Mi
+  name: connectors-config
+  namespace: connectors-operator   # fresh install: the operator's install namespace
+spec: {}
 ```
 
-### ConnectorsGit Configuration
+The target namespace is **not always** the operator's install
+namespace. On the upgrade path, if a `ConnectorsCore` already exists,
+the bootstrap reuses that namespace so the new managed children land
+alongside the existing standalone install. See
+[Auto-creation namespace priority](#auto-creation) for the full
+resolution rule.
 
-Custom configuration for the Git plugin:
+Verify the install converges (replace the namespace if the bootstrap
+picked a different one):
+
+```bash
+kubectl get connectorsconfig -A
+kubectl wait --for=condition=Ready connectorsconfig/connectors-config \
+  -n connectors-operator --timeout=600s
+```
+
+To choose a different install namespace, or to customize the spec
+before the components are created, pre-create `ConnectorsConfig`
+yourself with the [Manual Install](#manual-install) procedure below
+**before** the operator starts. The bootstrap detects the existing
+`ConnectorsConfig` and skips its own default creation.
+
+### Manual Install \{#manual-install}
+
+If automatic creation is disabled, create the `ConnectorsConfig`
+yourself in the namespace that should host the components. The
+namespace name is your choice — `connectors-system` is used below as
+an example. Whichever namespace you create the `ConnectorsConfig` in
+is where every component child CR will be created.
+
+```bash
+kubectl create namespace connectors-system
+
+cat <<EOF | kubectl apply -f -
+apiVersion: operator.connectors.alauda.io/v1alpha1
+kind: ConnectorsConfig
+metadata:
+  name: connectors-config
+  namespace: connectors-system
+spec: {}
+EOF
+```
+
+### Verify the Installation \{#verify}
+
+The commands below use `connectors-operator` — the default-install
+namespace. If you created the `ConnectorsConfig` yourself in a
+different namespace (the Manual Install path above), substitute that
+namespace instead.
+
+Check the roll-up condition:
+
+```bash
+kubectl get connectorsconfig -A
+kubectl describe connectorsconfig connectors-config -n connectors-operator
+```
+
+`status.conditions[Ready]=True` indicates every enabled component
+finished installing. For per-component phases and the meaning of each
+condition, see [Status & Phases](#status).
+
+List the `ConnectorClass` resources each component registers — these
+are the per-tool integration types the Connectors system exposes (see
+[ConnectorClass](../connectors/concepts/connectorclass.mdx)):
+
+```bash
+kubectl get connectorclass
+```
+
+## Step 3: Customize Your Install (Advanced) \{#customize}
+
+`spec: {}` enables every component with defaults. Most installs need
+nothing else. Use this section when you need to opt components out,
+tune feature flags, or override workload settings.
+
+`ConnectorsConfig.spec` has two top-level fields:
+
+- **`spec.components`** — a map keyed by short component name
+  (`core`, `git`, `github`, `gitlab`, `oci`, `harbor`, `k8s`, `maven`,
+  `npm`, `pypi`, `sonarqube`, `nexus`, `jfrog`). Each value is a
+  `ComponentConfig` with `enabled` (`true` by default; `core.enabled:
+  false` is rejected) and `spec` (component-specific configuration,
+  same schema as the corresponding standalone component CR).
+  Components not listed in the map are enabled with default settings.
+- **`spec.global`** — defaults shared by every component (`registry`,
+  `labels`, `annotations`). Merge precedence is **component value
+  wins** — a key set on both `global` and the component falls back to
+  the global value only when the component omits it.
+
+The five examples below cover the most common customizations. For the
+full per-component schema, refer to the
+[`ConnectorsConfig` CRD reference](../apis/kubernetes_apis/operator/operator.connectors.alauda.io_connectorsconfigs.mdx).
+
+### Disable Components \{#disable}
 
 ```yaml
-apiVersion: operator.connectors.alauda.io/v1alpha1
-kind: ConnectorsGit
-metadata:
-  name: connectors-git
-  namespace: connectors-system
 spec:
-  # Configure workloads
-  workloads:
-  - name: connectors-git-plugin
-    replicas: 2
-    template:
-      spec:
-        containers:
-        - name: plugin
-          resources:
-            limits:
-              cpu: 300m
-              memory: 256Mi
-            requests:
-              cpu: 100m
-              memory: 128Mi
+  components:
+    sonarqube: { enabled: false }
+    nexus:     { enabled: false }
 ```
 
-### ConnectorsOCI Configuration
+### Set Feature Flags on `core` \{#feature-flags}
 
-Custom configuration for the OCI plugin:
+`featureFlags` toggles optional behaviours on `ConnectorsCore`. See
+[Feature Flags](../overview/feature_flags.mdx) for the full list of
+supported flags and what each one changes.
 
 ```yaml
-apiVersion: operator.connectors.alauda.io/v1alpha1
-kind: ConnectorsOCI
-metadata:
-  name: connectors-oci
-  namespace: connectors-system
 spec:
-  # Configure workloads
-  workloads:
-  - name: connectors-oci-plugin
-    replicas: 2
-    template:
+  components:
+    core:
       spec:
-        containers:
-        - name: plugin
-          resources:
-            limits:
-              cpu: 300m
-              memory: 256Mi
-            requests:
-              cpu: 100m
-              memory: 128Mi
+        featureFlags:
+          enable-multi-connector: "true"
+          enable-custom-ca-certs: "true"
 ```
 
-### Additional Configurations
-
-For advanced deployments, you can also specify:
+### Override the Image Registry (Global) \{#registry}
 
 ```yaml
-apiVersion: operator.connectors.alauda.io/v1alpha1
-kind: ConnectorsCore
-metadata:
-  name: connectors-core
-  namespace: connectors-system
 spec:
-  # Specify additional manifests to install
-  additionalManifests: "<additional manifests>"
-
-  # Other configurations as needed
+  global:
+    registry: registry.example.com/connectors
 ```
 
-## Troubleshooting
+The registry prefix is applied to every component's workload images
+unless a component overrides it locally with its own
+`spec.components.<name>.spec.registry`.
 
-### connectors-csi is not ready
+### Tune Workload Replicas and Resources \{#workloads}
 
-If `daemonset/connectors-csi` is not ready, check the events of the `connectors-csi` pod.
-A common error looks like:
+Every component embeds the same `workloads` schema. The deployment
+name varies per component; discover it with:
+
+```bash
+kubectl -n <components-namespace> get deploy
+```
+
+The pattern below applies uniformly to `core`, `git`, `gitlab`,
+`github`, `oci`, `harbor`, `k8s`, `maven`, `npm`, `pypi`, `sonarqube`,
+`nexus`, and `jfrog`:
+
+```yaml
+spec:
+  components:
+    git:
+      spec:
+        workloads:
+          - name: connectors-git-plugin
+            replicas: 2
+            template:
+              spec:
+                containers:
+                  - name: plugin
+                    resources:
+                      limits:   { cpu: 300m, memory: 256Mi }
+                      requests: { cpu: 100m, memory: 128Mi }
+```
+
+### Expose the OCI Proxy Externally \{#oci-expose}
+
+`ConnectorsOCI` supports three exposure modes. Pick one:
+
+```yaml
+# ClusterIP (default): in-cluster access only
+spec:
+  components:
+    oci:
+      spec: {}
+```
+
+```yaml
+# NodePort: external access via a node IP
+spec:
+  components:
+    oci:
+      spec:
+        expose:
+          type: NodePort
+          domain: 192.168.1.100
+          nodePort:
+            port: 30080
+```
+
+```yaml
+# Ingress: external access via a hostname
+spec:
+  components:
+    oci:
+      spec:
+        expose:
+          type: Ingress
+          domain: connectors.proxy.example.com
+```
+
+## Status & Phases \{#status}
+
+`ConnectorsConfig.status` reports both a roll-up cluster condition and
+per-component state.
+
+### Conditions
+
+| Condition         | True when                                                                                                |
+| ----------------- | -------------------------------------------------------------------------------------------------------- |
+| `ComponentsReady` | Every enabled component reports `Ready=True`. The message tracks `ready/enabled (disabled)` counts.       |
+| `Migrated`        | Any bootstrap migration has been recorded, or none was needed. Reason: `MigrationCompleted` or `NonMigration`. |
+| `Ready`           | Both `ComponentsReady` and `Migrated` are `True`.                                                        |
+
+### Per-component Phases \{#per-component-phases}
+
+`status.components` maps component name to a phase:
+
+| Phase       | Meaning                                                                                                                                                            |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `Pending`   | The child CR has not been created yet (initial state before the first reconcile).                                                                                  |
+| `Creating`  | Child CR was just created, or its installer is still rolling out.                                                                                                  |
+| `Updating`  | The installer is rolling out an updated bundle.                                                                                                                    |
+| `Ready`     | The child CR reports `Ready=True`.                                                                                                                                 |
+| `Migrating` | A pre-`ConnectorsConfig` standalone CR is still terminating while the managed child is already in place. Benign transient state during [migration](../upgrade/upgrade.mdx#migration). |
+| `Deleting`  | The component was disabled or removed and its child CR is being deleted.                                                                                           |
+| `Failed`    | A non-transient error blocks installation (see status `message`).                                                                                                  |
+| `Disabled`  | Component is disabled in `spec.components`.                                                                                                                        |
+
+## Uninstall \{#uninstall}
+
+Removing the `ConnectorsConfig` cascades into every managed component
+(replace the namespace with the one you used at install time):
+
+```bash
+kubectl delete connectorsconfig connectors-config -n connectors-operator
+```
+
+A finalizer on `ConnectorsConfig` prevents the parent from being
+removed until every child CR has finished draining, so deletion is
+safe even when a component takes time to clean up.
+
+To also remove the operator itself, look up the actual `Subscription`
+name first — OperatorHub names it after the operator package, which
+may differ across platforms:
+
+```bash
+kubectl get subscription -n connectors-operator
+kubectl delete subscription -n connectors-operator <subscription-name>
+kubectl delete namespace connectors-operator
+```
+
+If you installed the components in a separate namespace (Manual
+Install), delete that namespace as well.
+
+## Troubleshooting \{#troubleshooting}
+
+### `connectors-csi` Is Not Ready
+
+If `daemonset/connectors-csi` is not ready, check the pod events:
 
 ```
-Error creating: pods "connectors-csi-d4r6r" is forbidden: violates PodSecurity "baseline:latest": non-default capabilities (container "driver" must not include "SYS_ADMIN" in securityContext.capabilities.add), host namespaces (hostNetwork=true), hostPath volumes (volumes "socket-dir", "mountpoint-dir", "registration-dir") . . .
+Error creating: pods "connectors-csi-d4r6r" is forbidden: violates
+PodSecurity "baseline:latest": non-default capabilities (container
+"driver" must not include "SYS_ADMIN" in securityContext.capabilities.add),
+host namespaces (hostNetwork=true), hostPath volumes (volumes
+"socket-dir", "mountpoint-dir", "registration-dir") ...
 ```
 
-This means the namespace's Pod Security level is too restrictive for the CSI driver.
+The components namespace's Pod Security level is too restrictive for
+the CSI driver. Set it to `privileged`, update the namespace labels,
+and restart the `connectors-csi` DaemonSet. See
+[Pod Security Requirements](#pod-security-requirements-for-installation).
 
-**Fix**
+### A Component Is Stuck in `Failed` \{#failed-component}
 
-- Ensure the namespace is configured with the **`privileged`** Pod Security level.
-- Update the namespace with the correct labels.
-- Restart the `connectors-csi` DaemonSet.
+`status.components.<name>.message` is the first place to look. The
+controller emits a `ComponentConflict` Warning event on the parent
+each time a component transitions into this state. The two common
+causes both come from stale standalone CRs left over from an upgrade:
 
-For details, see [Pod Security Requirements for Installation](#pod-security-requirements-for-installation).
+- **Cluster-wide conflict** — a CR of the same kind exists in another
+  namespace (or under a different name in the same namespace). The
+  message lists every conflicting `namespace/name`. Delete the
+  offending CR(s) and the controller recovers on the next reconcile.
+- **Unmanaged CR at the deterministic name** — a CR already exists
+  at the expected name and namespace but does not carry the
+  `ManagedBy=connectorsconfig` label. The controller refuses to adopt
+  it (`message: child CR ... already exists but is not managed by
+  ConnectorsConfig — delete it manually to allow adoption`). Delete
+  the unmanaged CR and the controller creates a new managed child on
+  the next reconcile.
+
+If you are mid-upgrade from a pre-`ConnectorsConfig` release, see
+[Migration to ConnectorsConfig](../upgrade/upgrade.mdx#migration)
+for context.
+
+## Related Documentation
+
+- [Upgrading the Connectors Operator](../upgrade/upgrade.mdx) —
+  includes the one-way migration from pre-`ConnectorsConfig` installs.
+- [Feature Flags](../overview/feature_flags.mdx) — the full list of
+  flags configurable through `spec.components.core.spec.featureFlags`.
+- [Quick Start](../connectors/quick_start.mdx) — create your first
+  `Connector` after install.
+- [Architecture overview](../connectors/architecture/index.mdx) — how
+  the components fit together.
+- [`ConnectorsConfig` CRD reference](../apis/kubernetes_apis/operator/operator.connectors.alauda.io_connectorsconfigs.mdx).

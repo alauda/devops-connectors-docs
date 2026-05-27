@@ -292,9 +292,13 @@ layout. Each TaskRun scenario uses one TaskRun manifest under
 3. **(p0) Idempotent rotate-in-place.** Input: rerun any prior
    creation with all inputs unchanged → expected: same group set,
    same GAT id, new token value rotated via `POST /groups/:id/access_tokens/:token_id/rotate`,
-   Secret data updated, Connector unchanged (resourceVersion bumps
-   for Secret only). Method: BDD `tektoncd.feature`. Mirrors
-   Example 3.
+   Secret data updated, Connector spec untouched (`generation: 1`
+   stable / `observedGeneration: 1`). Note: `metadata.resourceVersion`
+   on the Connector may bump independently because the connectors
+   controller reconciles status (LivenessReady probe etc.) — the
+   spec-level idempotency assertion is `generation` / `observedGeneration`
+   stability, not raw `resourceVersion`. Method: BDD `tektoncd.feature`.
+   Mirrors Example 3.
 4. **(p0) Expired-token refresh self-heals via recreate.** Setup:
    pre-create a GAT at `tenantGroup` with `expires_at` in the past
    (e.g. via direct GitLab API as test fixture). Input: rerun #1
@@ -310,8 +314,15 @@ layout. Each TaskRun scenario uses one TaskRun manifest under
    raised in team review.
 5. **(p0) Add-subgroup reconcile.** Input: rerun #1 with `team-c`
    added to `subgroups` → expected: missing subgroup created under
-   `tenantGroup`, GAT rotated (no recreate), Connector unchanged.
-   Method: BDD `tektoncd.feature`. Mirrors Example 5.
+   `tenantGroup`, GAT **recreated** (the subgroup set is part of GAT
+   identity, so an identity-affecting input change drives the recreate
+   path: old GAT deleted at GitLab, new GAT minted, Secret rewritten,
+   `connectors.cpaas.io/gat-recreated-at` updated). Connector spec
+   untouched. Method: BDD `tektoncd.feature` (`新增子分组应触发 GAT
+   重建`). Mirrors Example 5. (Earlier draft of this doc said "rotated
+   (no recreate)"; that was design-doc drift — the implementation
+   correctly recreates because the access-token identity suffix
+   encodes the subgroup set.)
 6. **(p0) Recreate on scope or access-level change.** Input: rerun #1
    with `scopes` changed (or `accessLevel` flipped) → expected: old
    GAT deleted at GitLab, new GAT created with new attributes, Secret
@@ -323,17 +334,28 @@ layout. Each TaskRun scenario uses one TaskRun manifest under
    Method: BDD `tektoncd.feature`.
 8. **(p0) Pattern A admin lacks `can_create_group`.** Input:
    top-level `tenantGroup=acme`, admin Connector = user PAT for an
-   account *without* `can_create_group` → expected: Task fails with
-   the explicit "admin user lacks 'can_create_group'" message; no
-   partial state in GitLab; no cluster mutation. Method: BDD
-   `tektoncd.feature`. Mirrors product-design.md Pattern-A failure
+   account *without* `can_create_group` → expected: Task fails fast
+   at `ensure-group` with the explicit "admin user lacks
+   'can_create_group'" message; no GitLab group is created (the
+   failing API call is the create itself); no cluster mutation.
+   Method: BDD `tektoncd.feature`. Mirrors product-design.md
+   Pattern-A failure example.
+9. **(p0) Pattern B admin lacks `owner` on the parent OR lacks the
+   GAT-mint scope at `tenantGroup`.** Input: `tenantGroup=tenants/acme`,
+   admin Connector = umbrella GAT with only `maintainer` on `tenants`
+   → expected: Task fails with the explicit "admin lacks 'owner' on
+   parent group 'tenants'" message (or, when the admin GAT has
+   `owner` access but lacks the scope to mint a child GAT, the
+   verbatim GitLab API error from `GET /groups/:id/access_tokens`
+   surfaced at `ensure-gat`); no cluster mutation. Partial GitLab
+   state (tenant subgroup created by an earlier step) MAY remain
+   when the failure point is `ensure-gat`; each step is idempotent
+   and a rerun after fixing the admin Connector reuses the existing
+   group rather than creating a duplicate, so cleanup is automatic
+   on retry. The Task does NOT implement transactional rollback —
+   idempotent rerun is the documented recovery path. Method: BDD
+   `tektoncd.feature`. Mirrors product-design.md Pattern-B failure
    example.
-9. **(p0) Pattern B admin lacks `owner` on the parent.** Input:
-   `tenantGroup=tenants/acme`, admin Connector = umbrella GAT with
-   only `maintainer` on `tenants` → expected: Task fails with the
-   explicit "admin lacks 'owner' on parent group 'tenants'"
-   message; no partial state. Method: BDD `tektoncd.feature`.
-   Mirrors product-design.md Pattern-B failure example.
 10. **(p0) Helper: `ensure-tenant-group.sh` creates a missing
     top-level group AND a missing subgroup under existing parent.**
     Two scenarios in one feature file (one per pattern). Method:

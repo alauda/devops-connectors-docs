@@ -62,6 +62,21 @@ spec:
                 address:
                   description: Address is connector address
                   type: string
+                addressExtensions:
+                  description: AddressExtensions contains additional addresses that can reuse connector credentials.
+                  items:
+                    description: Param declares an ParamValues to use for the parameter called name.
+                    properties:
+                      name:
+                        type: string
+                      value:
+                        x-kubernetes-preserve-unknown-fields: true
+                    required:
+                      - name
+                      - value
+                    type: object
+                  type: array
+                  x-kubernetes-list-type: atomic
                 auth:
                   description: Auth represents authenticate data of current connector
                   properties:
@@ -126,6 +141,16 @@ spec:
                           type: string
                       type: object
                       x-kubernetes-map-type: atomic
+                  type: object
+                caCertSecretRef:
+                  description: |-
+                    CACertSecretRef references a Secret containing PEM-encoded CA certificates
+                    for verifying this connector's upstream TLS endpoint.
+                    The Secret is resolved from the same namespace as the Connector.
+                  properties:
+                    name:
+                      description: Name of the Secret in the same namespace as the Connector.
+                      type: string
                   type: object
                 connectorClassName:
                   description: ConnectorClassName of current connector

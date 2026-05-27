@@ -68,6 +68,24 @@ The sonar-scanner job fails or hangs during analysis.
    - Error: "Insufficient privileges" or "403 Forbidden"
    - Solution: Verify the token has "Execute Analysis" permission on the project
 
+   **Scanner JRE Fails on MicroOS Nodes**:
+   - Error:
+     ```text
+     Error occurred during initialization of VM
+     Failed to mark memory page as executable - check if grsecurity/PaX is enabled
+     ```
+   - Context: On MicroOS or other hardened node images, newer SonarScanner CLI versions may auto-provision a JRE before running the scanner engine. If that downloaded JRE cannot run under the node security policy, the scanner container may fail with exit code `3` even though the connector, proxy, authentication, and SonarQube connectivity are working.
+   - Diagnosis: If the scanner logs show that it connects to SonarQube and downloads the scanner engine or JRE before the JVM initialization error, treat this as a scanner runtime compatibility issue instead of a connector authentication issue.
+   - Solution: Use the Java runtime already provided by the scanner image when it is compatible with your SonarQube version:
+     ```bash
+     sonar-scanner -Dsonar.scanner.skipJreProvisioning=true
+     ```
+     You can also set the equivalent environment variable:
+     ```bash
+     SONAR_SCANNER_SKIP_JRE_PROVISIONING=true
+     ```
+   - Verification: Run `java -version` in the scanner image and confirm that a supported Java runtime is available before disabling JRE provisioning.
+
 ## Configuration Not Found
 
 ### Symptom
