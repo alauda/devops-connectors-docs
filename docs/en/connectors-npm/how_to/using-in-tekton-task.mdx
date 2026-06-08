@@ -41,13 +41,12 @@ When both connectors are mounted through `volumeAttributes.connectors`, NPM conf
 - for `nodejs:0.1`, the publish endpoint is controlled by `publishRepository`; use the `registryType=publish` connector address as the `publishRepository` value
 
 :::info
-Before using multiple connectors in one CSI volume, enable `enable-multi-connector` in `connectors-config`.
+Before using multiple connectors in one CSI volume, enable the `enable-multi-connector` feature flag on `ConnectorsConfig`. For the full update syntax, see [Feature Flags](../../overview/feature_flags.mdx#update-a-feature-flag).
 :::
 
 ```bash
-kubectl -n <connectors-namespace> patch configmap connectors-config \
-  --type merge \
-  -p '{"metadata":{"annotations":{"skip-sync":"true"}},"data":{"enable-multi-connector":"true"}}'
+kubectl patch connectorsconfig connectors-config -n connectors-operator --type merge \
+  -p '{"spec":{"components":{"core":{"spec":{"featureFlags":{"enable-multi-connector":"true"}}}}}}'
 ```
 
 ## Prepare Connectors

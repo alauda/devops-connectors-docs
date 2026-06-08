@@ -26,16 +26,13 @@ This guide uses GitHub as an example, but the same principles apply to connectin
 
 ## Notes
 
-- This quick start assumes you already have the Connectors Operator, ConnectorsCore, and ConnectorsGit components installed in your cluster. See the [Installation Guide](../install/install.mdx) for detailed installation instructions.
+- This quick start assumes you already have the Connectors Operator installed and a `ConnectorsConfig` reconciled to `Ready` (the operator creates one automatically — see the [Installation Guide](../install/install.mdx)). The default install enables every component, including `core` and `git`, which are required for this guide.
 - You need a GitHub account and a Personal Access Token (PAT) with appropriate permissions.
 - Connector status reflects the health and accessibility of the connection.
 
 ## Prerequisites
 
-- Kubernetes cluster with the following components installed:
-  - Connectors Operator
-  - ConnectorsCore
-  - ConnectorsGit
+- Kubernetes cluster with the Connectors Operator installed and a `ConnectorsConfig` reconciled to `Ready`. The default install enables the `core` and `git` components needed for this guide.
 - kubectl configured to communicate with your cluster
 - GitHub account and valid Personal Access Token (PAT)
 - Basic knowledge of Kubernetes resources
@@ -55,14 +52,13 @@ This guide uses GitHub as an example, but the same principles apply to connectin
 
 Before creating a GitHub connector, verify that the connector infrastructure is properly installed in your cluster.
 
-1. Check that the Connectors Operator, ConnectorsCore, and ConnectorsGit are installed:
+1. Check that the `ConnectorsConfig` is reconciled to `Ready`:
 
    ```bash
-   kubectl get connectorscore -A
-   kubectl get connectorsgit -A
+   kubectl get connectorsconfig -A
    ```
 
-   You should see both resources with a status of "Ready".
+   `READY` should report `True`. For per-component phases, run `kubectl describe connectorsconfig connectors-config -n <namespace>`.
 
 2. Verify that the Git ConnectorClass exists:
 
@@ -70,7 +66,7 @@ Before creating a GitHub connector, verify that the connector infrastructure is 
    kubectl get connectorclass git
    ```
 
-   If the Git ConnectorClass is not found, you need to install ConnectorsGit first. See the [Installation Guide](../install/install.mdx) for instructions.
+   If the Git ConnectorClass is not found, the `git` component is disabled or has not finished installing. Enable it on `ConnectorsConfig` (`spec.components.git.enabled: true`) and re-check — see the [Installation Guide](../install/install.mdx) for the configuration syntax.
 
 ### Step 2: Create Authentication Secret
 
@@ -189,7 +185,7 @@ If your connector doesn't reach the "Ready" status, check the following:
    ```bash
    kubectl get connectorclass git
    ```
-   If it doesn't exist, you need to install ConnectorsGit. See the [Installation Guide](../../install).
+   If it doesn't exist, the `git` component is disabled or has not finished installing on `ConnectorsConfig`. See the [Installation Guide](../install/install.mdx) for the configuration syntax.
 
 2. **Authentication Configuration**: Ensure the credentials in the Secret are correct and have appropriate permissions.
 

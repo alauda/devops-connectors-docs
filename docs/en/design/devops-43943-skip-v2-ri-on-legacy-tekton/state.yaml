@@ -1,0 +1,285 @@
+# Feature umbrella state.yaml (kind: feature).
+# Written by /feature:init + /feature:research. Integrity-signed via sha256(last_hash:"").
+# DO NOT edit manually — use /feature:state-repair if state becomes inconsistent.
+
+kind: feature
+schema_version: 3
+
+feature:
+  jira_id: "DEVOPS-43943"
+  slug: "devops-43943-skip-v2-ri-on-legacy-tekton"
+  title: "connectors 和旧版本 tektoncd 一起使用时，不安装 v2 的 ResourceInterface"
+  parent_epic: null
+  profile: "full"
+  risk: "standard"
+  repos:
+    - connectors
+    - connectors-extensions
+    - connectors-operator
+  effort: "days"
+  created_at: "2026-05-22T02:47:35Z"
+  driver: "kychen"
+  previous_drivers: []
+  paused: false
+  paused_at: null
+  paused_reason: null
+  profile_history: []
+  shipped_at: null
+  acs_pending_reporter_signoff: true
+
+stage:
+  current: implement
+  history:
+    - stage: init
+      outcome: auto-complete
+      closed_at: "2026-05-22T02:47:35Z"
+    - stage: research
+      outcome: advance
+      closed_at: "2026-05-22T02:57:23Z"
+    - stage: design
+      outcome: advance
+      closed_at: "2026-05-25T02:47:58Z"
+    - stage: design-review
+      outcome: approved
+      closed_at: "2026-05-25T08:48:18Z"
+    - stage: plan
+      outcome: advance
+      closed_at: "2026-05-25T08:56:27Z"
+
+story: null
+stories:
+  - id: 1
+    title: "ConnectorsConfig spec.global.disableHigherSchemaResourceInterfaces + reactive resolver"
+    slice: backend
+    repos: [connectors-operator]
+    priority: p0
+    depends_on: []
+    acs: [AC-1, AC-2, AC-3]
+  - id: 2
+    title: "Higher-schema RI delete-annotation transformer + IM annotation handler"
+    slice: backend
+    repos: [connectors-operator]
+    priority: p0
+    depends_on: [1]
+    acs: [AC-1, AC-2, AC-5, AC-7]
+  - id: 3
+    title: "v2 RI label discipline audit across extensions"
+    slice: backend
+    repos: [connectors-extensions]
+    priority: p0
+    depends_on: []
+    acs: [AC-1]
+  - id: 4
+    title: "Integration test matrix: legacy vs versioned Tekton"
+    slice: test
+    repos: [connectors-operator, connectors-extensions]
+    priority: p0
+    depends_on: [1, 2, 3]
+    acs: [AC-1, AC-2, AC-3, AC-5, AC-7]
+  - id: 5
+    title: "User-facing documentation for the gating behavior"
+    slice: docs
+    repos: [connectors-operator]
+    priority: p1
+    depends_on: [2]
+    acs: []
+  - id: 6
+    title: "Core RI label-convention reaffirmation"
+    slice: docs
+    repos: [connectors]
+    priority: p2
+    depends_on: []
+    acs: []
+ui_waiver: "No UI story. connectors-plugin not in scope; v2 RIs already carry cpaas.io/hidden: true; gating is install-time operator behavior."
+story_groups:
+  - story_id: 1
+    changes:
+      - repo: connectors-operator
+        class: design-change
+        path: openspec/changes/disable-higher-schema-ri-flag/
+        pr: null
+        pr_state: null
+    review:
+      reviewer: "kychen"
+      signed_at: "2026-05-25T08:56:27Z"
+  - story_id: 2
+    changes:
+      - repo: connectors-operator
+        class: design-change
+        path: openspec/changes/higher-schema-ri-ignore-install/
+        pr: null
+        pr_state: null
+    review:
+      reviewer: "kychen"
+      signed_at: "2026-05-25T08:56:27Z"
+  # Story 3 (connectors-extensions label discipline audit) — mechanical-followup;
+  # extension repos not checked out locally; OpenSpec change to be scaffolded
+  # in connectors-extensions/<plugin>/openspec/changes/ when those repos are
+  # added to the workspace. Tasks live conceptually in tech-design.md task 6.
+  - story_id: 3
+    changes: []
+    review: null
+  # Story 4 (integration test matrix) — mechanical-followup; the connectors-operator
+  # side test fixtures are scaffolded by the higher-schema-ri-ignore-install
+  # change (envtest files under test/integration/v2ri/). Cross-repo extension
+  # integration deferred until extensions repos are checked out.
+  - story_id: 4
+    changes: []
+    review: null
+  # Story 5 (user-facing docs) — mechanical-followup; content is fully
+  # determined by product-design.md (esp. the upgrade-troubleshooting section).
+  # No separate OpenSpec change; docs ship in the same PR as story 2.
+  - story_id: 5
+    changes: []
+    review: null
+  # Story 6 (core RI CRD comment reaffirmation) — mechanical-followup; lives in
+  # connectors repo (sibling). OpenSpec change to be scaffolded in
+  # ../connectors/openspec/changes/ at implement time. Doc-only.
+  - story_id: 6
+    changes: []
+    review: null
+
+bundle:
+  synced_manifests: []
+  bundle_image: null
+  bundle_tag: null
+
+qa:
+  packet_path: null
+  owner: null
+  assigned_at: null
+
+acceptance:
+  status: pending
+  report_path: null
+
+regression:
+  status: pending
+  report_path: null
+
+maturity:
+  entries:
+    - stage: init
+      command: "/feature:init"
+      primary_blocker: none
+      ai_turns: 1
+      driver_edits:
+        files_touched: 0
+        lines_changed: 0
+      custom_prompts: 0
+      duration_min: 1
+      opened_at: "2026-05-22T02:47:35Z"
+      closed_at: "2026-05-22T02:47:35Z"
+      closed_by: "kychen"
+      excluded: false
+      exclusion_reason: null
+    - stage: research
+      command: "/feature:research"
+      primary_blocker: template
+      ai_turns: 2
+      driver_edits:
+        files_touched: 0
+        lines_changed: 0
+      custom_prompts: 0
+      duration_min: 10
+      opened_at: "2026-05-22T02:47:35Z"
+      closed_at: "2026-05-22T02:57:23Z"
+      closed_by: "kychen"
+      excluded: false
+      exclusion_reason: null
+    - stage: design
+      command: "/feature:design"
+      primary_blocker: kb
+      ai_turns: 5
+      driver_edits:
+        files_touched: 0
+        lines_changed: 0
+      custom_prompts: 1
+      duration_min: 20
+      opened_at: "2026-05-25T02:30:00Z"
+      closed_at: "2026-05-25T02:47:58Z"
+      closed_by: "kychen"
+      excluded: false
+      exclusion_reason: null
+    - stage: design-review
+      command: "/feature:design-review"
+      primary_blocker: none
+      ai_turns: 1
+      driver_edits:
+        files_touched: 0
+        lines_changed: 0
+      custom_prompts: 0
+      duration_min: 5
+      opened_at: "2026-05-25T08:45:00Z"
+      closed_at: "2026-05-25T08:48:18Z"
+      closed_by: "kychen"
+      excluded: false
+      exclusion_reason: null
+    - stage: plan
+      command: "/feature:plan"
+      primary_blocker: none
+      ai_turns: 2
+      driver_edits:
+        files_touched: 0
+        lines_changed: 0
+      custom_prompts: 1
+      duration_min: 8
+      opened_at: "2026-05-25T08:48:18Z"
+      closed_at: "2026-05-25T08:56:27Z"
+      closed_by: "kychen"
+      excluded: false
+      exclusion_reason: null
+    - stage: implement
+      command: "/feature:state-repair"
+      primary_blocker: flake
+      ai_turns: 0
+      driver_edits:
+        files_touched: 0
+        lines_changed: 0
+      custom_prompts: 0
+      duration_min: 0
+      opened_at: "2026-05-29T04:36:02Z"
+      closed_at: "2026-05-29T04:36:02Z"
+      closed_by: "human"
+      excluded: true
+      exclusion_reason: "state-repair"
+    - stage: implement
+      command: "/feature:state-repair"
+      primary_blocker: flake
+      ai_turns: 0
+      driver_edits:
+        files_touched: 0
+        lines_changed: 0
+      custom_prompts: 0
+      duration_min: 0
+      opened_at: "2026-05-29T04:52:59Z"
+      closed_at: "2026-05-29T04:52:59Z"
+      closed_by: "human"
+      excluded: true
+      exclusion_reason: "state-repair"
+  category_totals:
+    none: 3
+    template: 1
+    skill: 0
+    kb: 1
+    judgment: 0
+    flake: 0
+
+security:
+  threat_model_path: null
+  signoff_path: null
+  override: null
+
+collisions: []
+
+integrity:
+  last_hash: "sha256:7111e4a28f95ed4a1bab83d357e4e9b1f582788681ac3fc8eb94261fec6c2fb2"
+  last_written_by: "/feature:state-repair"
+  last_written_at: "2026-05-29T04:52:59Z"
+  repairs:
+    - at: "2026-05-29T04:36:02Z"
+      driver: "kychen"
+      audit_reason: "rename features→installflags"
+    - at: "2026-05-29T04:52:59Z"
+      driver: "kychen"
+      audit_reason: "complete Feature→InstallFlag type rename across code and design docs"

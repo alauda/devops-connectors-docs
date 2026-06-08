@@ -1,0 +1,97 @@
+# POC scan step — chained after onboarding. Uses the auto-created Connector
+# `kychen-1/acme-tr-sonarqube` via the connectors-csi driver. The CSI volume
+# renders sonar-project.properties (sonar.host.url + proxy auth) so the
+# scanner uses the connector-bound credentials, NOT a static token.
+#
+# Includes TWO TaskRuns:
+#   - sonarqube-acme-tr-scan (positive): scans key 'acme-tr:demo-scan' that
+#     matches projectPattern '^acme-tr(:.*)?$' → expect ANALYSIS SUCCESSFUL +
+#     auto-create.
+#   - sonarqube-acme-tr-scan-negative (reverse): scans key 'demo-89:probe'
+#     that DOES NOT match acme-tr's projectPattern → expect failure (cannot
+#     analyze project, insufficient privileges).
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: acme-tr-source, namespace: kychen-1, labels: { poc.devops: "43953" } }
+data:
+  hello.py: |
+    """Tiny module scanned via the auto-created acme-tr SonarQube Connector."""
+
+    def greet(name):
+        return "hello, " + name
+
+    if __name__ == "__main__":
+        print(greet("acme-tr"))
+---
+apiVersion: tekton.dev/v1
+kind: TaskRun
+metadata:
+  name: sonarqube-acme-tr-scan
+  namespace: kychen-1
+  labels: { poc.devops: "43953", direction: "positive" }
+spec:
+  serviceAccountName: sonarqube-task-runner
+  taskRef: { name: sonarqube-scanner }
+  stepSpecs:
+    - name: sonar-properties-create
+      computeResources: { requests: { cpu: 100m, memory: 128Mi }, limits: { cpu: 300m, memory: 256Mi } }
+    - name: sonar-scan
+      computeResources: { requests: { cpu: 250m, memory: 384Mi }, limits: { cpu: 1, memory: 768Mi } }
+    - name: sonar-analyze
+      computeResources: { requests: { cpu: 100m, memory: 128Mi }, limits: { cpu: 200m, memory: 256Mi } }
+  params:
+    - { name: sonarHostURL,     value: "http://sonarqube-89.kychen-1.svc:9000" }
+    - { name: sonarProjectKey,  value: "acme-tr:demo-scan" }
+    - { name: enableQualityGate, value: "false" }
+    - { name: metrics,          value: "alias-default-all" }
+    - { name: sourceToScan,     value: "." }
+    - { name: sonarProperties,  value: ["sonar.qualitygate.wait=false"] }
+  workspaces:
+    - { name: source, configMap: { name: acme-tr-source } }
+    - name: sonar-credentials
+      csi:
+        driver: connectors-csi
+        readOnly: true
+        volumeAttributes:
+          connectors: kychen-1/acme-tr-sonarqube
+          configuration.names: sonar-scanner
+---
+apiVersion: tekton.dev/v1
+kind: TaskRun
+metadata:
+  name: sonarqube-acme-tr-scan-negative
+  namespace: kychen-1
+  labels: { poc.devops: "43953", direction: "negative" }
+spec:
+  serviceAccountName: sonarqube-task-runner
+  taskRef: { name: sonarqube-scanner }
+  stepSpecs:
+    - name: sonar-properties-create
+      computeResources: { requests: { cpu: 100m, memory: 128Mi }, limits: { cpu: 300m, memory: 256Mi } }
+    - name: sonar-scan
+      computeResources: { requests: { cpu: 250m, memory: 384Mi }, limits: { cpu: 1, memory: 768Mi } }
+    - name: sonar-analyze
+      computeResources: { requests: { cpu: 100m, memory: 128Mi }, limits: { cpu: 200m, memory: 256Mi } }
+  params:
+    - { name: sonarHostURL,     value: "http://sonarqube-89.kychen-1.svc:9000" }
+    # Key DOES NOT match acme-tr's projectPattern `^acme-tr(:.*)?$` —
+    # belongs to the demo-89 tenant from the earlier POC run. The
+    # acme-tr-bot user has no project-level grant on demo-89 projects
+    # AND its global 'provisioning' won't help because the key doesn't
+    # match acme-tr's template — SonarQube will refuse with
+    # "you're not authorized to create it" or 403 on analysis.
+    - { name: sonarProjectKey,  value: "demo-89:cross-tenant-probe" }
+    - { name: enableQualityGate, value: "false" }
+    - { name: metrics,          value: "alias-default-all" }
+    - { name: sourceToScan,     value: "." }
+    - { name: sonarProperties,  value: ["sonar.qualitygate.wait=false"] }
+  workspaces:
+    - { name: source, configMap: { name: acme-tr-source } }
+    - name: sonar-credentials
+      csi:
+        driver: connectors-csi
+        readOnly: true
+        volumeAttributes:
+          connectors: kychen-1/acme-tr-sonarqube           # SAME connector, different projectKey
+          configuration.names: sonar-scanner

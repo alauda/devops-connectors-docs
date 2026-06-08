@@ -46,6 +46,10 @@ When `enable-connector-apis-permissions` is enabled, the system performs an addi
 
 For the overall model and the meaning of `connectors/apis`, see [Connectors Permission Model](./permission_model.mdx#connectors-api-permissions).
 
+Read methods `GET`, `HEAD`, and `OPTIONS` are all enabled by default and share the same authorization chain. Both `HEAD` (RFC 7231: GET without body — used for resource-existence and metadata probes) and `OPTIONS` (the safe / idempotent capabilities probe — used for CORS preflight, API discovery, and SDK feature checks) are routed against the `get:` operation declared in the ConnectorClass OpenAPI, and use the Kubernetes verb `get` for RBAC. A single `get` grant on `connectors/apis/<class>` therefore covers GET / HEAD / OPTIONS; class authors do not need to declare separate `head:` / `options:` operations.
+
+Write methods (`POST`, `PUT`, `DELETE`, `PATCH`) are gated independently by the `enable-connector-apis-write-passthrough` flag. See [Write methods (passthrough)](#write-methods-passthrough) below for details.
+
 For more information about Kubernetes API authentication, refer to the [Kubernetes Authentication documentation](https://kubernetes.io/docs/reference/access-authn-authz/authentication).
 
 ## Accessing Original Tool API
@@ -61,6 +65,66 @@ curl -H "Authorization: Bearer ${K8S_TOKEN}" "https://platform.example.com/conne
 ```
 
 The Proxy Service capabilities can be configured through the `ConnectorClass` specification. For configuration details, refer to [ConnectorClass Proxy](./connectorclass.mdx#connectorclass_proxy). For a deeper understanding of the `Connectors Proxy` concept, refer to [Connectors Proxy](./connectors_proxy.mdx).
+
+### Write methods (passthrough) \{#write-methods-passthrough}
+
+By default, the Connectors API gateway accepts only `GET` on `/connectors/v1alpha1/{namespace}/{connector}/path/{api-path}`. Write methods — `POST`, `PUT`, `DELETE`, `PATCH` — are gated by the `enable-connector-apis-write-passthrough` feature flag and rejected at the route layer with HTTP `405 Method Not Allowed` until that flag is enabled.
+
+When the flag is enabled, write requests are forwarded to the target tool with the request body, query parameters, and headers preserved (only the auth header is replaced with the credentials configured in the `Connector`). The response status, body, and headers are returned to the client unchanged.
+
+Authorization for write requests follows the **same chain** used for `GET`, controlled by `enable-connector-apis-permissions`:
+
+- `enable-connector-apis-permissions=false` (default): only `get` permission on the `Connector` resource is required.
+- `enable-connector-apis-permissions=true`: fine-grained `connectors/apis` SAR also runs. The HTTP method is mapped to a standard Kubernetes verb before the SAR is performed:
+
+  | HTTP method | Kubernetes verb |
+  | --- | --- |
+  | `GET` | `get` |
+  | `HEAD` | `get` |
+  | `OPTIONS` | `get` |
+  | `POST` | `create` |
+  | `PUT` | `update` |
+  | `DELETE` | `delete` |
+  | `PATCH` | `patch` |
+
+  Existing roles that only grant `get` on `connectors/apis/*` do **not** automatically gain write permissions — administrators must add the appropriate write verbs explicitly. For example, granting a user the ability to create a GitLab branch through the Connectors API requires:
+
+  ```yaml
+  apiVersion: rbac.authorization.k8s.io/v1
+  kind: ClusterRole
+  metadata:
+    name: gitlab-connector-branch-writer
+  rules:
+    - apiGroups: ["connectors.alauda.io"]
+      resources: ["connectors"]
+      verbs: ["get"]
+    - apiGroups: ["connectors.alauda.io"]
+      resources:
+        - "connectors/apis/gitlab"          # subresource level — covers any GitLab path
+        # or scope to a specific path pattern declared in the ConnectorClass openapi:
+        # - "connectors/apis/gitlab/apis/v4/projects/{projectId}/repository/branches"
+      verbs: ["create"]                     # add "update", "delete", or "patch" as needed
+  ```
+
+Example — create a branch through a GitLab Connector:
+
+```bash
+K8S_TOKEN=xxxx
+
+curl -X POST \
+  -H "Authorization: Bearer ${K8S_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"branch":"feature-foo","ref":"main"}' \
+  "https://platform.example.com/connectors/v1alpha1/default/gitlab-connector/path/api/v4/projects/123/repository/branches"
+```
+
+Whether the request ultimately succeeds at the tool side depends on the credentials configured in the `Connector`'s referenced `Secret`. If those credentials lack permission at the tool side, the tool's native `401`/`403` response (and body) is returned unchanged.
+
+:::note
+Write-method passthrough (`POST` / `PUT` / `DELETE` / `PATCH`) to the upstream tool is supported when the matched OpenAPI operation declares `x-provider-type: proxy` (or when no operation is declared — `proxy` is the default). This is the recommended setting for transparently relaying client requests — including the original HTTP method, body, and headers — to tools such as GitLab, GitHub, or Harbor.
+:::
+
+For configuration details on the underlying flag, see [`enable-connector-apis-write-passthrough`](../../overview/feature_flags.mdx#enable-connector-apis-write-passthrough).
 
 ### Selecting backend address with `x-openapi-address`
 
@@ -235,6 +299,7 @@ Currently provided APIs include:
   ```json
   {
      "enable-connector-apis-permissions": "false",
+     "enable-connector-apis-write-passthrough": "false",
      "enable-connector-proxy-permissions": "false",
      "enable-connectors-approval": "false",
      "enable-multi-connector": "false"

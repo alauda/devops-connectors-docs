@@ -232,6 +232,19 @@ The `harbor-connector-automatic-creation` Task is used in two ways:
 - **Initial provisioning**: create Harbor projects, create or update the robot account, create the Connector Secret, create the Harbor Connector, and optionally distribute `imagePullSecrets`.
 - **Repeated reconciliation**: run the same Task again with the intended Harbor project and permission set to refresh the robot token and update the generated Secrets.
 
+### Harbor CLI image (`harborCliImage`)
+
+The `harborCliImage` parameter defaults to the pinned versioned image (currently `registry.alauda.cn:60070/devops/harbor-connector-automatic-creation:v0.0.18`), so you can omit it on every TaskRun unless your cluster pulls from a different registry. Set `harborCliImage` only when you mirror the image to a private registry; in that case, point it at your mirror, for example `<your-registry>/devops/harbor-connector-automatic-creation:v0.0.18`.
+
+### Project permissions (`permissions`)
+
+Each entry in `permissions` aligns one-to-one with `harborProjects` and grants the robot account access to that Harbor project. Each entry is a single `<resource>:<verb1>,<verb2>` group or multiple groups joined by `;` to grant several resources in the same Harbor project at once.
+
+- Single resource (backward compatible): `repository:pull,push`
+- Multiple resources for the same project: `repository:read,list,pull,push;tag:list;artifact:list,read`
+
+You can mix single-resource and multi-resource entries across different projects within the same TaskRun; the format applies per project entry.
+
 ### Robot account validity period
 
 Use the `robotAccountDuration` parameter to control how long the generated Harbor robot account stays valid:
@@ -252,7 +265,6 @@ This document focuses on the workflow. For the full parameter reference and the 
 Replace these placeholders before you run the example:
 
 - `<management-namespace>`: the private namespace that contains the Task and the credential Secrets.
-- `<your-registry>`: your internal registry address.
 - `<project-namespace-a>` and `<project-namespace-b>`: the target application namespaces.
 
 example:
@@ -268,8 +280,6 @@ spec:
     kind: Task
     name: harbor-connector-automatic-creation
   params:
-    - name: harborCliImage
-      value: <your-registry>/devops/harbor-connector-automatic-creation:v0.0.18
     - name: connector
       value: <management-namespace>/project-a-harbor
     - name: harborProjects
@@ -315,8 +325,6 @@ spec:
     kind: Task
     name: harbor-connector-automatic-creation
   params:
-    - name: harborCliImage
-      value: <your-registry>/devops/harbor-connector-automatic-creation:v0.0.18
     - name: connector
       value: <management-namespace>/team-a-harbor
     - name: harborProjects
@@ -360,8 +368,9 @@ spec:
     kind: Task
     name: harbor-connector-automatic-creation
   params:
-    - name: harborCliImage
-      value: <your-registry>/devops/harbor-connector-automatic-creation:v0.0.18
+    # harborCliImage is omitted on purpose: the Task default points at the pinned
+    # versioned image. Set this parameter only when you mirror the image to a
+    # private registry.
     - name: connector
       value: <management-namespace>/project-a-harbor
     - name: harborProjects
@@ -371,7 +380,9 @@ spec:
         - project-a-security
     - name: permissions
       value:
-        - repository:pull,push
+        # Multi-resource permission: combine groups for the same project with `;`.
+        - repository:read,list,pull,push;tag:list;artifact:list,read
+        # Single-resource entries remain valid and backward compatible.
         - repository:pull
         - repository:pull
     - name: robotAccountDuration
@@ -443,6 +454,10 @@ If the Pod starts successfully and does not enter `ImagePullBackOff` or `ErrImag
 ### `harborProjects` and `permissions` counts do not match
 
 Each Harbor project must have one matching permission definition. The two arrays are matched by index.
+
+### A `permissions` entry is reported as invalid
+
+Each `permissions` entry must follow `<resource>:<verb1>,<verb2>` per group, and multiple groups within the same entry must be joined by `;`. Empty groups, missing colons, and trailing separators are rejected. Examples of valid values: `repository:pull,push`, `repository:read,list,pull,push;tag:list;artifact:list,read`.
 
 ### The `connector` or `imagePullSecrets` value has an invalid format
 

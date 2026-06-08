@@ -26,26 +26,29 @@ This guide covers:
 
 Custom CA certificate support is gated behind the `enable-custom-ca-certs` feature flag, which is **disabled by default** to preserve backward compatibility.
 
-Edit the `connectors-config` ConfigMap in the system namespace and set the flag to `true`:
-
-```yaml
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: connectors-config
-  namespace: connectors-system
-  labels:
-    group: connectors.alauda.io
-data:
-  enable-custom-ca-certs: "true"
-```
-
-Apply with:
+Set the flag declaratively on the cluster-singleton `ConnectorsConfig` so the value survives reconciliation. Do **not** edit the managed `connectors-config` ConfigMap directly — it is reconciled back from `ConnectorsConfig` on the next reconcile.
 
 ```bash
-kubectl -n connectors-system patch configmap connectors-config \
-  --type merge -p '{"data":{"enable-custom-ca-certs":"true"}}'
+kubectl patch connectorsconfig connectors-config -n connectors-operator --type merge \
+  -p '{"spec":{"components":{"core":{"spec":{"featureFlags":{"enable-custom-ca-certs":"true"}}}}}}'
 ```
+
+Or edit `ConnectorsConfig` interactively:
+
+```yaml
+apiVersion: operator.connectors.alauda.io/v1alpha1
+kind: ConnectorsConfig
+metadata:
+  name: connectors-config
+spec:
+  components:
+    core:
+      spec:
+        featureFlags:
+          enable-custom-ca-certs: "true"
+```
+
+For the full update syntax, see [Feature Flags](../../overview/feature_flags.mdx#update-a-feature-flag).
 
 Flipping the feature flag takes effect immediately — the setting is consulted at request time. When the flag is `false`, the `CACertReady` condition is not added to Connector status and components preserve the legacy TLS behavior for backward compatibility.
 

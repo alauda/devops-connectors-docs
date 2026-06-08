@@ -6,43 +6,69 @@ weight: 20
 
 For production environments, it is recommended to deploy the Connectors system in a high availability (HA) configuration to ensure service continuity and fault tolerance.
 
+The whole Connectors install is driven by a single `ConnectorsConfig` resource (see the [Installation Guide](./install.mdx)). To run components in HA, edit that same `ConnectorsConfig` and set per-component workload settings under `spec.components.<name>.spec.workloads`.
+
 ## Key Steps Overview
 
-Configuring a high-availability Connector involves three steps:
+Configuring HA on `ConnectorsConfig` involves three steps:
 
-1. **Set replicas ≥ 2** — Specify `spec.workloads[].replicas` on each Connectors Component. At minimum, configure ConnectorsCore (api, controller-manager, proxy) and any plugin components you use.
-2. **Rely on built-in anti-affinity** — The system automatically adds `preferredDuringSchedulingIgnoredDuringExecution` pod anti-affinity rules so replicas are spread across nodes with no extra configuration required.
-3. **Customize affinity for multi-zone clusters (optional)** — Override `spec.workloads[].template.spec.affinity` to enforce zone-level distribution using `requiredDuringSchedulingIgnoredDuringExecution` if needed.
+1. **Set replicas ≥ 2** — Specify `replicas` for each managed component's workloads through `spec.components.<name>.spec.workloads[]`. At minimum, configure `core` (api, controller-manager, proxy) and any plugin components you use.
+2. **Rely on built-in anti-affinity** — The operator automatically adds `preferredDuringSchedulingIgnoredDuringExecution` pod anti-affinity rules so replicas are spread across nodes with no extra configuration required.
+3. **Customize affinity for multi-zone clusters (optional)** — Override `spec.components.<name>.spec.workloads[].template.spec.affinity` to enforce zone-level distribution using `requiredDuringSchedulingIgnoredDuringExecution` if needed.
 
 More details on each step are provided below.
 
 ## Configuring Replicas
 
-You can increase the number of replicas for each workload to achieve high availability. This is done through the `workloads` field in the component spec. For production environments, we recommend configuring at least 2 replicas for each workload to ensure service continuity during node failures or rolling updates.
+Increase the number of replicas for each component's workloads to achieve high availability. For production environments, we recommend configuring at least 2 replicas for each workload to ensure service continuity during node failures or rolling updates.
 
-Below are specific examples for each major connector component:
+The components that ship Deployment workloads, and the workload names you address from `ConnectorsConfig`, are:
 
-### ConnectorsCore
+| Component | Workloads                                                                |
+| --------- | ------------------------------------------------------------------------ |
+| `core`    | `connectors-api`, `connectors-controller-manager`, `connectors-proxy`    |
+| `git`     | `connectors-git-plugin`                                                  |
+| `oci`     | `connectors-oci-plugin`                                                  |
+| `harbor`  | `connectors-harbor-plugin`                                               |
 
-ConnectorsCore includes three main workloads: API server, controller manager, and proxy. For high availability, configure all three with multiple replicas:
+The other connector components do not have Deployment workloads and therefore do not require replica configuration. The `connectors-csi` DaemonSet that `core` also manages runs one pod per node and is not part of this list.
+
+The following `ConnectorsConfig` sets HA replicas for every Deployment workload in one place:
 
 ```yaml
 apiVersion: operator.connectors.alauda.io/v1alpha1
-kind: ConnectorsCore
+kind: ConnectorsConfig
 metadata:
-  name: connectors-core
-  namespace: connectors-system
+  name: connectors-config
 spec:
-  workloads:
-  - name: connectors-api
-    replicas: 2
-  - name: connectors-controller-manager
-    replicas: 2
-  - name: connectors-proxy
-    replicas: 2
+  components:
+    core:
+      spec:
+        workloads:
+          - name: connectors-api
+            replicas: 2
+          - name: connectors-controller-manager
+            replicas: 2
+          - name: connectors-proxy
+            replicas: 2
+    git:
+      spec:
+        workloads:
+          - name: connectors-git-plugin
+            replicas: 2
+    oci:
+      spec:
+        workloads:
+          - name: connectors-oci-plugin
+            replicas: 2
+    harbor:
+      spec:
+        workloads:
+          - name: connectors-harbor-plugin
+            replicas: 2
 ```
 
-After a period of time, all pods of the connectors-core component have a replica count of 2, except for connectors-csi.
+After a period of time, each configured workload scales to 2 replicas:
 
 ```
 $ kubectl get pod -n connectors-system
@@ -53,86 +79,13 @@ connectors-controller-manager-548659cdff-1d2dd   1/1     Running   0          35
 connectors-controller-manager-548659cdff-s7gnn   1/1     Running   0          35s
 connectors-proxy-64bb994cd9-jbp2l                1/1     Running   0          61s
 connectors-proxy-64bb994cd9-dfade                1/1     Running   0          61s
+connectors-git-plugin-84985b9d7d-vllp6           1/1     Running   0          61s
+connectors-git-plugin-84985b9d7d-abcde           1/1     Running   0          61s
+connectors-oci-plugin-84985b9d7d-7k2qm           1/1     Running   0          61s
+connectors-oci-plugin-84985b9d7d-h9x4n           1/1     Running   0          61s
+connectors-harbor-plugin-84985b9d7d-b3p8r        1/1     Running   0          61s
+connectors-harbor-plugin-84985b9d7d-z6t2v        1/1     Running   0          61s
 ```
-
-### ConnectorsGit
-
-ConnectorsGit runs a single plugin deployment for Git Server integration:
-
-```yaml
-apiVersion: operator.connectors.alauda.io/v1alpha1
-kind: ConnectorsGit
-metadata:
-  name: connectors-git
-  namespace: connectors-system
-spec:
-  workloads:
-  - name: connectors-git-plugin
-    replicas: 2
-```
-
-After a period of time, all pods of the connectors-git component have a replica count of 2.
-
-```
-$ kubectl get pod -n connectors-system
-NAME                                                    READY   STATUS    RESTARTS   AGE
-connectors-git-plugin-84985b9d7d-vllp6                  1/1     Running   0          67s
-connectors-git-plugin-84985b9d7d-vllp6                  1/1     Running   0          67s
-```
-
-### ConnectorsOCI
-
-ConnectorsOCI runs a single plugin deployment that handles OCI registry integration:
-
-```yaml
-apiVersion: operator.connectors.alauda.io/v1alpha1
-kind: ConnectorsOCI
-metadata:
-  name: connectors-oci
-  namespace: connectors-system
-spec:
-  workloads:
-  - name: connectors-oci-plugin
-    replicas: 2
-```
-
-After a period of time, all pods of the connectors-oci component have a replica count of 2.
-
-```
-$ kubectl get pod -n connectors-system
-NAME                                                    READY   STATUS    RESTARTS   AGE
-connectors-oci-plugin-84985b9d7d-vllp6                  1/1     Running   0          67s
-connectors-oci-plugin-84985b9d7d-vllp6                  1/1     Running   0          67s
-```
-
-### ConnectorsHarbor
-
-ConnectorsHarbor runs a single plugin deployment for Harbor-specific features:
-
-```yaml
-apiVersion: operator.connectors.alauda.io/v1alpha1
-kind: ConnectorsHarbor
-metadata:
-  name: connectors-harbor
-  namespace: connectors-system
-spec:
-  workloads:
-  - name: connectors-harbor-plugin
-    replicas: 2
-```
-
-After a period of time, all pods of the connectors-harbor component have a replica count of 2.
-
-```
-$ kubectl get pod -n connectors-system
-NAME                                                      READY   STATUS    RESTARTS   AGE
-connectors-harbor-plugin-84985b9d7d-vllp6                  1/1     Running   0          67s
-connectors-harbor-plugin-84985b9d7d-vllp6                  1/1     Running   0          67s
-```
-
-### Components Without Workloads
-
-The other connector components do not have Deployment workloads and therefore do not require replica configuration.
 
 ## Built-in Pod Anti-Affinity
 
@@ -145,40 +98,42 @@ This default configuration ensures:
 
 ## Customizing Affinity Rules
 
-If the default affinity rules do not meet your requirements, you can override them through the `workloads` configuration. The `template.spec.affinity` field allows you to specify custom affinity rules.
+If the default affinity rules do not meet your requirements, you can override them through the `workloads` configuration on `ConnectorsConfig`. The `template.spec.affinity` field allows you to specify custom affinity rules.
 
 For multi-zone clusters, you can configure zone-aware scheduling to spread pods across availability zones. The following example uses `requiredDuringSchedulingIgnoredDuringExecution` to enforce zone-level distribution, combined with `preferredDuringSchedulingIgnoredDuringExecution` to prefer node-level distribution within each zone:
 
 ```yaml
 apiVersion: operator.connectors.alauda.io/v1alpha1
-kind: ConnectorsCore
+kind: ConnectorsConfig
 metadata:
-  name: connectors-core
-  namespace: connectors-system
+  name: connectors-config
 spec:
-  workloads:
-  - name: connectors-api
-    replicas: 3
-    template:
+  components:
+    core:
       spec:
-        affinity:
-          podAntiAffinity:
-            # Hard requirement: pods must be distributed across different zones
-            requiredDuringSchedulingIgnoredDuringExecution:
-            - labelSelector:
-                matchLabels:
-                  control-plane: api
-                  app.kubernetes.io/name: connectors
-              topologyKey: topology.kubernetes.io/zone
-            # Soft requirement: prefer distributing pods across different nodes within the same zone
-            preferredDuringSchedulingIgnoredDuringExecution:
-            - weight: 100
-              podAffinityTerm:
-                labelSelector:
-                  matchLabels:
-                    control-plane: api
-                    app.kubernetes.io/name: connectors
-                topologyKey: kubernetes.io/hostname
+        workloads:
+          - name: connectors-api
+            replicas: 3
+            template:
+              spec:
+                affinity:
+                  podAntiAffinity:
+                    # Hard requirement: pods must be distributed across different zones
+                    requiredDuringSchedulingIgnoredDuringExecution:
+                      - labelSelector:
+                          matchLabels:
+                            control-plane: api
+                            app.kubernetes.io/name: connectors
+                        topologyKey: topology.kubernetes.io/zone
+                    # Soft requirement: prefer distributing pods across different nodes within the same zone
+                    preferredDuringSchedulingIgnoredDuringExecution:
+                      - weight: 100
+                        podAffinityTerm:
+                          labelSelector:
+                            matchLabels:
+                              control-plane: api
+                              app.kubernetes.io/name: connectors
+                          topologyKey: kubernetes.io/hostname
 ```
 
 This configuration ensures:

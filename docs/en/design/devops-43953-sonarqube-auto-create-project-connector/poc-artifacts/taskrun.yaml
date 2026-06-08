@@ -1,0 +1,28 @@
+# POC TaskRun — namespace-scope auto-create demo.
+# The sonarqube-admin workspace is backed by the Secret `poc-sonar-admin`
+# (keys: url, user, password) — created out-of-band, NOT committed.
+apiVersion: tekton.dev/v1
+kind: TaskRun
+metadata:
+  generateName: sonarqube-auto-create-poc-
+  namespace: kychen
+  labels: { poc.devops: "43953" }
+spec:
+  serviceAccountName: poc-sonarqube-creator
+  taskRef:
+    name: sonarqube-connector-automatic-creation
+  workspaces:
+    - name: sonarqube-admin
+      secret:
+        secretName: poc-sonar-admin
+  params:
+    - name: projectKey
+      value: "poc-devops-43953:via-taskrun"
+    - name: projectName
+      value: "POC DEVOPS-43953 via TaskRun"
+    - name: scope
+      value: namespace
+    - name: permissionTemplate
+      value: poc-43953-namespace
+    - name: targetNamespace
+      value: kychen

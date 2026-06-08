@@ -32,6 +32,107 @@ apiVersion: tekton.dev/v1
 kind: Task
 metadata:
   annotations:
+    style.tekton.dev/descriptors: |
+      - path: params.gitlabCliImage
+        x-descriptors:
+          - urn:alm:descriptor:label:en:GitLab CLI Image
+          - 'urn:alm:descriptor:description:en:Tool image used by every glab step (ensure-group, ensure-subgroups, ensure-gat). Defaults to the catalog tool-image-glab v1.82 image; override per TaskRun if you mirror the image into a private registry'
+          - 'urn:alm:descriptor:tooltip:en:Pick the catalog-provided glab image, or supply a registry-mirrored copy. The image must run as non-root (UID 65532) and contain the glab CLI'
+          - urn:alm:descriptor:com.tectonic.ui:select:image
+          - urn:alm:descriptor:expression:props.default:${REGISTRY}/devops/tektoncd/hub/glab:v1.82
+          - urn:alm:descriptor:expression:props.options:api:/kubernetes/${context.cluster}/api/v1/namespaces/kube-public/configmaps?labelSelector=catalog.tekton.dev%2Ftool-image-glab
+          - urn:alm:descriptor:props:select:allowCreate
+          - urn:alm:descriptor:expression:props.options:path:items
+          - urn:alm:descriptor:expression:props.options:label:path:data.name
+          - urn:alm:descriptor:expression:props.options:value:path:data.image
+          - urn:alm:descriptor:com.tectonic.ui:validation:required
+      - path: params.kubectlImage
+        x-descriptors:
+          - urn:alm:descriptor:label:en:kubectl Image
+          - 'urn:alm:descriptor:description:en:Tool image used by the apply-kubernetes-resources step. Defaults to the catalog tool-image-kubectl v1.33 image; override per TaskRun if you mirror the image into a private registry'
+          - 'urn:alm:descriptor:tooltip:en:Pick the catalog-provided kubectl image, or supply a registry-mirrored copy. The image must run as non-root (UID 65532) and contain the kubectl binary'
+          - urn:alm:descriptor:com.tectonic.ui:select:image
+          - urn:alm:descriptor:expression:props.default:${REGISTRY}/devops/tektoncd/hub/kubectl:v1.33
+          - urn:alm:descriptor:expression:props.options:api:/kubernetes/${context.cluster}/api/v1/namespaces/kube-public/configmaps?labelSelector=catalog.tekton.dev%2Ftool-image-kubectl
+          - urn:alm:descriptor:props:select:allowCreate
+          - urn:alm:descriptor:expression:props.options:path:items
+          - urn:alm:descriptor:expression:props.options:label:path:data.name
+          - urn:alm:descriptor:expression:props.options:value:path:data.image
+          - urn:alm:descriptor:com.tectonic.ui:validation:required
+      - path: params.imagePullPolicy
+        x-descriptors:
+          - urn:alm:descriptor:label:en:Image Pull Policy
+          - 'urn:alm:descriptor:description:en:Controls when Kubernetes pulls the tool images used by this Task'
+          - urn:alm:descriptor:com.tectonic.ui:select
+          - urn:alm:descriptor:com.tectonic.default:Always
+          - urn:alm:descriptor:props:select:allowCreate
+          - urn:alm:descriptor:props:select:options:Always
+          - urn:alm:descriptor:props:select:options:IfNotPresent
+          - urn:alm:descriptor:props:select:options:Never
+      - path: params.connector
+        x-descriptors:
+          - urn:alm:descriptor:label:en:Connector
+          - 'urn:alm:descriptor:description:en:Target GitLab Connector resource to create or update, in <namespace>/<name> format, for example connectors-management/project-a-gitlab. The namespace is also used for the connector Secret'
+          - 'urn:alm:descriptor:tooltip:en:Use <namespace>/<name>, for example connectors-management/project-a-gitlab. The namespace is also used for the connector Secret'
+          - urn:alm:descriptor:com.tectonic.ui:text
+          - urn:alm:descriptor:com.tectonic.ui:validation:required
+      - path: params.tenantGroup
+        x-descriptors:
+          - urn:alm:descriptor:label:en:Tenant Group
+          - 'urn:alm:descriptor:description:en:Tenant group path. Top-level for Pattern A (e.g. acme), or umbrella/tenant for Pattern B (e.g. acme-umbrella/acme-tenant). The Task creates the group if missing and reuses it if it already exists'
+          - 'urn:alm:descriptor:tooltip:en:Pattern A example: acme. Pattern B example: acme-umbrella/acme-tenant. See the GitLab Task how-to for the deployment patterns'
+          - urn:alm:descriptor:com.tectonic.ui:text
+          - urn:alm:descriptor:com.tectonic.ui:validation:required
+      - path: params.subgroups
+        x-descriptors:
+          - urn:alm:descriptor:label:en:Subgroups
+          - 'urn:alm:descriptor:description:en:Optional per-team subgroup names created idempotently under the tenant group. Add one subgroup name per item; leave empty for no subgroups'
+          - 'urn:alm:descriptor:tooltip:en:Add one subgroup name per item, e.g. backend, frontend, ml. The Task creates missing subgroups and reuses existing ones'
+          - urn:alm:descriptor:com.tectonic.ui:tagsInput
+      - path: params.accessLevel
+        x-descriptors:
+          - urn:alm:descriptor:label:en:Access Level
+          - 'urn:alm:descriptor:description:en:GitLab access level for the Group Access Token. Owner is required to create subgroups; lower levels restrict the GAT scope. Casing matches the GitLab UI convention; the Task accepts mixed case (the script lowercases internally)'
+          - 'urn:alm:descriptor:tooltip:en:Owner is required if you also need to create subgroups. Use Developer or Maintainer for read-mostly tenant integrations'
+          - urn:alm:descriptor:com.tectonic.ui:select
+          - urn:alm:descriptor:com.tectonic.default:Owner
+          - urn:alm:descriptor:props:select:options:Guest
+          - urn:alm:descriptor:props:select:options:Reporter
+          - urn:alm:descriptor:props:select:options:Developer
+          - urn:alm:descriptor:props:select:options:Maintainer
+          - urn:alm:descriptor:props:select:options:Owner
+      - path: params.scopes
+        x-descriptors:
+          - urn:alm:descriptor:label:en:Scopes
+          - 'urn:alm:descriptor:description:en:GitLab Group Access Token scope set. Defaults to ["api", "read_repository"] — api grants full GitLab REST access (project / group / token CRUD); read_repository grants git-clone-over-HTTPS for tenant CI workloads. Add one scope per item; common additions: write_repository (git push), read_registry, write_registry, read_api'
+          - 'urn:alm:descriptor:tooltip:en:Default api + read_repository covers most tenant CI use cases (REST API + clone). Add write_repository for push, read_registry / write_registry for the GitLab Container Registry. See GitLab docs for the full scope list'
+          - urn:alm:descriptor:com.tectonic.ui:tagsInput
+      - path: params.tokenDuration
+        x-descriptors:
+          - urn:alm:descriptor:label:en:Token Duration
+          - 'urn:alm:descriptor:description:en:Validity period of the GitLab Group Access Token in days; capped by the GitLab instance policy. Cron-friendly — every TaskRun computes expires_at as today + N days, so a CronJob can re-run this Task on a cadence shorter than the duration'
+          - 'urn:alm:descriptor:tooltip:en:Set the GAT validity period in days, e.g. 30. The cluster admin can cap this value at the GitLab instance level'
+          - urn:alm:descriptor:com.tectonic.ui:text
+      - path: params.secret
+        x-descriptors:
+          - urn:alm:descriptor:label:en:Connector Secret
+          - 'urn:alm:descriptor:description:en:Name of the Kubernetes Secret that stores the tenant GAT in the connector namespace. Leave empty to let the Task create or update a Kubernetes Secret named <connector-name>-secret automatically'
+          - 'urn:alm:descriptor:tooltip:en:Leave empty to let the Task create or update a Kubernetes Secret named <connector-name>-secret automatically'
+          - urn:alm:descriptor:com.tectonic.ui:text
+      - path: params.accessTokenName
+        x-descriptors:
+          - urn:alm:descriptor:label:en:Access Token Name
+          - 'urn:alm:descriptor:description:en:Name prefix used for the GitLab Group Access Token managed by this Task. The full GAT name is <accessTokenName>/<identity-suffix>; the suffix encodes access level + scopes + subgroup set so reruns can detect identity-affecting changes. Leave empty to derive connector-<connector-namespace>-<connector-name>'
+          - 'urn:alm:descriptor:tooltip:en:Leave empty to let the Task derive connector-<connector-namespace>-<connector-name>. Mirrors Harbor robotAccount semantics'
+          - urn:alm:descriptor:com.tectonic.ui:text
+      - path: params.verbose
+        x-descriptors:
+          - urn:alm:descriptor:label:en:Verbose Logs
+          - 'urn:alm:descriptor:description:en:Enable shell tracing on non-secret steps. The admin PAT and tenant GAT are NEVER traced regardless of this flag'
+          - urn:alm:descriptor:com.tectonic.ui:booleanSwitch
+          - urn:alm:descriptor:props:booleanSwitch:true:true
+          - urn:alm:descriptor:props:booleanSwitch:false:false
+    style.tekton.dev/displayParams: connector,tenantGroup,accessLevel,scopes
     tekton.dev/categories: CLI
     tekton.dev/displayName: GitLab Connector Automatic Creation
     tekton.dev/pipelines.minVersion: 0.56.0
@@ -60,7 +161,8 @@ spec:
       type: string
     - default:
         - api
-      description: GitLab GAT scope set; defaults to ["api"]
+        - read_repository
+      description: 'GitLab GAT scope set; defaults to ["api", "read_repository"]. api grants full GitLab REST access (project / group / token CRUD); read_repository grants git-clone-over-HTTPS for tenant CI workloads. Common additions: write_repository (git push), read_registry, write_registry, read_api'
       name: scopes
       type: array
     - default: "30"

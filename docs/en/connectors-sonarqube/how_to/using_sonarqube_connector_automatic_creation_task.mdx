@@ -1,0 +1,516 @@
+---
+weight: 20
+title: Auto-Create Tenant SonarQube User and Connector with Tekton
+---
+
+# Auto-Create Tenant SonarQube User and Connector with Tekton
+
+When a new tenant starts running SonarQube code scans on Alauda
+Container Platform, the administrator has to manage the tenant's
+SonarQube account and permissions, create and maintain the tenant
+`sonarqube` Connector and auth Secret on the cluster, and keep the
+user token rotated before it expires — for every tenant, on every
+rotation cycle. This guide automates that whole flow with a single
+Tekton TaskRun: run it once to provision the tenant, and schedule the
+same TaskRun on a recurring cadence to rotate the token in place
+without manual intervention.
+
+The implementation mechanism is the
+[`sonarqube-connector-automatic-creation` Task](./sonarqube_connector_automatic_creation_task.mdx).
+This page focuses on the operator workflow. For the parameter,
+workspace, result, and step reference, see the
+[Task reference](./sonarqube_connector_automatic_creation_task.mdx).
+
+## Before You Begin
+
+### Cluster prerequisites
+
+- Tekton Pipelines is installed. See the
+  [Tekton Pipelines installation guide](https://tekton.dev/docs/installation/).
+- The Connectors system and the **SonarQube ConnectorClass** are
+  installed — the connectors-operator handles both via
+  `ConnectorsConfig`. See the
+  [Connectors Installation Guide](../../install/install.mdx) and make
+  sure `ConnectorsSonarQube` is enabled in your `ConnectorsConfig`.
+- The
+  [`sonarqube-connector-automatic-creation` Task](./sonarqube_connector_automatic_creation_task.mdx)
+  is installed in the namespace where you will run the TaskRun. See
+  [Installation](./sonarqube_connector_automatic_creation_task.mdx#installation)
+  in the Task reference for the apply recipe.
+- The default `sonarqubeAutomationImage` (or its mirror) is reachable
+  from the cluster.
+
+### SonarQube instance prerequisites \{#prerequisites}
+
+Configure these once at the instance level so the tenant model behaves
+correctly. These are set by a SonarQube administrator, not the Task.
+
+| ID | Setting | Required value | Why |
+|----|---------|----------------|-----|
+| **P1** | Default project visibility | `Private` | Auto-created tenant projects must be private by default; `Public` would expose tenant code on first scan. **Administration → Projects → Management → Default visibility of new projects**. |
+| **P2** | Global permissions on `sonar-users` / Anyone | `Execute Analysis` **not** granted | Granting `Execute Analysis` globally lets any tenant scan into a sibling tenant's key namespace and auto-create projects there, bypassing the per-tenant `projectPattern`. Audit under **Administration → Security → Global Permissions**. |
+| **P3** | Default permission template | No project-level grants to `sonar-users` / Anyone | Blanket grants in the Default Template leak sibling projects regardless of the tenant template. **Administration → Security → Permission Templates → Default Template**. |
+| **P4** | Default quality gate + quality profile | Set to the org baseline | Auto-created projects inherit the instance defaults. Set under **Quality Gates** and **Quality Profiles**. |
+| **P5** | Admin Connector's user | Holds **Administer System** | The Task preflight checks this — without it the API calls for `users/create`, `permissions/add_user`, and `permission_templates/*` fail with `403 Insufficient privileges`. Verify with `GET /api/permissions/users?permission=admin`. |
+
+Only **P5** is enforced by the Task. **P1–P4** are tenant-isolation
+hardening: the Task still succeeds without them, but the boundaries
+between tenants weaken. Audit them before onboarding the first
+tenant.
+
+### Kubernetes RBAC \{#kubernetes-rbac}
+
+The TaskRun's ServiceAccount needs `get/create/patch/update/delete`
+on `Secret` and `Connector` in each tenant namespace. The recommended
+shape is a per-tenant-namespace Role — sharing a `ClusterRole` across
+tenants removes the boundary that keeps a misconfigured tenant
+TaskRun from writing into a sibling namespace.
+
+```yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sonarqube-task-runner
+  namespace: connectors-management
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: sonarqube-connector-automatic-creation
+  namespace: acme-prod              # the tenant's namespace
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get", "create", "patch", "update", "delete"]
+- apiGroups: ["connectors.alauda.io"]
+  resources: ["connectors"]
+  verbs: ["get", "create", "patch", "update", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: sonarqube-connector-automatic-creation
+  namespace: acme-prod
+subjects:
+- kind: ServiceAccount
+  name: sonarqube-task-runner
+  namespace: connectors-management
+roleRef:
+  kind: Role
+  name: sonarqube-connector-automatic-creation
+  apiGroup: rbac.authorization.k8s.io
+```
+
+The Task uses Server-Side Apply with field manager `connector-auto`,
+so a re-run is a no-op when the live spec already matches.
+
+**Cross-cluster variant.** When the tenant Connector + Secret live on
+a different cluster, bind the `kubeconfig` workspace at TaskRun time;
+the kubeconfig's embedded identity replaces this cluster-side RBAC.
+
+### Local user creation must be allowed \{#local-user-creation}
+
+The Task provisions the tenant bot user via
+`POST /api/users/create local=true`. The target instance must accept
+that call. There is no preflight — when local user creation is
+disabled, the failure surfaces the first time the Task tries to
+create a user, as **HTTP 400** with a body explaining that user
+management has been delegated.
+
+SonarQube **Community** does not include the mechanisms below, and
+pure SSO login (SAML / OIDC / GitHub-as-login / GitLab-as-login,
+without provisioning) does **not** trigger this. The known blockers
+are **SonarQube Enterprise / Data Center** provisioning integrations:
+
+| Mechanism | Where it lives | Error body roughly |
+|---|---|---|
+| **SCIM provisioning** | Administration → General → SCIM (requires SAML) | `User management is delegated to your SCIM provider` |
+| **GitHub provisioning** | Administration → Authentication → GitHub → Provisioning | `User management is delegated to your GitHub organization` |
+| **GitLab provisioning** | Administration → Authentication → GitLab → Provisioning | `User management is delegated to your GitLab instance` |
+
+If one is active, pick a fallback before onboarding:
+
+1. **Recommended — turn off the provisioning integration, keep SSO
+   login.** SonarQube returns to admin-managed users; the SSO login
+   integration stays intact.
+2. **Have the IDP provision the bot users.** Pre-provision each
+   `<tenant>-bot` from the IDP; the Task's `users/search` path reuses
+   the IDP-provisioned user and proceeds to grant + template + token.
+3. **Manual fallback — pre-create in a provisioning-off window.** An
+   admin disables provisioning briefly, creates each `<tenant>-bot`
+   local user, then re-enables provisioning and runs the Task.
+
+In all three cases the permission template + `provisioning` grant +
+token mint still run automatically.
+
+## Onboarding walkthrough
+
+This walkthrough provisions tenant `acme` onto the SonarQube instance
+behind the admin Connector `connectors-management/admin-sonar`. It
+creates `acme-prod/acme-sonarqube` as the tenant `sonarqube`
+Connector.
+
+### 1. Verify the admin Connector
+
+```bash
+kubectl -n connectors-management get connector admin-sonar -o yaml | grep -E 'address|tokenAuth|Ready'
+```
+
+The Connector should be `Ready=True`. Before onboarding the first
+tenant, also confirm P5 — the admin token must hold global `admin`:
+
+```bash
+ADMIN_TOKEN=...  # paste once; do NOT commit
+curl -fsSL -u "$ADMIN_TOKEN:" \
+  "https://sonarqube.example.com/api/permissions/users?permission=admin" | jq '.users[].login'
+```
+
+Your admin login must appear in the output.
+
+### 2. Pick the tenant's project key pattern
+
+The `projectPattern` regex must match all tenant project keys and
+**must not overlap** with other tenants. Anchor on a tenant prefix:
+
+| Tenant convention | `projectPattern` | Matches |
+|-------------------|------------------|---------|
+| `acme:*` | `^acme(:.*)?$` | `acme`, `acme:web-frontend`, `acme:platform/api` |
+| `acme-*` | `^acme(-.*)?$` | `acme`, `acme-api`, `acme-frontend` |
+
+Document the chosen prefix in your tenant catalog so sibling tenants
+respect the boundary.
+
+### 3. Apply the onboarding TaskRun
+
+The Task auto-detects how the `sonarqube-config` workspace is bound.
+Pick one mode:
+
+| Mode | When | How |
+|------|------|-----|
+| **Connectors CSI Driver (recommended)** | Same cluster as the admin Connector, day-2 onboarding | Bind to a volume projected by the [Connectors CSI Driver](../../connectors/concepts/connectors_csi.mdx) from the SonarQube `sonar-scanner` ConnectorClass configuration. The admin token never enters the Task pod — the [Connectors Proxy](../../connectors/concepts/connectors_proxy.mdx) injects it on each API call. |
+| **Secret-direct** | Bootstrap, cross-cluster, or CSI driver not available | Pre-create a Secret with `token` (or `username` + `password`) and pass the SonarQube base URL via the `sonarqubeUrl` param. The same Secret can target multiple SonarQube instances by varying the param. |
+
+The example below uses Secret-direct. The TaskRun assumes a
+pre-created Secret `admin-sonar-credentials` in the
+`connectors-management` namespace carrying the admin `token` verified
+in step 1:
+
+```bash
+kubectl -n connectors-management create secret generic admin-sonar-credentials \
+  --from-literal=token=$ADMIN_TOKEN
+```
+
+```yaml
+apiVersion: tekton.dev/v1
+kind: TaskRun
+metadata:
+  generateName: onboard-acme-
+  namespace: connectors-management
+spec:
+  serviceAccountName: sonarqube-task-runner
+  taskRef:
+    name: sonarqube-connector-automatic-creation
+  params:
+  - name: connector
+    value: acme-prod/acme-sonarqube
+  - name: tenant
+    value: acme
+  - name: projectPattern
+    value: '^acme(:.*)?$'
+  - name: tokenDuration
+    value: "30"
+  - name: sonarqubeUrl
+    value: https://sonarqube.example.com
+  workspaces:
+  - name: sonarqube-config
+    secret:
+      secretName: admin-sonar-credentials
+```
+
+For the Connectors CSI Driver binding, swap the `workspaces:` block
+to a CSI projection of the SonarQube `sonar-scanner` ConnectorClass —
+the rest of the TaskRun is identical.
+
+Apply with `kubectl apply -f onboarding.yaml`, then watch the TaskRun:
+
+```bash
+tkn taskrun logs -L -f -n connectors-management
+```
+
+A successful run leaves these results:
+
+```
+NAME                  VALUE
+tenant                acme
+username              acme-bot
+permission-template   acme-template
+token-name            acme-prod__acme-sonarqube
+connector-ref         acme-prod/acme-sonarqube
+```
+
+And these cluster objects in `acme-prod`:
+
+- `Secret/acme-sonarqube-secret` (type `connectors.cpaas.io/bearer-token`)
+- `Connector/acme-sonarqube` (`Ready=True`, points to the Secret above)
+
+### 4. Smoke-test the tenant token
+
+```bash
+TENANT_TOKEN=$(kubectl -n acme-prod get secret acme-sonarqube-secret \
+  -o jsonpath='{.data.token}' | base64 -d)
+
+# Should auto-create the project on first call:
+curl -fsSL -u "$TENANT_TOKEN:" \
+  -X POST "https://sonarqube.example.com/api/projects/create" \
+  --data "project=acme:smoke-test&name=Acme%20Smoke%20Test"
+
+# Should return the project; visibility=private (inherited from P1):
+curl -fsSL -u "$TENANT_TOKEN:" \
+  "https://sonarqube.example.com/api/projects/search?projects=acme:smoke-test" | jq '.components[]'
+```
+
+A negative check — pretending to be tenant `bravo`:
+
+```bash
+# Should return HTTP 403 with body 'Insufficient privileges'
+# (the acme permission template does NOT match this key):
+curl -fsSL -u "$TENANT_TOKEN:" \
+  -X POST "https://sonarqube.example.com/api/projects/create" \
+  --data "project=bravo:should-fail&name=Cross%20Tenant" \
+  -w '\nHTTP %{http_code}\n'
+```
+
+A `HTTP 404` here would mean the `projectKeyPattern` check is being
+bypassed — re-verify the permission template's pattern matches what
+you set in `projectPattern`.
+
+Delete the smoke-test project (`api/projects/delete`) once you have
+verified visibility and the cross-tenant denial.
+
+## Rotation \{#rotation}
+
+The Task is idempotent: re-running it with the same params reuses the
+tenant user, template, and `provisioning` grant; the token is reused
+when it is still tracked by SonarQube **and** the tenant Secret holds
+a non-empty `token`. The simplest rotation is to re-run the same
+TaskRun on a cron — with one wrinkle (below) about when the Task
+actually mints a new token.
+
+| State at cron time | Task behaviour |
+|--------------------|----------------|
+| `user_tokens/search` finds the token **and** Secret holds a non-empty `token`. | **Reuse** — no SonarQube write, no Secret rewrite. |
+| `user_tokens/search` misses (token revoked / never minted in this Secret's lifetime). | **Mint** — fresh token with `expirationDate = today UTC + tokenDuration`; SSA-rewrites the Secret. |
+| Tenant Secret deleted out-of-band. | **Mint** — same as above. |
+| `tokenDuration` or `tokenName` changed since last run. | **Revoke + mint** — identity-affecting inputs force re-issue. |
+| Permission template / user missing (deleted by operator). | **Recreate** — same as a fresh onboard. |
+
+The Task does **not** inspect `expirationDate`. SonarQube has no
+token-renew API; if a token is still in `user_tokens/search` but
+expired, the Task treats it as reused and the expiry surfaces at scan
+time as a `401`. The operator decides how to bridge this:
+
+- **Time-driven rotation (recommended).** Run the TaskRun on a
+  schedule shorter than `tokenDuration` (e.g. every 15 days for
+  `tokenDuration=30`), and before each run delete the tenant Secret.
+  The Task's next run sees the empty Secret, mints a fresh
+  `tokenDuration`-day token, and rewrites the Secret. The live token
+  always has `≥ tokenDuration/2` days left.
+- **Lazy rotation.** Schedule the TaskRun at `tokenDuration/2`
+  cadence with no other action. The Task reuses the token until
+  SonarQube revokes it on `expirationDate`; the next scan-time `401`
+  is followed by the next cron tick, which mints fresh. Simple, but
+  leaves a brief 401 window.
+- **No cron — manual on 401.** The Task only re-runs when an
+  operator triggers it after a scan-time 401. Suitable for
+  low-throughput tenants.
+
+The exact cron wiring (Tekton-on-cron controller, `TriggerSchedule`,
+or a CronJob that `kubectl create`s the TaskRun) is operator-specific;
+the Task's contract is just "re-run me with the same params, after
+deleting the tenant Secret".
+
+## Multi-tenant onboarding
+
+Onboard a second tenant `bravo` by applying a second TaskRun with a
+non-overlapping `projectPattern`:
+
+```yaml
+params:
+- name: connector
+  value: bravo-prod/bravo-sonarqube
+- name: tenant
+  value: bravo
+- name: projectPattern
+  value: '^bravo(:.*)?$'
+```
+
+The two tenants' permission templates do not overlap, so:
+
+- `acme-bot` can auto-create `acme:*` projects but not `bravo:*`.
+- `bravo-bot` can auto-create `bravo:*` projects but not `acme:*`.
+- Cross-tenant API reads return `403 Insufficient privileges`.
+
+The cross-tenant denial holds **only when P3 is enforced** — i.e. the
+Default Template has no project-level grants on `sonar-users` or
+`Anyone`. Otherwise the default group's grants leak into every
+auto-created project regardless of the per-tenant template. Audit the
+Default Template before treating cross-tenant denial as a security
+boundary.
+
+Maintain a tenant catalog (project pattern + connector ref) so future
+tenants do not pick an overlapping pattern. The Task itself does not
+enforce non-overlap.
+
+## Tenant offboarding
+
+When a tenant is decommissioned, undo what the Task created — the
+SonarQube-side artifacts (token, permission template, `provisioning`
+grant, bot user) first, then the cluster-side `Connector` + `Secret`.
+This ordering closes the "Connector deleted but tenant token still
+valid" window. Every call is idempotent: a `404` from SonarQube and a
+missing Kubernetes object are both treated as already-gone, so a
+partial or aborted run heals on re-run.
+
+Save the script below as `sonarqube-tenant-offboard.sh` and run it
+with the tenant + admin credentials:
+
+```bash
+TENANT=acme \
+CONNECTOR_REF=acme-prod/acme-sonarqube \
+SONAR=https://sonarqube.example.com \
+ADMIN_TOKEN=squ_xxxxxxxxxxxxxxxxxxxx \
+  bash sonarqube-tenant-offboard.sh
+```
+
+Required env vars: `TENANT`, `CONNECTOR_REF` (in `namespace/name`
+form, as passed to the Task's `connector` param), `SONAR` (the
+SonarQube base URL), `ADMIN_TOKEN` (a SonarQube user token from a
+user holding **Administer System** — see [P5](#prerequisites); pass
+it without the trailing colon, the script appends it internally for
+curl Basic auth). The script runs a preflight against
+`/api/users/current` and refuses to proceed when the token holder
+lacks the global `admin` permission, so a misconfigured token fails
+fast instead of partway through the SonarQube teardown.
+
+Optional overrides: `USERNAME` (defaults to `<tenant>-bot`),
+`TEMPLATE` (defaults to `<tenant>-template`), and `DEACTIVATE_USER`
+(defaults to `true`; set `false` to keep the SonarQube user
+reactivatable — templates and tokens are still removed).
+
+```bash
+#!/usr/bin/env bash
+# sonarqube-tenant-offboard.sh — symmetric undo of
+# sonarqube-connector-automatic-creation. Idempotent: 404 means
+# "already gone"; any other 4xx/5xx is surfaced as an error.
+set -euo pipefail
+
+: "${TENANT:?TENANT is required}"
+: "${CONNECTOR_REF:?CONNECTOR_REF (namespace/name) is required}"
+: "${SONAR:?SONAR base URL is required}"
+: "${ADMIN_TOKEN:?ADMIN_TOKEN is required (no trailing colon)}"
+
+USERNAME="${USERNAME:-${TENANT}-bot}"
+TEMPLATE="${TEMPLATE:-${TENANT}-template}"
+DEACTIVATE_USER="${DEACTIVATE_USER:-true}"
+
+NAMESPACE="${CONNECTOR_REF%/*}"
+CONNECTOR_NAME="${CONNECTOR_REF#*/}"
+TOKEN_NAME="${NAMESPACE}__${CONNECTOR_NAME}"
+SECRET_NAME="${CONNECTOR_NAME}-secret"
+
+echo "Offboarding tenant=$TENANT"
+echo "  SonarQube: user=$USERNAME template=$TEMPLATE token=$TOKEN_NAME"
+echo "  Cluster:   $NAMESPACE/$CONNECTOR_NAME (+ secret $SECRET_NAME)"
+echo
+
+# Preflight: confirm ADMIN_TOKEN belongs to a user holding global
+# `admin` (Administer System). Without it every admin-only API call
+# below — user_tokens/revoke for another user, permission_templates/
+# delete, permissions/remove_user, users/deactivate — would 403.
+me="$(curl -sS -u "${ADMIN_TOKEN}:" "${SONAR}/api/users/current")"
+case "$me" in
+  *'"admin"'*) ;;
+  *)
+    echo "ERROR: ADMIN_TOKEN does not hold global 'admin' (Administer System)." >&2
+    echo "  /api/users/current returned: $me" >&2
+    echo "  Generate the token from a SonarQube user with Administer System." >&2
+    exit 2 ;;
+esac
+
+# sonar <label> <path> <curl-args...>
+# Prints "[label] <code>"; succeeds on 2xx / 404, fails loudly on other codes.
+sonar() {
+  local label="$1" path="$2"; shift 2
+  local out code body
+  out="$(curl -sS -u "${ADMIN_TOKEN}:" -w '\n%{http_code}' "${SONAR}${path}" "$@")"
+  code="${out##*$'\n'}"
+  body="${out%$'\n'*}"
+  case "$code" in
+    2*)    echo "  [$label] OK ($code)" ;;
+    404)   echo "  [$label] already gone (404)" ;;
+    *)     echo "  [$label] FAILED ($code): ${body:-<empty>}" >&2
+           return 1 ;;
+  esac
+}
+
+# 1. Revoke the tenant user token.
+sonar revoke-token /api/user_tokens/revoke -X POST \
+  --data-urlencode "login=$USERNAME" \
+  --data-urlencode "name=$TOKEN_NAME"
+
+# 2. Delete the tenant permission template.
+# Endpoint moved in SonarQube 10+: /api/permissions/delete_template
+# (older releases used /api/permission_templates/delete).
+sonar delete-template /api/permissions/delete_template -X POST \
+  --data-urlencode "templateName=$TEMPLATE"
+
+# 3. Remove the global `provisioning` grant from the tenant user.
+sonar revoke-provisioning /api/permissions/remove_user -X POST \
+  --data-urlencode "login=$USERNAME" \
+  --data-urlencode "permission=provisioning"
+
+# 4. Deactivate the bot user (unless DEACTIVATE_USER=false).
+if [ "$DEACTIVATE_USER" = "true" ]; then
+  sonar deactivate-user /api/users/deactivate -X POST \
+    --data-urlencode "login=$USERNAME"
+fi
+
+# 5. Cluster-side: delete the tenant Connector and Secret.
+echo
+echo "  [k8s] delete Connector $NAMESPACE/$CONNECTOR_NAME"
+kubectl -n "$NAMESPACE" delete connector "$CONNECTOR_NAME" --ignore-not-found
+echo "  [k8s] delete Secret    $NAMESPACE/$SECRET_NAME"
+kubectl -n "$NAMESPACE" delete secret    "$SECRET_NAME"    --ignore-not-found
+
+echo
+echo "Offboarding complete."
+```
+
+Existing tenant projects on SonarQube are **not deleted** by this
+script — admins can still see them, and (because P1 makes them
+private) other tenants cannot. Delete via `api/projects/delete` once
+the data is exported or migrated.
+
+## Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| `ensure-tenant` fails with `403 Insufficient privileges` on the preflight | Admin Connector identity lacks **Administer System** (P5). | Grant `admin` to the admin user in **Administration → Security → Global Permissions**, then re-run. |
+| `users/create` returns `HTTP 400` with a body about user management being delegated (SCIM / GitHub / GitLab) | An Enterprise provisioning integration owns the user lifecycle and is blocking local user creation. | See [Local user creation must be allowed](#local-user-creation). |
+| Tenant token rejected at scan time (`401 Unauthorized`) | Token revoked on the SonarQube side, or the tenant Secret was rotated to a stale value. | Re-run the TaskRun — it mints a fresh token and rewrites the Secret. |
+| `apply-kubernetes-resources` fails with `Forbidden: User "...": connectors.alauda.io "..." is forbidden` | TaskRun ServiceAccount lacks RBAC on Connector / Secret in the target namespace. | Adjust the per-tenant-namespace Role / RoleBinding (see [Kubernetes RBAC](#kubernetes-rbac)) — most commonly the Role for that namespace was never created. |
+| Sibling tenant can read this tenant's projects | Default Template P3 grants blanket permissions; or two tenants picked overlapping `projectPattern`. | Audit the Default Template (P3); pick non-overlapping patterns; re-run the Task for the current tenant. |
+| Task succeeds but Connector stays `Ready=False` with auth error | SonarQube address mismatch, empty/wrong `token` in the Secret, or connectors-proxy cannot reach the address. | Verify (1) the Connector's `address` matches the SonarQube the Task talked to (the `sonarqubeUrl` param or workspace value); (2) the Secret's `token` key is non-empty; (3) connectors-proxy in the tenant namespace can egress to that address. |
+
+For connector-class-side errors that surface after the Task has run,
+see the
+[SonarQube Connector troubleshooting guide](../trouble_shooting/index.mdx).
+
+## See also
+
+- [Task reference](./sonarqube_connector_automatic_creation_task.mdx) —
+  parameters, workspaces, results, and step details.
+- [SonarQube ConnectorClass](../concepts/sonarqube_connectorclass.mdx) —
+  the Connector model the Task writes to the cluster.
+- [Quick start](../quick_start.mdx) — manual onboarding without the
+  Task, useful for one-off SonarQube integrations.

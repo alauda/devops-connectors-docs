@@ -24,53 +24,52 @@ If you experience slow proxy requests or occasional failures under high load, ap
 - **Scale replicas** for the `connectors-proxy`, `connectors-controller-manager`, `connectors-api`, and plugin components.
 - **Increase `-kube-api-qps` and `-kube-api-burst`** to raise the request rate limit to the Kubernetes API.
 
-Example configuration for ConnectorsCore and ConnectorsOCI:
+The whole Connectors install is driven by a single `ConnectorsConfig` resource (see the [Installation Guide](./install.mdx)). To tune throughput, edit that same `ConnectorsConfig` and set workload settings under `spec.components.<name>.spec.workloads`.
+
+Example `ConnectorsConfig` that tunes the `core` and `oci` components:
 
 ```yaml
 apiVersion: operator.connectors.alauda.io/v1alpha1
-kind: ConnectorsCore
+kind: ConnectorsConfig
 metadata:
-  name: connectors-core
-  namespace: connectors-system
+  name: connectors-config
 spec:
-  workloads:
-  - name: connectors-proxy
-    replicas: 2
-    template:
+  components:
+    core:
       spec:
-        containers:
-        - name: proxy
-          args:
-          - --metrics-bind-address=:8443
-          - -kube-api-qps=60
-          - -kube-api-burst=80
-          resources:
-            requests:
-              cpu: 100m
-              memory: 100Mi
-            limits:
-              cpu: 250m
-              memory: 250Mi
-  - name: connectors-controller-manager
-    replicas: 2
-  - name: connectors-api
-    replicas: 2
----
-apiVersion: operator.connectors.alauda.io/v1alpha1
-kind: ConnectorsOCI
-metadata:
-  name: connectors-oci
-  namespace: connectors-system
-spec:
-  workloads:
-  - name: connectors-oci-plugin
-    replicas: 2
-    template:
+        workloads:
+          - name: connectors-proxy
+            replicas: 2
+            template:
+              spec:
+                containers:
+                  - name: proxy
+                    args:
+                      - --metrics-bind-address=:8443
+                      - -kube-api-qps=60
+                      - -kube-api-burst=80
+                    resources:
+                      requests:
+                        cpu: 100m
+                        memory: 100Mi
+                      limits:
+                        cpu: 250m
+                        memory: 250Mi
+          - name: connectors-controller-manager
+            replicas: 2
+          - name: connectors-api
+            replicas: 2
+    oci:
       spec:
-        containers:
-        - name: plugin
-          args:
-          - -metrics-bind-address=:8082
-          - -kube-api-qps=60
-          - -kube-api-burst=80
+        workloads:
+          - name: connectors-oci-plugin
+            replicas: 2
+            template:
+              spec:
+                containers:
+                  - name: plugin
+                    args:
+                      - -metrics-bind-address=:8082
+                      - -kube-api-qps=60
+                      - -kube-api-burst=80
 ```

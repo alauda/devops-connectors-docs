@@ -1,0 +1,273 @@
+# POC (DEVOPS-43953, 2026-05-22) — Branch-3 Tekton Task for SonarQube 8.9.
+# Throwaway spike: inline scripts (the shipped Task will use a render-tool to
+# inline scripts/*.sh into the template). Mirrors the current product-design /
+# tech-design tenant flow: ensure-user + ensure-template + ensure-token,
+# server-side-apply Secret + Connector to the connector-ref namespace,
+# write 5 results.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sonarqube-task-runner
+  namespace: kychen-1
+  labels: { poc.devops: "43953" }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: sonarqube-task-runner
+  namespace: kychen-1
+  labels: { poc.devops: "43953" }
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "create", "patch", "update", "delete"]
+  - apiGroups: ["connectors.alauda.io"]
+    resources: ["connectors"]
+    verbs: ["get", "create", "patch", "update", "delete"]
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    resourceNames: ["kychen-1"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: sonarqube-task-runner
+  namespace: kychen-1
+  labels: { poc.devops: "43953" }
+subjects:
+  - { kind: ServiceAccount, name: sonarqube-task-runner, namespace: kychen-1 }
+roleRef:
+  { apiGroup: rbac.authorization.k8s.io, kind: Role, name: sonarqube-task-runner }
+---
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: sonarqube-connector-automatic-creation
+  namespace: kychen-1
+  labels:
+    poc.devops: "43953"
+    app.kubernetes.io/version: "0.1-poc"
+  annotations:
+    tekton.dev/displayName: "SonarQube Connector Automatic Creation (Branch-3 POC)"
+spec:
+  description: >-
+    POC Branch-3: for one tenant, ensure a local SonarQube user with global
+    'provisioning' only, a permission template whose projectKeyPattern matches
+    tenant keys with all project-level grants direct-to-user, mint a
+    USER_TOKEN, then server-side-apply a sonarqube Connector + Secret into
+    the connector-ref namespace.
+  params:
+    - { name: toolImage, type: string, default: "registry.alauda.cn:60070/devops/tektoncd/hub/kubectl:v1.33" }
+    - { name: connector, type: string, description: "tenant Connector <ns>/<name>" }
+    - { name: tenant, type: string }
+    - { name: projectPattern, type: string }
+    - { name: permissionTemplate, type: string, default: "" }
+    - { name: userName, type: string, default: "" }
+    - { name: tokenExpiry, type: string, default: "2027-01-01" }
+  workspaces:
+    - { name: sonarqube-config, description: "admin URL + creds (Secret-direct: address/username/password files)" }
+  results:
+    - { name: tenant, description: "tenant identifier" }
+    - { name: username, description: "SonarQube user login created/reused" }
+    - { name: permission-template, description: "permission template name" }
+    - { name: token-name, description: "USER_TOKEN name (never the value)" }
+    - { name: connector-ref, description: "tenant Connector <ns>/<name>" }
+  steps:
+    - name: ensure-tenant
+      image: $(params.toolImage)
+      env:
+        - { name: TENANT, value: "$(params.tenant)" }
+        - { name: PROJECT_PATTERN, value: "$(params.projectPattern)" }
+        - { name: PERMISSION_TEMPLATE, value: "$(params.permissionTemplate)" }
+        - { name: USER_NAME, value: "$(params.userName)" }
+        - { name: TOKEN_EXPIRY, value: "$(params.tokenExpiry)" }
+        - { name: CONNECTOR_REF, value: "$(params.connector)" }
+      script: |
+        #!/bin/sh
+        set -eu
+        # ---- lib.sh::load admin creds from sonarqube-config workspace
+        WS=$(workspaces.sonarqube-config.path)
+        [ -f "$WS/address" ] || { echo "FAIL: missing address"; exit 1; }
+        S=$(cat "$WS/address")
+        if [ -f "$WS/token" ]; then
+          ADMIN_AUTH="$(cat "$WS/token"):"
+        else
+          ADMIN_AUTH="$(cat "$WS/username"):$(cat "$WS/password")"
+        fi
+        api() { curl -sk -m20 -u "$ADMIN_AUTH" "$@"; }
+
+        # ---- derive names
+        USER="${USER_NAME:-${TENANT}-bot}"
+        TEMPLATE="${PERMISSION_TEMPLATE:-${TENANT}-template}"
+        NAME="${CONNECTOR_REF#*/}"
+        TOKEN_NAME="${NAME}-token"
+
+        echo "[preflight] verify admin holds Administer System..."
+        DIRECT=$(api "$S/api/permissions/users?permission=admin" | jq -r '[.users[]?.login] | join(",")')
+        GRPS=$(api "$S/api/permissions/groups?permission=admin" | jq -r '[.groups[]?.name] | join(",")')
+        ADMIN_GROUPS=$(api "$S/api/users/groups?login=admin" | jq -r '[.groups[]? | select(.selected==true) | .name] | join(",")')
+        OK=0
+        echo "$DIRECT" | tr ',' '\n' | grep -qx admin && OK=1
+        if [ $OK -eq 0 ]; then
+          for g in $(echo "$GRPS" | tr ',' ' '); do
+            echo "$ADMIN_GROUPS" | tr ',' '\n' | grep -qx "$g" && OK=1
+          done
+        fi
+        [ $OK -eq 1 ] || { echo "FAIL: admin Connector lacks Administer System"; exit 1; }
+
+        echo "[ensure-user] create-or-reuse $USER..."
+        EXISTS=$(api "$S/api/users/search?q=$USER" | jq -r ".users[]? | select(.login==\"$USER\") | .login")
+        if [ -z "$EXISTS" ]; then
+          api -X POST "$S/api/users/create" \
+            --data-urlencode "login=$USER" --data-urlencode "name=$USER" \
+            --data-urlencode 'local=true' --data-urlencode "password=Auto-${USER}-Pwd-43953!" \
+            -w "  users/create -> %{http_code}\n" -o /dev/null
+        else echo "  reused"; fi
+        api -X POST "$S/api/permissions/add_user" \
+          --data-urlencode "login=$USER" --data-urlencode 'permission=provisioning' \
+          -w "  add_user provisioning -> %{http_code}\n" -o /dev/null
+
+        # verify scoping
+        for P in admin scan gateadmin profileadmin; do
+          H=$(api "$S/api/permissions/users?permission=$P" | jq -r ".users[]? | select(.login==\"$USER\") | .login")
+          [ -z "$H" ] || { echo "FAIL: $USER unexpectedly holds global $P"; exit 1; }
+        done
+
+        echo "[ensure-template] create-or-reuse $TEMPLATE..."
+        EXISTS=$(api "$S/api/permissions/search_templates?q=$TEMPLATE" | jq -r ".permissionTemplates[]? | select(.name==\"$TEMPLATE\") | .name")
+        if [ -z "$EXISTS" ]; then
+          api -X POST "$S/api/permissions/create_template" \
+            --data-urlencode "name=$TEMPLATE" --data-urlencode "projectKeyPattern=$PROJECT_PATTERN" \
+            -w "  create_template -> %{http_code}\n" -o /dev/null
+        else echo "  reused"; fi
+        for P in user codeviewer issueadmin securityhotspotadmin scan; do
+          api -X POST "$S/api/permissions/add_user_to_template" \
+            --data-urlencode "templateName=$TEMPLATE" --data-urlencode "login=$USER" \
+            --data-urlencode "permission=$P" \
+            -w "  add_user_to_template $P -> %{http_code}\n" -o /dev/null
+        done
+
+        echo "[ensure-token] mint USER_TOKEN $TOKEN_NAME..."
+        api -X POST "$S/api/user_tokens/revoke" \
+          --data-urlencode "login=$USER" --data-urlencode "name=$TOKEN_NAME" \
+          -w "  revoke (idempotent) -> %{http_code}\n" -o /dev/null
+        RESP=$(api -X POST "$S/api/user_tokens/generate" \
+          --data-urlencode "login=$USER" --data-urlencode "name=$TOKEN_NAME" \
+          --data-urlencode 'type=USER_TOKEN' --data-urlencode "expirationDate=$TOKEN_EXPIRY")
+        TOK=$(echo "$RESP" | jq -r '.token // empty')
+        [ -n "$TOK" ] || { echo "FAIL: token mint: $RESP"; exit 1; }
+        echo "  minted (len=${#TOK})"
+
+        # Pass to next step (tmpfs emptyDir mounted as /workspace/shared)
+        mkdir -p /workspace/shared
+        printf "%s" "$TOK"     > /workspace/shared/token
+        printf "%s" "$USER"    > /workspace/shared/username
+        printf "%s" "$TEMPLATE"> /workspace/shared/template
+        printf "%s" "$TOKEN_NAME" > /workspace/shared/token-name
+        chmod 0600 /workspace/shared/token
+      volumeMounts:
+        - { name: shared, mountPath: /workspace/shared }
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities: { drop: ["ALL"] }
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile: { type: RuntimeDefault }
+
+    - name: apply-kubernetes-resources
+      image: $(params.toolImage)
+      env:
+        - { name: CONNECTOR_REF, value: "$(params.connector)" }
+      script: |
+        #!/bin/sh
+        set -eu
+        WS=$(workspaces.sonarqube-config.path)
+        ADDR=$(cat "$WS/address")
+        NS="${CONNECTOR_REF%/*}"
+        NAME="${CONNECTOR_REF#*/}"
+        TOK=$(cat /workspace/shared/token)
+
+        echo "[apply] Secret + Connector to $NS/$NAME-secret + $NS/$NAME"
+        cat > /workspace/shared/manifest.yaml <<YAML
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: $NAME-secret
+          namespace: $NS
+          labels: { poc.devops: "43953" }
+        type: connectors.cpaas.io/bearer-token
+        stringData:
+          token: "$TOK"
+        ---
+        apiVersion: connectors.alauda.io/v1alpha1
+        kind: Connector
+        metadata:
+          name: $NAME
+          namespace: $NS
+          labels: { poc.devops: "43953" }
+        spec:
+          connectorClassName: sonarqube
+          address: $ADDR
+          auth:
+            name: tokenAuth
+            secretRef:
+              name: $NAME-secret
+              namespace: $NS
+        YAML
+        kubectl apply --server-side --field-manager=connector-auto -f /workspace/shared/manifest.yaml
+        echo "[apply] done"
+      volumeMounts:
+        - { name: shared, mountPath: /workspace/shared }
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities: { drop: ["ALL"] }
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile: { type: RuntimeDefault }
+
+    - name: write-results
+      image: $(params.toolImage)
+      env:
+        - { name: TENANT, value: "$(params.tenant)" }
+        - { name: CONNECTOR_REF, value: "$(params.connector)" }
+      script: |
+        #!/bin/sh
+        set -eu
+        echo -n "$TENANT" > $(results.tenant.path)
+        cat /workspace/shared/username  > $(results.username.path)
+        cat /workspace/shared/template  > $(results.permission-template.path)
+        cat /workspace/shared/token-name > $(results.token-name.path)
+        echo -n "$CONNECTOR_REF" > $(results.connector-ref.path)
+        echo "[write-results] done"
+        ls -la $(results.tenant.path)
+      volumeMounts:
+        - { name: shared, mountPath: /workspace/shared }
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities: { drop: ["ALL"] }
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile: { type: RuntimeDefault }
+
+  volumes:
+    - { name: shared, emptyDir: { medium: Memory } }
+---
+apiVersion: tekton.dev/v1
+kind: TaskRun
+metadata:
+  name: sonarqube-acme-tr-onboard
+  namespace: kychen-1
+  labels: { poc.devops: "43953" }
+spec:
+  serviceAccountName: sonarqube-task-runner
+  taskRef: { name: sonarqube-connector-automatic-creation }
+  params:
+    - { name: connector,       value: "kychen-1/acme-tr-sonarqube" }
+    - { name: tenant,          value: "acme-tr" }
+    - { name: projectPattern,  value: "^acme-tr(:.*)?$" }
+  workspaces:
+    - name: sonarqube-config
+      secret:
+        secretName: sonarqube-89-admin

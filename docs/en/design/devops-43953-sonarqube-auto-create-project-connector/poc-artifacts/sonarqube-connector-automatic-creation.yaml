@@ -1,0 +1,217 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: sonarqube-connector-automatic-creation
+  labels:
+    app.kubernetes.io/version: "0.1"
+  annotations:
+    tekton.dev/categories: Security
+    tekton.dev/tags: sonarqube, code-quality, connector
+    tekton.dev/displayName: "SonarQube Connector Automatic Creation"
+    tekton.dev/platforms: "linux/amd64,linux/arm64"
+    # POC (DEVOPS-43953). This Task is a throwaway spike — inline scripts, not
+    # the render-tool form the design specifies. It exists to prove the
+    # auto-create flow runs as a real Tekton Task end-to-end.
+spec:
+  description: >-
+    Creates a SonarQube project, applies a named permission template, mints a
+    project-scoped analysis token, and server-side-applies a sonarqube
+    Connector + Secret into the target namespace. Idempotent on re-run; rolls
+    back the SonarQube resources it created this run if a step fails.
+  workspaces:
+    - name: sonarqube-admin
+      description: >-
+        Secret-backed workspace carrying the admin SonarQube credentials as
+        files: url, user, password.
+  params:
+    - name: sonarApiImage
+      type: string
+      # POC: the catalog kubectl image is alpine-based and ships bash + curl +
+      # jq, so it doubles as the SonarQube Web API image here. The shipped
+      # Task will pin a dedicated curl/jq image (design item A4).
+      default: registry.alauda.cn:60070/devops/tektoncd/hub/kubectl:v1.33
+    - name: kubectlImage
+      type: string
+      default: registry.alauda.cn:60070/devops/tektoncd/hub/kubectl:v1.33
+    - name: projectKey
+      type: string
+      description: SonarQube project key (globally unique).
+    - name: projectName
+      type: string
+      default: ""
+    - name: scope
+      type: string
+      default: namespace
+      description: parent | namespace.
+    - name: permissionTemplate
+      type: string
+      description: Name of an existing SonarQube permission template to apply.
+    - name: qualityGate
+      type: string
+      default: ""
+      description: Quality gate to assign (used when scope=parent).
+    - name: targetNamespace
+      type: string
+      description: Namespace for the tenant Connector + Secret.
+    - name: connectorName
+      type: string
+      default: ""
+    - name: secretName
+      type: string
+      default: ""
+    - name: tokenName
+      type: string
+      default: ""
+  results:
+    - name: project-key
+      description: The SonarQube project key after reconcile.
+    - name: project-scope
+      description: parent | namespace.
+    - name: token-name
+      description: The project-analysis token name (never the value).
+    - name: connector-ref
+      description: <namespace>/<name> of the tenant Connector.
+  volumes:
+    - name: state
+      emptyDir:
+        medium: Memory
+  steps:
+    - name: ensure-sonarqube
+      image: $(params.sonarApiImage)
+      volumeMounts:
+        - name: state
+          mountPath: /poc-state
+      computeResources:
+        requests: { cpu: 250m, memory: 256Mi }
+        limits:   { cpu: 500m, memory: 512Mi }
+      script: |
+        #!/usr/bin/env bash
+        set -Eeuo pipefail
+        WS='$(workspaces.sonarqube-admin.path)'
+        STATE=/poc-state
+        CFG="$STATE/curl.cfg"
+        SONAR_URL="$(cat "$WS/url")"
+        printf 'user = "%s:%s"\n' "$(cat "$WS/user")" "$(cat "$WS/password")" > "$CFG"
+        chmod 600 "$CFG"
+
+        PROJECT_KEY='$(params.projectKey)'
+        PROJECT_NAME='$(params.projectName)'; [ -n "$PROJECT_NAME" ] || PROJECT_NAME="$PROJECT_KEY"
+        SCOPE='$(params.scope)'
+        PERMISSION_TEMPLATE='$(params.permissionTemplate)'
+        QUALITY_GATE='$(params.qualityGate)'
+        TOKEN_NAME='$(params.tokenName)'
+        [ -n "$TOKEN_NAME" ] || TOKEN_NAME="connector-$(printf '%s' "$PROJECT_KEY" | tr ':_' '--')"
+        CREATED="$STATE/created"; : > "$CREATED"
+
+        log()  { printf '[ensure-sonarqube] %s\n' "$*" >&2; }
+        sq()   { m=$1; p=$2; shift 2; curl -sS -m 30 -K "$CFG" -X "$m" -w '\n%{http_code}' "$SONAR_URL$p" "$@"; }
+        code() { printf '%s' "$1" | tail -n1; }
+        body() { printf '%s' "$1" | sed '$d'; }
+
+        rollback() {
+          log "ROLLBACK — unwinding resources created this run"
+          if grep -qxF "token:$TOKEN_NAME" "$CREATED" 2>/dev/null; then
+            sq POST /api/user_tokens/revoke --data-urlencode "name=$TOKEN_NAME" >/dev/null && log "revoked token $TOKEN_NAME" || true
+          fi
+          if grep -qxF "project:$PROJECT_KEY" "$CREATED" 2>/dev/null; then
+            sq POST /api/projects/delete --data-urlencode "project=$PROJECT_KEY" >/dev/null && log "deleted project $PROJECT_KEY" || true
+          fi
+        }
+        trap 'rc=$?; [ "$rc" -ne 0 ] && rollback; exit $rc' EXIT
+
+        # --- ensure project ---
+        r="$(sq GET "/api/projects/search?projects=$PROJECT_KEY")"
+        if body "$r" | grep -q "\"key\":\"$PROJECT_KEY\""; then
+          log "project $PROJECT_KEY exists — reusing"
+        else
+          r="$(sq POST /api/projects/create --data-urlencode "project=$PROJECT_KEY" --data-urlencode "name=$PROJECT_NAME")"
+          [ "$(code "$r")" = 200 ] || { log "projects/create HTTP $(code "$r"): $(body "$r")"; exit 1; }
+          echo "project:$PROJECT_KEY" >> "$CREATED"
+          log "project $PROJECT_KEY created"
+        fi
+
+        # --- ensure permissions ---
+        r="$(sq GET "/api/permissions/search_templates?q=$PERMISSION_TEMPLATE")"
+        body "$r" | grep -q "\"name\":\"$PERMISSION_TEMPLATE\"" \
+          || { log "permission template '$PERMISSION_TEMPLATE' not found on the instance"; exit 1; }
+        r="$(sq POST /api/permissions/apply_template --data-urlencode "templateName=$PERMISSION_TEMPLATE" --data-urlencode "projectKey=$PROJECT_KEY")"
+        case "$(code "$r")" in
+          200|204) log "applied permission template $PERMISSION_TEMPLATE" ;;
+          *) log "apply_template HTTP $(code "$r"): $(body "$r")"; exit 1 ;;
+        esac
+        if [ "$SCOPE" = parent ] && [ -n "$QUALITY_GATE" ]; then
+          r="$(sq POST /api/qualitygates/select --data-urlencode "gateName=$QUALITY_GATE" --data-urlencode "projectKey=$PROJECT_KEY")"
+          case "$(code "$r")" in 200|204) log "assigned quality gate $QUALITY_GATE" ;; *) log "qualitygates/select HTTP $(code "$r") — non-fatal" ;; esac
+        fi
+
+        # --- ensure token (value is returned once; cluster Secret is the only copy) ---
+        r="$(sq GET /api/user_tokens/search)"
+        if body "$r" | grep -q "\"name\":\"$TOKEN_NAME\""; then
+          log "token $TOKEN_NAME exists — revoking before mint"
+          sq POST /api/user_tokens/revoke --data-urlencode "name=$TOKEN_NAME" >/dev/null
+        fi
+        r="$(sq POST /api/user_tokens/generate --data-urlencode "name=$TOKEN_NAME" --data-urlencode "type=PROJECT_ANALYSIS_TOKEN" --data-urlencode "projectKey=$PROJECT_KEY")"
+        [ "$(code "$r")" = 200 ] || { log "user_tokens/generate HTTP $(code "$r"): $(body "$r")"; exit 1; }
+        echo "token:$TOKEN_NAME" >> "$CREATED"
+        body "$r" | grep -o '"token":"[^"]*"' | cut -d'"' -f4 > "$STATE/token"
+        log "minted PROJECT_ANALYSIS_TOKEN $TOKEN_NAME"
+
+        # --- hand off to step 2 + emit results ---
+        printf '%s' "$SONAR_URL"   > "$STATE/sonar-url"
+        printf '%s' "$PROJECT_KEY" > "$STATE/project-key"
+        printf '%s' "$PROJECT_KEY" > '$(results.project-key.path)'
+        printf '%s' "$SCOPE"       > '$(results.project-scope.path)'
+        printf '%s' "$TOKEN_NAME"  > '$(results.token-name.path)'
+        trap - EXIT
+        log "done"
+    - name: apply-kubernetes-resources
+      image: $(params.kubectlImage)
+      volumeMounts:
+        - name: state
+          mountPath: /poc-state
+      computeResources:
+        requests: { cpu: 250m, memory: 256Mi }
+        limits:   { cpu: 500m, memory: 512Mi }
+      script: |
+        #!/usr/bin/env bash
+        set -Eeuo pipefail
+        STATE=/poc-state
+        TOKEN="$(cat "$STATE/token")"
+        PROJECT_KEY="$(cat "$STATE/project-key")"
+        SONAR_URL="$(cat "$STATE/sonar-url")"
+        NS='$(params.targetNamespace)'
+        CONNECTOR='$(params.connectorName)'
+        [ -n "$CONNECTOR" ] || CONNECTOR="$(printf '%s' "$PROJECT_KEY" | tr ':_' '--')-sonarqube"
+        SECRET='$(params.secretName)'
+        [ -n "$SECRET" ] || SECRET="$CONNECTOR-secret"
+
+        log() { printf '[apply-kubernetes-resources] %s\n' "$*" >&2; }
+
+        kubectl apply --server-side --field-manager connector-auto -f - <<EOF
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: $SECRET
+          namespace: $NS
+          labels: { connectors.cpaas.io/sonarqube: "true", poc.devops: "43953" }
+        type: connectors.cpaas.io/bearer-token
+        stringData:
+          token: "$TOKEN"
+        ---
+        apiVersion: connectors.alauda.io/v1alpha1
+        kind: Connector
+        metadata:
+          name: $CONNECTOR
+          namespace: $NS
+          labels: { connectors.cpaas.io/sonarqube: "true", poc.devops: "43953" }
+        spec:
+          connectorClassName: sonarqube
+          address: "$SONAR_URL"
+          auth:
+            name: tokenAuth
+            secretRef:
+              name: $SECRET
+              namespace: $NS
+        EOF
+        printf '%s' "$NS/$CONNECTOR" > '$(results.connector-ref.path)'
+        log "server-side-applied Connector + Secret: $NS/$CONNECTOR"

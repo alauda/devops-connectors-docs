@@ -8,11 +8,39 @@ This page describes the current maturity level of each Connectors feature, helpi
 
 ## Maturity Levels
 
-| Level     | Meaning                                                                                                                        |
-| --------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| **Alpha** | Feature is in early development. Behavior and APIs may change without notice. Not recommended for production workloads.        |
-| **Beta**  | Feature is functional and reasonably stable. Minor changes may occur with advance notice. Suitable for non-critical workloads. |
-| **GA**    | Feature is stable and production-ready. APIs and behavior are stable across minor releases.                                    |
+| Level          | Meaning                                                                                                                        |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| **Alpha**      | Feature is in early development. Behavior and APIs may change without notice. Not recommended for production workloads.        |
+| **Beta**       | Feature is functional and reasonably stable. Minor changes may occur with advance notice. Suitable for non-critical workloads. |
+| **GA**         | Feature is stable and production-ready. APIs and behavior are stable across minor releases.                                    |
+| **Deprecated** | Feature is scheduled for removal. Existing workloads continue to function but new use is discouraged; plan a migration.        |
+
+## Admin Override Boundary \{#admin-override-boundary}
+
+A subset of operator-managed resources is install-gated by feature — the
+operator decides per resource whether to apply it to the cluster based on the
+feature's maturity. Whether an admin can change that decision depends on the
+maturity tier:
+
+- **Alpha** and **Beta** features accept per-feature configuration via
+  `spec.installFlags` on the cluster-singleton
+  [`ConnectorsConfig`](../install/install.mdx#how-it-works), or scoped to a
+  single component via the same field under `spec.components.<name>.spec.installFlags`
+  (e.g. `spec.components.harbor.spec.installFlags`). The value's shape is interpreted
+  per feature: for schema-version-aware features such as
+  `pipeline-integration` the value is a `"<=N"` cap (see
+  [Cap the installed schema-version range](../connectors/concepts/resource_interface.mdx#disable-higher-schema)).
+- **GA** features are locked by the operator. Any matching entry in
+  `installFlags` is silently ignored, so promoting a feature from Beta
+  to GA is never blocked by stale admin settings.
+- **Deprecated** features are also locked. Matching `installFlags`
+  entries are ignored and the controlled resources stay skipped, so
+  admins cannot accidentally re-enable a feature that is on its way out.
+
+This is install-time gating only — runtime behavior is governed separately by
+[Feature Flags](feature_flags.mdx). Common use cases include compatibility
+opt-outs such as
+[Cap the installed schema-version range](../connectors/concepts/resource_interface.mdx#disable-higher-schema).
 
 ## Feature Maturity Overview
 
@@ -39,10 +67,30 @@ Core Capabilities covers the foundational framework that all Connector types rel
 | SonarQube Connector     | Beta     |
 | JFrog Connector         | Alpha    |
 
-### Advanced Features
+### Advanced Features \{#advanced-features}
 
 | Feature                             | Maturity | Description                                                                                                                                                               |
 | ----------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Pipeline Resource Integration       | Alpha    | Provides a standard abstraction over tool resources (such as repositories, images, and artifacts), enabling them to be discovered and used within pipeline orchestration. |
 | Custom ConnectorClass               | Alpha    | Extend Connectors with support for new tool types by defining custom ConnectorClass resources.                                                                            |
 | Kubernetes Image Pull via Connector | Alpha    | Use OCI or Harbor Connectors to pull images for Kubernetes clusters in secret-less mode. Gated by the [enable-pod-image-pull-via-connector](feature_flags.mdx#enable-pod-image-pull-via-connector) feature flag (default off).                                                                                 |
+
+## Install Flag Catalog
+
+The install flags currently exposed via `spec.installFlags`:
+
+| Install Flag           | Controls                                                                                                  | Install-Gate Maturity | Default Behavior                                                       |
+| ---------------------- | --------------------------------------------------------------------------------------------------------- | --------------------- | ---------------------------------------------------------------------- |
+| `pipeline-integration` | Which [Pipeline Resource Integration](#advanced-features) ResourceInterface schema-versions are installed | Beta                  | Install every schema-version; admin may cap via `"<=N"` (e.g. `"<=2"`) |
+
+`Install-Gate Maturity` drives the override semantics in
+[Admin Override Boundary](#admin-override-boundary) and is
+independent of the controlled feature's user-visible maturity in the
+[Advanced Features](#advanced-features) table above. The
+`pipeline-integration` gate sits at Beta (install-all by default,
+admin may cap) while Pipeline Resource Integration itself is still
+Alpha — the gate preserves legacy install behavior so the feature
+can stabilize without disrupting existing clusters.
+
+For the value syntax of each flag, see
+[Install Flags](../install/install.mdx#install-flags).

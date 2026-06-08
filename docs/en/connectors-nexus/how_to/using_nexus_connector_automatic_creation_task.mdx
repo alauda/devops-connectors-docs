@@ -1,0 +1,696 @@
+---
+weight: 20
+title: Automatically Create and Reconcile Nexus Connector Resources with Tekton
+---
+
+# Automatically Create and Reconcile Nexus Connector Resources with Tekton
+
+When a new tenant, project, or namespace is created in Alauda Container Platform, administrators often need to complete the same Nexus onboarding steps again and again:
+
+- Create one or more Nexus repositories, or attach access to existing shared ones.
+- Create a Nexus local user and role scoped to those repositories.
+- Create the Connector authentication Secret and the Nexus Connector in Kubernetes.
+
+The repository set and the granted action scope evolve over time — projects pick up new repositories, drop old ones, or widen and narrow what a scoped user is allowed to do. Re-running the same automation handles those scope changes. **Credential rotation is a separate, security-driven cycle**: even when the repository set and action scope have not changed, the scoped Nexus user password should be rotated periodically (or in response to an incident) so that long-lived credentials do not accumulate in downstream consumers. The Task drives both flows from the same TaskRun, but the two intents are independent.
+
+This guide focuses on that operational problem. The implementation mechanism used here is the `nexus-connector-automatic-creation` Tekton Task. You can run it once for initial provisioning, run it again later to reconcile repository configuration and scope, and run it on a schedule to rotate the scoped user password.
+
+## What Problem This Solves
+
+Use this approach when you need to automate Nexus onboarding and credential refresh for Alauda Container Platform tenants and namespaces.
+
+Common scenarios include:
+
+- **Project-level Nexus repositories**: create one or more Nexus repositories (hosted, proxy, or group) and one scoped user for an Alauda Container Platform project, then materialise the Connector and Secret in the project namespace.
+- **Mixed provision and reference**: provision project-private repositories and at the same time attach the same scoped user to shared upstream repositories (for example, a built-in `maven-central` proxy) that already exist in Nexus.
+- **Reference-only**: skip provisioning entirely and only attach the scoped user to existing repositories, when repositories are administered through another channel.
+- **Credential refresh and reconciliation**: re-run the same automation to update repository configuration, refresh the Nexus user password, and update the generated Connector Secret.
+
+This guide is about solving the Nexus initialization and credential lifecycle problem. The Tekton Task is the solution used to implement that workflow.
+
+## Before You Begin
+
+### Prerequisites
+
+- Tekton Pipelines is installed.
+- The Connectors system, the **Nexus Connector** component, and the **Kubernetes Connector** component are installed. (The Kubernetes Connector is needed when you provide the `kube-config` workspace through a Kubernetes Connector — see [Use a Kubernetes Connector for `kube-config`](#use-a-kubernetes-connector-for-kube-config).)
+- The [`nexus-connector-automatic-creation` Task](./nexus_connector_automatic_creation_task.mdx) is installed in the namespace where you will run the TaskRun.
+- The Nexus runtime image used by the Task is available from your internal registry.
+- (Optional) The TaskRun ServiceAccount can reach the target Kubernetes apiserver to apply the generated Connector and Secret. This is only required when the `kube-config` workspace is **unbound** and the Task falls back to the in-cluster ServiceAccount. When you bind the `kube-config` workspace to a Kubernetes Connector pointing at a `kubeconfig`-style credential, the Task targets that cluster via the Connector, and the TaskRun ServiceAccount does **not** need apiserver permissions on the local cluster.
+
+### Security considerations
+
+- Use a private management namespace to store the privileged Nexus credential, the Kubernetes credential, and the TaskRun that performs provisioning or credential refresh.
+- Restrict who can trigger the TaskRun, because that action can rotate the scoped Nexus user password and overwrite Connector Secrets.
+- If a strict deployment is required, disable Nexus anonymous access in the Nexus console (Settings → Security → Anonymous Access) before running this Task. The Task only emits a warning when anonymous access is enabled; it does not change cluster-level Nexus configuration.
+
+### Compatibility
+
+> **Tested on Nexus Repository Manager 3.76 OSS.**
+
+Other Nexus 3.x versions may work but are not covered by the test suite.
+
+### Scenario index
+
+Use this matrix to pick the right starting example for your situation:
+
+| Scenario | Real-world example | Start from |
+| -------- | ------------------ | ---------- |
+| Provision-only — one project, one or more dedicated Nexus repos | "Project A needs its own private Maven hosted repo and one scoped user so its CI can publish release artifacts without touching shared infrastructure." | [Example: Provision Project-private Nexus Repositories](#example-provision-project-private-nexus-repositories) |
+| Reference-only — repos already exist; just attach a scoped user | "Team B's CI needs to resolve dependencies from the existing shared `maven-public` and `npm-public` proxies that the platform team maintains; we don't own those repos." | [Example: Attach Access to Existing Shared Repositories](#example-attach-access-to-existing-shared-repositories) |
+| Mixed — provision a few private repos plus reference shared upstreams | "Project A needs its own private Maven hosted + proxy + group repos for internal publishing, and the same scoped user should also be able to read from the platform-shared `maven-central` proxy." | [Example: Mixed Provision and Reference](#example-mixed-provision-and-reference) |
+| Cross-format — Maven + npm + raw (or any combination) in one TaskRun | "A polyglot project owns a Maven hosted repo for its Java services and an npm hosted repo for its frontend packages — both should be reconciled together." | [Example: Provision Project-private Nexus Repositories](#example-provision-project-private-nexus-repositories) (extend `provision[]` with mixed formats) |
+
+## Prepare Credentials and Workspaces
+
+The solution uses two workspaces:
+
+| Workspace | Required | Purpose | Expected content |
+| --------- | -------- | ------- | ---------------- |
+| `nexus-secret` | Yes | Nexus credential used for Nexus-side operations. | Basic-auth Secret (`username` + `password` files), or a Nexus Connector mounted through the Connectors CSI driver. |
+| `kube-config` | No | kubeconfig used for Kubernetes-side operations. When unbound, the in-cluster ServiceAccount is used. | `kubeconfig` |
+
+### Nexus credentials for `nexus-secret` \{#nexus-credentials-for-nexus-secret}
+
+This workspace provides the Nexus credential that the automation uses to create or update Nexus repositories, create the scoped user and role, and link standard repository-view privileges to that role.
+
+The Nexus credential used here must be able to:
+
+- Create and update Nexus repositories.
+- Create and update Nexus local users.
+- Create and update Nexus roles.
+- Read existing `nx-repository-view-<format>-<repo>-<action>` privileges and attach them to a role.
+- Reset the password of the scoped Nexus user the Task creates.
+
+The Nexus built-in `nx-admin` role satisfies all of the above. If you prefer least-privilege provisioning, create a dedicated Nexus role with the following privileges and assign it to the provisioning user:
+
+| Privilege | Why it is required |
+| --------- | ------------------ |
+| `nx-repository-admin-*-*-*` | Create, read, and update repositories of every format and type the Task may provision. Narrow the wildcards if the provisioning user only manages a subset of formats. |
+| `nx-userschangepw` | Reset the password of the scoped Nexus user on every run. |
+| `nx-users-create`, `nx-users-read`, `nx-users-update` | Manage the scoped Nexus user the Task creates. |
+| `nx-roles-create`, `nx-roles-read`, `nx-roles-update` | Manage the scoped Nexus role. |
+| `nx-privileges-read` | Look up the `nx-repository-view-<format>-<repo>-<action>` privileges Nexus generates automatically when a repository is created. The Task only reads these privileges — it never creates custom ones. |
+
+You can provide this workspace in either of two ways:
+
+- **Basic-auth Secret** — straightforward when you already have Nexus credentials and want to use them directly.
+- **Mounted Nexus Connector** — recommended for production. Pod-side credentials stay in the Connectors proxy, and the Pod only sees proxy environment variables.
+
+#### Use a basic-auth Secret for `nexus-secret`
+
+Create a `kubernetes.io/basic-auth` Secret in the management namespace:
+
+```bash
+kubectl create secret generic nexus-provisioner-auth \
+  -n <management-namespace> \
+  --type=kubernetes.io/basic-auth \
+  --from-literal=username=<nexus-provisioner-username> \
+  --from-literal=password=<nexus-provisioner-password> \
+  --dry-run=client -o yaml | kubectl apply -f -
+```
+
+Bind it like this:
+
+```yaml
+workspaces:
+  - name: nexus-secret
+    secret:
+      secretName: nexus-provisioner-auth
+```
+
+In this mode the Task reads `username` and `password` from the mounted files and connects directly to the URL given by the `nexusUrl` Task parameter.
+
+#### Use a Nexus Connector for `nexus-secret`
+
+This mode is the recommended choice when you want to keep the Nexus credential off the Pod — the Pod talks to Nexus through the Connectors proxy, and the proxy injects the real basic-auth header on the outgoing request. The Connector can live in the same cluster as the TaskRun or off-cluster; both shapes are valid choices.
+
+First, create a Nexus Connector in the management namespace. The credential behind this Connector should satisfy the same Nexus permissions listed above.
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: nexus-provisioner-auth
+  namespace: <management-namespace>
+type: kubernetes.io/basic-auth
+stringData:
+  username: <nexus-provisioner-username>
+  password: <nexus-provisioner-password>
+---
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: nexus-provisioner
+  namespace: <management-namespace>
+spec:
+  connectorClassName: nexus
+  address: <your-nexus-address>  # e.g. https://nexus.example.com
+  auth:
+    name: basicAuth
+    secretRef:
+      name: nexus-provisioner-auth
+```
+
+Then bind the TaskRun `nexus-secret` workspace to the Connector through the Connectors CSI driver:
+
+```yaml
+workspaces:
+  - name: nexus-secret
+    csi:
+      driver: connectors-csi
+      readOnly: true
+      volumeAttributes:
+        connectors: <management-namespace>/nexus-provisioner
+```
+
+For the exact file layout the Connectors CSI driver mounts into the workspace, see the [Connectors CSI driver documentation](../../connectors/concepts/connectors_csi.mdx). For a step-by-step walkthrough of creating a Nexus Connector that you can mount here, see the [Nexus Connector quick start](../quick_start.mdx).
+
+The referenced Connector must use `connectorClassName: nexus`. The Task rejects other ConnectorClasses to keep proxy authentication routing consistent. Make sure the TaskRun ServiceAccount is allowed to use this Nexus Connector.
+
+### Kubernetes credentials for `kube-config`
+
+This workspace provides the Kubernetes credential that the automation uses to create or update the Connector Secret and the Nexus Connector in the connector namespace.
+
+The Kubernetes credential used here must be able to:
+
+- Create and update Secrets in the connector namespace.
+- Create and update Nexus Connector resources in the connector namespace.
+
+When the `kube-config` workspace is unbound, the Task uses the in-cluster ServiceAccount of the TaskRun Pod. Bind it only when you need to apply the Connector and Secret with a kubeconfig that is different from the TaskRun ServiceAccount, for example when targeting an external cluster.
+
+#### Grant the apply credential Kubernetes RBAC \{#grant-the-apply-credential-kubernetes-rbac}
+
+Whether you use the in-cluster ServiceAccount or a bound kubeconfig, the credential must be allowed to `get`, `create`, and `patch` Secrets and Nexus Connector resources (`connectors.connectors.alauda.io`, group `connectors.alauda.io`) in the connector namespace. The Task uses Server-Side Apply, which the apiserver authorises as the `patch` verb, so `create` alone is not enough.
+
+A minimal Role + RoleBinding in the connector namespace, bound to the TaskRun ServiceAccount in the management namespace:
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: nexus-connector-automatic-creation
+  namespace: <project-namespace>
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "patch", "create"]
+  - apiGroups: ["connectors.alauda.io"]
+    resources: ["connectors"]
+    verbs: ["get", "patch", "create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: nexus-connector-automatic-creation
+  namespace: <project-namespace>
+subjects:
+  - kind: ServiceAccount
+    name: <taskrun-service-account>
+    namespace: <management-namespace>
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: nexus-connector-automatic-creation
+```
+
+When `kube-config` is bound, the same permissions must be held by the user identity inside that kubeconfig in the target namespace and cluster.
+
+#### Use a Kubernetes Secret for `kube-config`
+
+```bash
+kubectl create secret generic target-kubeconfig \
+  -n <management-namespace> \
+  --from-file=kubeconfig=/path/to/kubeconfig \
+  --dry-run=client -o yaml | kubectl apply -f -
+```
+
+Bind it like this:
+
+```yaml
+workspaces:
+  - name: kube-config
+    secret:
+      secretName: target-kubeconfig
+```
+
+#### Use a Kubernetes Connector for `kube-config` \{#use-a-kubernetes-connector-for-kube-config}
+
+You can also provide `kube-config` through the Connectors CSI driver with a Kubernetes Connector that renders the `kubeconfig` configuration:
+
+```yaml
+workspaces:
+  - name: kube-config
+    csi:
+      driver: connectors-csi
+      readOnly: true
+      volumeAttributes:
+        connectors: <management-namespace>/<k8s-connector-name>
+        configuration.names: kubeconfig
+```
+
+For a step-by-step walkthrough of creating that Kubernetes Connector, see the [Kubernetes Connector quick start](../../connectors-k8s/quick_start.mdx). Background: [Using Kubernetes Connector in Tekton Task](../../connectors-k8s/how_to/using-in-tekton-task.mdx) and [Kubernetes Connector](../../connectors-k8s/concepts/k8s_connectorclass.mdx).
+
+## How the Task Solves the Problem
+
+The `nexus-connector-automatic-creation` Task is used in two ways:
+
+- **Initial provisioning**: create the listed Nexus repositories, create the scoped user and role, attach the standard repository-view privileges, then create the Connector Secret and the Nexus Connector in the connector namespace.
+- **Repeated reconciliation**: run the same Task again with the intended repository set, formats, and `actions` to refresh updatable fields on existing repositories, re-link the privilege set, rotate the scoped user password, and update the generated Secret.
+
+### Repository lifecycle: `provision` versus `reference`
+
+The `nexusRepositories` parameter is a YAML map with two top-level lists that make the lifecycle intent explicit:
+
+- `provision:` entries are owned by the Task. The Task creates them when they do not exist and refreshes the updatable fields on every run. If an immutable field (for example `storage.blobStoreName`, `storage.writePolicy`, or `maven.versionPolicy`) would change on an existing repository, the Task fails the run. The surfaced error may either name the specific diff'd field or pass through Nexus's raw rejection (often the umbrella `"You cannot change a repository's blob store through the API"` even when the diff is on a different immutable field) — see the [Immutable fields full list](#immutable-fields-full-list) for the complete set to cross-reference against. Resolve by deleting the Nexus repository and rerunning, or by moving the entry under `reference:` so the Task only attaches privileges without touching the definition.
+- `reference:` entries are not owned by the Task. They must already exist in Nexus. The Task only attaches the scoped user's privileges to them. If a `reference:` entry does not exist, the Task fails fast with a hint to move it under `provision:` with `format` and `type`.
+
+Either list may be omitted, but at least one must be present.
+
+### Scoped user, role, and credential lifecycle
+
+For each TaskRun the Task ensures one role and one user inside Nexus:
+
+- The role is named `<connector-namespace>-<connector-name>-role` and is owned by the Task. Re-running the Task always refreshes the role's privilege list to match the current `nexusRepositories` and `actions`.
+- The user is named `connector-<connector-namespace>-<connector-name>` by default, or the value of `nexusUser` when set. Every successful run rotates the user's password and writes it into the generated Connector Secret. Old passwords stop working after the run.
+
+If you re-run the Task with the same `nexusRepositories` and `actions`, the privilege set on the role does not change but the user password still rotates. Use this behaviour to refresh the Connector Secret on a schedule, or after a Nexus user incident.
+
+For the full parameter reference and the exact Task definition, see the [`nexus-connector-automatic-creation` Task reference](./nexus_connector_automatic_creation_task.mdx).
+
+## The `nexusRepositories` Schema \{#nexusrepositories-schema}
+
+The `nexusRepositories` Task parameter carries a single YAML string with two top-level lists:
+
+```yaml
+provision:           # repos this Task creates and idempotently manages
+  - name: ...
+    format: ...
+    type: ...
+    # type-specific subfields go here
+reference:           # repos that already exist (Task only attaches privileges)
+  - name: ...
+    actions: [...]   # optional; narrows the granted privilege subset
+```
+
+Either list may be omitted, but at least one must be present. Top-level keys other than `provision:` and `reference:` are rejected, so typos like `provison:` or `references:` are caught up front.
+
+### `provision:` entries
+
+A `provision:` entry mirrors the body that Nexus accepts on `POST /service/rest/v1/repositories/{format}/{type}`. The Task forwards each entry verbatim to Nexus after merging in sensible defaults for fields the user omitted; anything not listed below is forwarded as-is and is accepted or rejected by Nexus itself.
+
+#### Common fields (all formats and types)
+
+| Field | Required | Type | Default | Notes |
+| ----- | -------- | ---- | ------- | ----- |
+| `name` | yes | string | — | Repository name. **Immutable** after creation. |
+| `format` | yes | string | — | One of `maven2`, `npm`, `raw`, `pypi`, `docker`, `helm`, … See [Nexus Repository Formats](https://help.sonatype.com/en/repository-formats.html) for the full list supported by your Nexus instance. **Immutable.** |
+| `type` | yes | string | — | `hosted` (you push), `proxy` (cache an upstream), or `group` (aggregate read-only). **Immutable.** |
+| `online` | optional | boolean | `true` | Whether the repository accepts incoming requests. |
+| `storage.blobStoreName` | optional | string | `default` | Backing blob store. **Immutable** — to move blob stores, drop the repository and recreate. |
+| `storage.strictContentTypeValidation` | optional | boolean | `true` | Reject uploads whose declared content type does not match the actual payload. |
+| `storage.writePolicy` | optional (hosted) | string | `ALLOW` (on `hosted`) | One of `ALLOW`, `ALLOW_ONCE`, `DENY`. **Immutable on existing repositories.** |
+| `cleanup.policyNames` | optional | list of strings | — | Names of pre-existing Nexus cleanup policies to attach. |
+| `maven.contentDisposition` | optional (`maven2` only) | string | Nexus-default | One of `INLINE`, `ATTACHMENT`. Controls the `Content-Disposition` header Nexus sets on artifact responses. Updatable on existing `maven2` repositories. |
+| `actions` | optional | list of strings | `[read, browse, add, edit, delete]` | Subset of the five Nexus repository-view actions granted to the scoped user on this repository. |
+
+#### `hosted` repositories
+
+In addition to the common fields, `hosted` repositories accept format-specific configuration. For `maven2` specifically:
+
+| Field | Required | Type | Default | Notes |
+| ----- | -------- | ---- | ------- | ----- |
+| `maven.versionPolicy` | optional | string | `RELEASE` | One of `RELEASE`, `SNAPSHOT`, `MIXED`. **Set at creation time** — Nexus silently ignores updates to this field, so the Task treats it as immutable and fails fast on diff to avoid the silent no-op. Set `RELEASE` on releases repos and `SNAPSHOT` on snapshot repos to enforce the matching version contract. |
+| `maven.layoutPolicy` | optional | string | `STRICT` | One of `STRICT`, `PERMISSIVE`. Updatable on rerun. |
+
+Reference: [Maven Repositories — Sonatype Help](https://help.sonatype.com/en/maven-repositories.html).
+
+#### `proxy` repositories
+
+Proxy repositories cache an upstream registry on demand.
+
+| Field | Required | Type | Default | Notes |
+| ----- | -------- | ---- | ------- | ----- |
+| `proxy.remoteUrl` | yes | string | — | Upstream URL, e.g. `https://repo.maven.apache.org/maven2/`. |
+| `proxy.contentMaxAge` | optional | int | `1440` (minutes) | How long cached artifacts stay fresh. |
+| `proxy.metadataMaxAge` | optional | int | `1440` | How long cached metadata stays fresh. |
+| `negativeCache.enabled` | optional | boolean | `true` | Cache negative (404) responses to reduce upstream load. |
+| `negativeCache.timeToLive` | optional | int | `1440` | TTL for negative-cache entries. |
+| `httpClient.blocked` | optional | boolean | `false` | When `true`, the proxy refuses to make any upstream request. |
+| `httpClient.autoBlock` | optional | boolean | `true` | Automatically block on repeated upstream failures. |
+
+For format-specific proxy fields (e.g. `maven.versionPolicy` on a `maven2` proxy), see the corresponding format reference under [Nexus Repository Formats](https://help.sonatype.com/en/repository-formats.html). Authoritative request bodies: [Nexus Repositories REST API](https://help.sonatype.com/en/repositories-api.html).
+
+#### `group` repositories
+
+Group repositories aggregate read-only access across a list of member repositories of the same format.
+
+| Field | Required | Type | Default | Notes |
+| ----- | -------- | ---- | ------- | ----- |
+| `group.memberNames` | yes | ordered list of strings | — | Member repository names, in resolution order. Updatable on rerun. |
+
+For Maven groups specifically you may also want to set `maven.versionPolicy: MIXED` so the group can front a mix of release and snapshot member repos.
+
+#### Immutable fields (full list) \{#immutable-fields-full-list}
+
+The Task fails the run if a `provision:` entry would change any of the following on an existing repository — Nexus does not accept updates to these fields, and silently keeping the old value would let the requested config drift from reality:
+
+- `name`
+- `format`
+- `type`
+- `storage.blobStoreName`
+- `storage.writePolicy`
+- `maven.versionPolicy`
+
+The user-visible error may take either of two forms, depending on which Nexus REST call surfaces the rejection:
+
+- An "`<field> is IMMUTABLE in Nexus`" message naming the specific diff'd field (when the Task's pre-PUT check fires).
+- The raw Nexus HTTP 400 body, often the umbrella message `"You cannot change a repository's blob store through the API"`, even when the actual diff is on a different immutable field (when Nexus's own validator rejects the PUT first). Cross-reference the diff against the list above; the message text alone is not always enough to identify the offending field.
+
+Resolve an immutable diff by deleting the Nexus repository and rerunning, or by moving the entry under `reference:` so the Task only attaches privileges without touching the definition.
+
+### `reference:` entries
+
+Used when the repository already exists in Nexus (administered through another channel) and you only want the scoped user to gain access to it.
+
+| Field | Required | Type | Default | Notes |
+| ----- | -------- | ---- | ------- | ----- |
+| `name` | yes | string | — | Name of an existing Nexus repository. The Task fails fast if it does not exist. |
+| `actions` | optional | list of strings | `[read, browse, add, edit, delete]` | Subset of the five Nexus repository-view actions to grant. |
+
+The Task does not modify the repository definition itself in `reference:` mode — only the role's privilege grant for the scoped user.
+
+### `actions` reference \{#actions-reference}
+
+The `actions` field on either a `provision:` or a `reference:` entry takes any subset of the five standard Nexus repository-view actions:
+
+| Action | Meaning |
+| ------ | ------- |
+| `read` | Download published artifacts. |
+| `browse` | List directories and query metadata. |
+| `edit` | Overwrite existing versions and modify metadata. |
+| `add` | Upload new artifact versions. |
+| `delete` | Delete artifacts. |
+
+Each entry resolves to the corresponding `nx-repository-view-<format>-<repo>-<action>` privileges Nexus generates when the repository is created, attached to the scoped role.
+
+### What the Task forwards verbatim vs defaults
+
+- **Verbatim**: every field you set under a `provision:` entry is forwarded to Nexus as-is on create (POST) and on idempotent refresh (PUT). The Task does not silently rewrite values you supplied.
+- **Defaulted only when omitted**: the fields listed with defaults in the tables above are filled in when the user omits them, then forwarded to Nexus. Explicit user values — including `false` on boolean fields — are preserved.
+
+## Example: Provision Project-private Nexus Repositories \{#example-provision-project-private-nexus-repositories}
+
+Use this pattern for the most common case — one project owns one or more dedicated Nexus repositories, and only the project consumes them.
+
+[See the schema reference](#nexusrepositories-schema) for the full set of fields each `provision:` entry accepts.
+
+Replace these placeholders before you run the example:
+
+- `<management-namespace>`: the private namespace that contains the Task and the credential Secrets.
+- `<project-namespace>`: the namespace where the Connector and Secret should land.
+
+Then apply this TaskRun:
+
+```yaml
+apiVersion: tekton.dev/v1
+kind: TaskRun
+metadata:
+  name: project-a-nexus-setup
+  namespace: <management-namespace>
+spec:
+  taskRef:
+    kind: Task
+    name: nexus-connector-automatic-creation
+  params:
+    # The Task uses its built-in `nexusCliImage` default; override only when mirroring the image.
+    - name: connector
+      value: <project-namespace>/project-a-nexus
+    - name: nexusUrl
+      value: <your-nexus-address>  # e.g. https://nexus.example.com
+    - name: nexusRepositories
+      value: |
+        provision:
+          - name: project-a-maven-hosted
+            format: maven2
+            type: hosted
+          - name: project-a-npm-internal
+            format: npm
+            type: hosted
+  workspaces:
+    - name: nexus-secret
+      secret:
+        secretName: nexus-provisioner-auth
+    # `kube-config` is optional; bind it only when SSA must target a
+    # different cluster — see the Workspaces section for details. The
+    # subsequent mixed / reference examples below bind it to show the
+    # out-of-cluster shape.
+```
+
+After the TaskRun succeeds:
+
+- Nexus contains the two requested repositories with sensible defaults applied for unset fields (`storage.blobStoreName=default`, `storage.writePolicy=ALLOW` on hosted repositories, `maven.versionPolicy=RELEASE` on `maven2`).
+- Nexus contains the scoped role and user with full repository-view actions on both repositories.
+- The project namespace contains the generated Connector Secret and the Nexus Connector pointing at the address you supplied in `nexusUrl`.
+
+## Example: Attach Access to Existing Shared Repositories \{#example-attach-access-to-existing-shared-repositories}
+
+Use this pattern when the repositories already exist in Nexus, administered through another channel, and you only need to give an Alauda Container Platform project a scoped credential against them.
+
+[See the schema reference](#nexusrepositories-schema) for the `reference:` entry contract.
+
+```yaml
+apiVersion: tekton.dev/v1
+kind: TaskRun
+metadata:
+  name: team-a-nexus-readonly
+  namespace: <management-namespace>
+spec:
+  taskRef:
+    kind: Task
+    name: nexus-connector-automatic-creation
+  params:
+    # The Task uses its built-in `nexusCliImage` default; override only when mirroring the image.
+    - name: connector
+      value: <team-a-namespace>/team-a-nexus
+    - name: nexusUrl
+      value: <your-nexus-address>  # e.g. https://nexus.example.com
+    - name: nexusRepositories
+      value: |
+        reference:
+          - name: maven-public
+            actions: [read, browse]
+          - name: npm-public
+            actions: [read, browse]
+  workspaces:
+    - name: nexus-secret
+      csi:
+        driver: connectors-csi
+        readOnly: true
+        volumeAttributes:
+          connectors: <management-namespace>/nexus-provisioner
+    - name: kube-config
+      secret:
+        secretName: target-kubeconfig
+```
+
+After the TaskRun succeeds:
+
+- Nexus contains the scoped role and user with `read` + `browse` actions on `maven-public` and `npm-public`. The Task does not modify the repositories themselves.
+- The team namespace contains the generated Connector Secret and the Nexus Connector. Workloads in that namespace can resolve dependencies from the shared repositories through the Connector proxy without holding direct Nexus credentials.
+
+## Example: Mixed Provision and Reference \{#example-mixed-provision-and-reference}
+
+Use this pattern when one scoped user must both publish into project-private repositories and pull from shared upstream repositories. The provisioned set follows Maven best practice — separate `releases` and `snapshots` hosted repositories fronted by a single `group` repository, so consumers resolve through one URL.
+
+[See the schema reference](#nexusrepositories-schema) for field semantics, defaults, and the immutable-field list.
+
+```yaml
+apiVersion: tekton.dev/v1
+kind: TaskRun
+metadata:
+  name: project-a-nexus-mixed
+  namespace: <management-namespace>
+spec:
+  taskRef:
+    kind: Task
+    name: nexus-connector-automatic-creation
+  params:
+    # The Task uses its built-in `nexusCliImage` default; override only when mirroring the image.
+    - name: connector
+      value: <project-namespace>/project-a-nexus
+    - name: nexusUrl
+      value: <your-nexus-address>  # e.g. https://nexus.example.com
+    - name: nexusRepositories
+      value: |
+        provision:
+          - name: project-a-maven-releases
+            format: maven2
+            type: hosted
+            maven:
+              versionPolicy: RELEASE
+              layoutPolicy: STRICT
+            actions: [read, browse, add, edit, delete]
+          - name: project-a-maven-snapshots
+            format: maven2
+            type: hosted
+            maven:
+              versionPolicy: SNAPSHOT
+              layoutPolicy: STRICT
+            actions: [read, browse, add, edit, delete]
+          - name: project-a-maven2
+            format: maven2
+            type: group
+            group:
+              memberNames:
+                - project-a-maven-releases
+                - project-a-maven-snapshots
+            maven:
+              versionPolicy: MIXED
+            actions: [read, browse, add, edit, delete]
+        reference:
+          - name: maven-central
+            actions: [read, browse]
+  workspaces:
+    - name: nexus-secret
+      secret:
+        secretName: nexus-provisioner-auth
+    - name: kube-config
+      secret:
+        secretName: target-kubeconfig
+```
+
+After the TaskRun succeeds:
+
+- Two `maven2` hosted repositories — one pinned to `RELEASE`, one pinned to `SNAPSHOT` — plus a `group` repository that fronts both, are created with the requested configuration.
+- The scoped user can publish release artifacts into `project-a-maven-releases`, publish snapshot artifacts into `project-a-maven-snapshots`, and resolve dependencies through `project-a-maven2` (the group) using a single URL.
+- The scoped user can additionally read from the existing `maven-central` reference repository.
+
+The `actions` lists on each entry decide the privileges granted to the scoped user per repository. Repositories not listed in either `provision:` or `reference:` are not accessible to the scoped user.
+
+## Re-run to Add Repositories or Rotate Credentials
+
+The Task is idempotent on re-run. Use the same TaskRun (or the Pipeline / Trigger that fabricates it) for two distinct purposes:
+
+**Scope changes** — add a repository, remove one, or change the `actions` granted on an existing one:
+
+1. Edit the same TaskRun and append, remove, or modify entries under `provision:` or `reference:`. Leave the other entries in place — they will be recognised as already-existing and refreshed in place.
+2. Re-apply the TaskRun. The Task creates new repositories, refreshes the privileges granted to the scoped user, and rotates the scoped user's password (see below). The new password is written into the same Connector Secret in the project namespace, so consumers that read the Secret pick up the new password on their next reconcile.
+
+**Credential rotation** — refresh the scoped Nexus user password without changing the repository set:
+
+1. Re-apply the same TaskRun unchanged. Every successful run rotates the scoped user's password and rewrites it into the same Connector Secret. This is the recommended mechanism for periodic rotation and for incident-driven rotation.
+
+The following stay unchanged across re-runs (unless you explicitly override them via the corresponding Task parameter): the Connector resource name (`<connector-name>` part of the `connector` param), the Secret name (`<connector-name>-secret` unless overridden via the `secret` param), and the Nexus role name (`<connector-namespace>-<connector-name>-role`). The Nexus user name also stays unchanged unless overridden via `nexusUser`.
+
+When removing a repository — drop the entry from `nexusRepositories` and re-apply. The Task does **not** delete the Nexus repository itself (so historical artifacts are not lost); it only revokes the scoped user's privileges against it.
+
+## Verify the Result
+
+Check that the TaskRun succeeded:
+
+```bash
+kubectl get taskrun project-a-nexus-setup -n <management-namespace>
+```
+
+Check the generated Connector and Secret in the connector namespace (the Secret is `<connector-name>-secret` unless overridden via the `secret` param):
+
+```bash
+kubectl get connector project-a-nexus -n <project-namespace>
+kubectl get secret project-a-nexus-secret -n <project-namespace>
+```
+
+Wait for the Connector to reach `Ready`, then confirm:
+
+```bash
+kubectl wait --for=condition=Ready connector/project-a-nexus \
+  -n <project-namespace> --timeout=120s
+kubectl get connector project-a-nexus -n <project-namespace> \
+  -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}{"\n"}'
+```
+
+`Ready=True` confirms that the Connector controller successfully reconciled the target Connector with the generated Secret.
+
+Read the Task results to confirm the exact repository set and user identity that were reconciled:
+
+```bash
+kubectl get taskrun project-a-nexus-setup -n <management-namespace> \
+  -o jsonpath='{.status.results}'
+```
+
+To verify that the generated Connector can actually consume Nexus, mount it into a workload in the project namespace and run a dependency resolution against the proxy. See [Nexus Connector](../concepts/nexus_connectorclass.mdx) for the configuration mounts (`settings.xml`, `.npmrc`, `pip.conf`) provided by the Connectors CSI driver.
+
+## Troubleshooting
+
+> **Tip**: set the Task parameter `verbose: "true"` on the failing TaskRun to enable shell tracing on non-secret steps. Secret values stay suppressed even when verbose tracing is on. The traced commands make 401 / 403 / SSL / yq-parse errors easier to localise.
+
+### `nexusRepositories` cannot be parsed
+
+The parameter must be a valid YAML map with at least one of the top-level keys `provision:` or `reference:`. A bare list at the top level is rejected. The Task surfaces the underlying `yq` error in step 2 logs.
+
+### `provision:` entry is missing `format` or `type`
+
+Every `provision:` entry requires `name`, `format`, and `type`. The Task fails fast and points at the entry that is missing fields. Add the missing field, or move the entry under `reference:` if the repository already exists in Nexus.
+
+### `reference:` entry does not exist in Nexus
+
+The Task fails with a message of the form `reference mode: repo '<name>' does not exist; move the entry under provision: (with format + type) to create it.` Either create the repository in Nexus first, or move the entry under `provision:` with `format` and `type`.
+
+### Nexus returns 404 for the repository endpoint
+
+Nexus returns 404 on `POST /service/rest/v1/repositories/<slug>/<type>` when the requested `format` is not supported by this Nexus instance. The Task surfaces the format name and reminds you that the only non-1:1 slug mapping is `maven2 → maven` — all other format names equal their endpoint slug.
+
+### `provision:` entry already exists in Nexus
+
+The Task refreshes the fields that Nexus allows to be updated (for example `online`, `storage.strictContentTypeValidation`, `cleanup.policyNames`). If the supplied value of an immutable field (`name`, `format`, `type`, `storage.blobStoreName`, `storage.writePolicy`, or `maven.versionPolicy`) differs from the existing value, the Task fails the run — Nexus does not accept updates to these fields, so the requested configuration cannot be applied without dropping the existing repository first. The surfaced error may either name the specific diff'd field ("`<field> is IMMUTABLE in Nexus`") or pass through Nexus's raw HTTP 400 body, which often reads "`You cannot change a repository's blob store through the API`" even when the actual diff is on a different immutable field — cross-reference the diff against the [immutable fields list](#immutable-fields-full-list) rather than relying on the message text. Resolve by deleting the existing Nexus repository and rerunning, or by moving the entry under `reference:` so the Task only attaches privileges without touching the definition.
+
+### Nexus user already exists but is not a member of the scoped role
+
+The Task **refuses** to refresh a foreign user — one whose `userId` matches the Task-derived name but whose `roles` list does not include the Task-managed role. The step fails with `Refusing to refresh foreign user (would replace existing roles and rotate the password). Override the user name via the nexusUser Task param if a different identity is needed.` Resolve by setting an explicit `nexusUser` value so the Task owns its own user identity, or by manually adding the Task-managed role to the existing user's `roles` list in Nexus before the next run. The Task deliberately does NOT take over an existing user, to avoid replacing roles set by another system and rotating a credential another integration depends on.
+
+### Nexus role already exists but its `description` does not start with `OWNER=connectors-operator`
+
+This indicates a name collision with a role owned by something other than the Task — for example a manually created Nexus role with the same name. The Task fails with a squatter error. Either delete or rename the conflicting role, or choose a different `connector` name so the derived role name does not collide.
+
+### Nexus permissions are not sufficient
+
+The Nexus credential used by `nexus-secret` must satisfy the permission set listed in [Nexus credentials for `nexus-secret`](#nexus-credentials-for-nexus-secret) above. Check the role assigned to the provisioning user in the Nexus console (Security → Roles).
+
+If you use a Nexus Connector for `nexus-secret`, check both:
+
+- The Nexus user behind the Connector has the listed permissions.
+- The TaskRun ServiceAccount is allowed to use that Connector.
+
+### Kubernetes permissions are not sufficient
+
+The Task runs a `kubectl auth can-i` preflight before applying the Connector and Secret. The preflight is **advisory**: if a verb is denied, the Task logs a warning naming the missing verb but does NOT fail fast — the subsequent Server-Side-Apply call will surface the same missing-permission error directly from the Kubernetes apiserver. When debugging RBAC, inspect both log lines: the advisory `kubectl auth can-i ... reports forbidden` warning from the preflight, and the apiserver error from the SSA call.
+
+The Kubernetes credential used by `kube-config` (or the in-cluster ServiceAccount when `kube-config` is unbound) must be allowed to `get`, `create`, and `patch` Secrets and Nexus Connector resources (group `connectors.alauda.io`) in the connector namespace. The Task uses Server-Side Apply, which the apiserver authorises as the `patch` verb, so `create` alone is not enough. See [Grant the apply credential Kubernetes RBAC](#grant-the-apply-credential-kubernetes-rbac) for a copy-pasteable Role and RoleBinding.
+
+### `nexus-secret` workspace is missing files
+
+In basic-auth Secret mode, the workspace must contain `username` and `password` files. The Task fails fast with a hint when either file is missing. In Nexus Connector mode, the workspace must contain the Connectors CSI driver's mount output. The Task auto-detects the mode by inspecting the workspace, and basic-auth files take precedence: if both `username`/`password` files AND the Connectors CSI mount are present at once, the Task picks basic-auth and does NOT emit a warning. Mount only one shape at a time so the auth mode you intend is unambiguous.
+
+### `nexusUrl` is missing or empty
+
+The `nexusUrl` parameter is required in both workspace modes. The Task never derives the URL from the Secret or Connector — it always uses `nexusUrl` as the sole target. Set the parameter to the Nexus base URL (no trailing slash), for example `https://nexus.example.com` or an in-cluster Service URL such as `http://nexus.nexus-system.svc`.
+
+### Nexus anonymous access is enabled
+
+The Task emits a warning in step 1 when Nexus anonymous access is enabled, but it does not fail and does not modify cluster-level Nexus settings. Disable anonymous access in the Nexus console (Settings → Security → Anonymous Access) if a strict deployment is required.
+
+### Nexus returns 401 Unauthorized
+
+Step logs will contain `HTTP_CODE=401` from one of the Nexus REST calls. Common causes:
+
+- The bound Secret's `username` / `password` files are wrong, empty, or have a stray trailing newline. Recreate the basic-auth Secret with `kubectl create secret generic ... --from-literal=` (which omits the newline that `--from-file=` of an editor-saved file inserts).
+- The `nexusUrl` host does not match the Nexus instance the credential was created against (for example a `https://nexus.example.com` URL pointing at a different Nexus 3.x deployment).
+- In Nexus Connector mode (CSI mount), the workspace did not bind correctly so the Task fell back to basic-auth mode and tried to read `username` / `password` from the mount. Check the step 1 mode-detect log line to confirm which mode (A or B) was selected.
+
+### Nexus returns 403 Forbidden
+
+Step logs will contain `HTTP_CODE=403`. The credential authenticated successfully but the Nexus role behind it lacks one of the privileges needed for the failing operation. Cross-reference the [Nexus credentials for `nexus-secret`](#nexus-credentials-for-nexus-secret) privilege table and the specific REST endpoint named in the log line — for example a 403 on `POST /v1/repositories/maven/hosted` means the role is missing `nx-repository-admin-maven-*-create`.
+
+### TLS handshake failure against Nexus
+
+Step logs will contain `SSL_ERROR` or `curl: (60) SSL certificate problem`. The `nexusUrl` is HTTPS but the Task runtime image does not trust the certificate chain that Nexus is serving. If you front Nexus with a custom CA, mount the CA bundle through the Nexus Connector workspace (the Connectors CSI driver injects the CA from the Connector's `caBundle`); if you bind a basic-auth Secret directly, recreate the Secret type as `kubernetes.io/tls` so the Task image picks up the CA from the standard path, or arrange for the CA to be present in the image's trust store at build time.

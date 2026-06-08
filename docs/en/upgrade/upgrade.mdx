@@ -85,6 +85,15 @@ standalone CR the bootstrap could not delete. Follow
 [A Component Is Stuck in `Failed`](../install/install.mdx#failed-component)
 for the diagnostic and recovery steps.
 
+:::tip Pipeline Integration Compatibility
+If you use [`Pipeline Integration`](../connectors/concepts/resource_interface.mdx#schema-version)
+and your Tekton release is older than what the upgraded operator
+ships, cap the installed schema-version on the `pipeline-integration`
+install flag so only versions your Tekton can render are installed.
+See [How it works](../install/install.mdx#install-flags) for the
+configuration syntax.
+:::
+
 ## Upgrade Process
 
 ### Using `Marketplace`/`OperatorHub`
@@ -124,16 +133,16 @@ for the diagnostic and recovery steps.
      $ kubectl get pods -n connectors-operator
      ```
      When all pods are in `Running` state, the operator upgrade is complete.
-     The operator will then automatically upgrade components such as `ConnectorCore`, `ConnectorsGit`, `ConnetorsOCI`, etc.
+     The operator will then reconcile `ConnectorsConfig` and upgrade every managed component (`ConnectorsCore`, `ConnectorsGit`, `ConnectorsOCI`, etc.) automatically.
    - Check the components upgrade status:
      ```bash
-     $ kubectl get installmanifest -n connectors-operator
-     $ kubectl get pods -n connectors-operator
+     $ kubectl get connectorsconfig -A
+     $ kubectl describe connectorsconfig connectors-config -n <namespace>
      ```
-     When all components and pods are in `Ready` state, the components upgrade is complete.
+     When `status.conditions[Ready]=True` is reported on the `ConnectorsConfig`, every managed component has finished re-converging.
 
 8. **Verify the Upgrade**
-   - Check that the `Alauda DevOps Connnectors` Operator version has been updated:
+   - Check that the `Alauda DevOps Connectors` Operator version has been updated:
      ```bash
      $ kubectl get csv -n connectors-operator
 
@@ -149,10 +158,12 @@ for the diagnostic and recovery steps.
 After the upgrade completes successfully:
 
 1. **Verify Component Status**
-   - Check that all Connectors components have been updated:
+   - Check the `ConnectorsConfig` roll-up status to confirm every managed component has converged on the new version:
      ```bash
-     kubectl get connectorscore,connectorsgit,connectorsoci -A
+     kubectl get connectorsconfig -A
+     kubectl describe connectorsconfig connectors-config -n <namespace>
      ```
+     For the meaning of each per-component phase, see [Status & Phases](../install/install.mdx#status).
 
 2. **Test Functionality**
    - Run a job using connector csi or deploy an app pulling the image through oci connector to verify that the system is working correctly
@@ -191,17 +202,19 @@ This depends on the differences between the version you upgraded from and the ve
 
 If you encounter issues during or after the upgrade:
 
+- **Pipeline Integration resources fail to render after upgrade** — your Tekton release may be older than the schema-version the operator ships. Cap the installed schema-version on the [`pipeline-integration`](../install/install.mdx#install-flags) install flag.
+
 - Check the `Alauda DevOps Connectors` Operator pod logs:
   ```bash
   $ kubectl logs -l control-plane=connectors-operator -n connectors-operator
   ```
 
-- Verify the status of Connector resource, i.e. ConnectorCore:
+- Verify the status of the `ConnectorsConfig` to identify which component is failing:
   ```bash
-  $ kubectl get connectorscore -A
-  # Find the instance with issue
-  $ kubectl get connectorscore -n <namespace> <instance name> -o yaml
+  $ kubectl get connectorsconfig -A
+  $ kubectl describe connectorsconfig connectors-config -n <namespace>
   ```
+  `status.components.<name>.message` points at the failing component. If a component stays in `Failed`, follow [A Component Is Stuck in `Failed`](../install/install.mdx#failed-component) for the diagnostic and recovery steps.
 
 ## Next Steps
 

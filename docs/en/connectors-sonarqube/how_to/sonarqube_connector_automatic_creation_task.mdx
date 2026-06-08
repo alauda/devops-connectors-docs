@@ -1,0 +1,488 @@
+---
+weight: 25
+title: SonarQube Connector Automatic Creation Tekton Task
+---
+
+# SonarQube Connector Automatic Creation Tekton Task
+
+A Tekton Task that provisions and maintains a **tenant-scoped SonarQube
+Connector** on the cluster in a single run. The Task creates (or reuses)
+the SonarQube-side identity, scopes the tenant's project keyspace, mints
+a refreshable user token, and writes the tenant `sonarqube` Connector
+plus its token Secret to the target namespace.
+
+The Task is idempotent and safe to schedule on a recurring basis: the
+user token is refreshed on every run and auto-renewed before expiry.
+
+For the operator walkthrough — prerequisites, onboarding, rotation, and
+offboarding — see
+[Using the Task](./using_sonarqube_connector_automatic_creation_task.mdx).
+
+## Installation \{#installation}
+
+The connectors-operator installs only the SonarQube framework (CRDs,
+RBAC, ConnectorClass, ResourceInterface). The Task itself is
+user-applied per Tekton catalog convention.
+
+Pick a registry mirror reachable from the cluster and the namespace
+where you want the Task installed, then apply the manifest below. The
+generated block is kept in sync from
+`cmd/kodata/connectors-sonarqube-tektoncd/<version>/install.yaml` by
+`hack/sync_sonarqube_connector_automatic_creation_task_doc.sh`.
+
+- `REGISTRY`: the registry that hosts the
+  `sonarqube-connector-automatic-creation` tool image (and any mirrored
+  catalog images). For example `registry.alauda.cn:60070`.
+- `TARGET_NS`: the namespace where you want to install the Task.
+
+{/* BEGIN GENERATED TASK YAML */}
+```bash
+export REGISTRY=<your-registry>
+export TARGET_NS=<target-namespace>
+
+cat <<'EOF' | envsubst '${REGISTRY} ${TARGET_NS}' | kubectl apply -f -
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  annotations:
+    style.tekton.dev/descriptors: |
+      - path: params.connector
+        x-descriptors:
+          - urn:alm:descriptor:label:en:Connector
+          - 'urn:alm:descriptor:description:en:Target tenant SonarQube Connector to create or update, in <namespace>/<name> format, for example connectors-management/acme-sonarqube'
+          - 'urn:alm:descriptor:tooltip:en:The token Secret is created in the same namespace as the Connector'
+          - urn:alm:descriptor:com.tectonic.ui:text
+          - urn:alm:descriptor:com.tectonic.ui:validation:required
+      - path: params.tenant
+        x-descriptors:
+          - urn:alm:descriptor:label:en:Tenant
+          - 'urn:alm:descriptor:description:en:Tenant identifier. Used to derive default names for the SonarQube user and permission template when those fields are left empty'
+          - urn:alm:descriptor:com.tectonic.ui:text
+          - urn:alm:descriptor:com.tectonic.ui:validation:required
+      - path: params.projectPattern
+        x-descriptors:
+          - urn:alm:descriptor:label:en:Project Key Pattern
+          - 'urn:alm:descriptor:description:en:Regular expression matching the tenant project key space. Used to scope the permission template so it only applies to this tenant. Must not overlap with the patterns used by other tenants'
+          - 'urn:alm:descriptor:tooltip:en:Example: ^acme-.* to scope this tenant to project keys starting with acme-'
+          - urn:alm:descriptor:com.tectonic.ui:text
+          - urn:alm:descriptor:com.tectonic.ui:validation:required
+      - path: params.templatePermissions
+        x-descriptors:
+          - urn:alm:descriptor:label:en:Template Permissions
+          - 'urn:alm:descriptor:description:en:Project-level permissions granted to the tenant user. The default covers Browse, See Source Code, and Execute Analysis. Do not include admin, otherwise the tenant could change project visibility or delete projects'
+          - urn:alm:descriptor:com.tectonic.ui:text-array
+      - path: params.tokenDuration
+        x-descriptors:
+          - urn:alm:descriptor:label:en:Token Duration (days)
+          - 'urn:alm:descriptor:description:en:Validity of the SonarQube user token, in whole days (positive integer). The token is automatically renewed before it expires on each run, so the Task can be scheduled on a recurring basis'
+          - urn:alm:descriptor:com.tectonic.ui:text
+          - urn:alm:descriptor:com.tectonic.ui:validation:required
+    style.tekton.dev/displayParams: connector,tenant,projectPattern,templatePermissions,tokenDuration
+    tekton.dev/categories: CLI
+    tekton.dev/displayName: SonarQube Connector Automatic Creation
+    tekton.dev/icon: data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB3aWR0aD0iODBweCIgaGVpZ2h0PSI2MHB4IiB2aWV3Qm94PSIwIDAgODAgNjAiIHZlcnNpb249IjEuMSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIiB4bWxuczp4bGluaz0iaHR0cDovL3d3dy53My5vcmcvMTk5OS94bGluayI+CiAgICA8dGl0bGU+c29uYXJxdWJlPC90aXRsZT4KICAgIDxnIGlkPSLlt6Xlhbfpk77pm4bmiJAiIHN0cm9rZT0ibm9uZSIgc3Ryb2tlLXdpZHRoPSIxIiBmaWxsPSJub25lIiBmaWxsLXJ1bGU9ImV2ZW5vZGQiPgogICAgICAgIDxnIGlkPSJzb25hcnF1YmUiPgogICAgICAgICAgICA8cmVjdCBpZD0iUmVjdGFuZ2xlLTE2LUNvcHktMTciIHg9IjAiIHk9IjAiIHdpZHRoPSI4MCIgaGVpZ2h0PSI2MCIgcng9IjIiPjwvcmVjdD4KICAgICAgICAgICAgPGcgaWQ9Ikdyb3VwLTY2IiB0cmFuc2Zvcm09InRyYW5zbGF0ZSg5Ljk5OTk4OSwgMTAuNTg2MjYzKSI+CiAgICAgICAgICAgICAgICA8ZyBpZD0iR3JvdXAtMTIiIGZpbGw9IiM3QzgxODMiPgogICAgICAgICAgICAgICAgICAgIDxwYXRoIGQ9Ik0zLjU5OTY5Mzg4LDIzLjM1MTY5NDggQzcuMTE1NTAyODMsMjAuOTUyMDI1MSAxMS45MDcwOTMzLDIxLjg2NTcyMjkgMTQuMjk1MzE5NSwyNS4zOTgzMjE4IEMxNi40MTQxMTY2LDI4LjUyMTU2OTcgMTUuOTM3ODQ1MiwzMi42NDg3ODcxIDEzLjM2Mzc2NjMsMzUuMjE4NjU4IEwxMy4zNjM3NjYzLDM1LjIxODY1OCBMMTYuMzQxODYxOCw0MC4wNzU1ODI0IEwxMy45NzcyOTY0LDQxLjY4Nzk2MDMgTDEwLjk5NzgwMTYsMzYuODMxMDM1OSBDNy42NzAzODk1MywzOC4yODY3NDcgMy42NzU4OTIyMSwzNy4yMTUzNjEgMS41NjA2NTY5OCwzNC4wODg0MTAyIEMtMC44MzEzODU1NTksMzAuNTU5NTE0MiAwLjA4MTU5NTE1MTksMjUuNzUxMzY0NiAzLjU5OTY5Mzg4LDIzLjM1MTY5NDggWiBNMjEuMDk2OTU4MiwyNi43MjQyNCBMMjEuMDk2OTU4MiwzMi43ODk1ODEzIEMyMS4wOTY5NTgyLDM0Ljg3OTYyMDEgMjEuNzUzMjUyMSwzNi4zMTA3MjkgMjMuNTQxMjAzMiwzNi4zMTA3MjkgQzI0Ljg3NjU4NzYsMzYuMzEwNzI5IDI1LjgwNDUxNzcsMzUuMzc5MjQ4MiAyNi4xNjY2NjcyLDM0LjQ3MDY0OTEgQzI2LjI3OTc4NDgsMzQuMTk4MDk4MyAyNi4zNDc2OTM5LDMzLjgzNDUwNDEgMjYuMzQ3NjkzOSwzMy40NDgzMTgxIEwyNi4zNDc2OTM5LDMzLjQ0ODMxODEgTDI2LjM0NzY5MzksMjYuNzI0MjQgTDI4LjMzOTM3MjIsMjYuNzI0MjQgTDI4LjMzOTM3MjIsMzQuNjk3ODIzIEMyOC4zMzkzNzIyLDM1Ljg1NjM4MTEgMjguMzYxOTc2NSwzNi44NTU5MjcxIDI4LjQyOTg4NTUsMzcuNzE5MTQ5NCBMMjguNDI5ODg1NSwzNy43MTkxNDk0IEwyNi42NjQ1Mzg3LDM3LjcxOTE0OTQgTDI2LjU1MTQyMTEsMzUuOTI0NTQyOSBMMjYuNTA2MTE2MywzNS45MjQ1NDI5IEMyNi4wMDgyNDQ4LDM2LjgxMDU1MDIgMjQuODMxMjgyOCwzNy45NjkxMDgzIDIyLjg4NDkwOTMsMzcuOTY5MTA4MyBDMjEuMTY0ODY3MywzNy45NjkxMDgzIDE5LjEwNTI3OTksMzYuOTkyMjUwOCAxOS4xMDUyNzk5LDMzLjE1MzA3ODkgTDE5LjEwNTI3OTksMzMuMTUzMDc4OSBMMTkuMTA1Mjc5OSwyNi43MjQyNCBMMjEuMDk2OTU4MiwyNi43MjQyNCBaIE0zMi41MDM3NTU0LDIxLjU5MDI1MzkgTDMyLjUwMzc1NTQsMjguNDczNDQwNiBMMzIuNTQ5MDYwMSwyOC40NzM0NDA2IEMzMy4yNTA2NTg4LDI3LjI0NjcyMDcgMzQuNTE4MDM3OSwyNi40NzQzNDg2IDM2LjI4MzM4NDgsMjYuNDc0MzQ4NiBDMzguOTk5MjY1OSwyNi40NzQzNDg2IDQwLjkwMDQzMDksMjguNzQ2MDg4IDQwLjkwMDQzMDksMzIuMDYyNjUzNiBDNDAuOTAwNDMwOSwzNi4wMTU0NjA4IDM4LjQxMDg4MTEsMzcuOTY5MDc5NCAzNS45NjY1NCwzNy45NjkwNzk0IEMzNC4zODIyMTk4LDM3Ljk2OTA3OTQgMzMuMTM3NTQxMiwzNy4zNTU3MTk0IDMyLjMwMDEyNDQsMzUuOTAxODI1NSBMMzIuMzAwMTI0NCwzNS45MDE4MjU1IEwzMi4yNTQ4MTk2LDM1LjkwMTgyNTUgTDMyLjE0MTYwNTgsMzcuNzE5MTIwNSBMMzAuNDIxNjYsMzcuNzE5MTIwNSBDMzAuNDg5NDcyOCwzNi45Njk1MzM0IDMwLjUxMjA3NzEsMzUuODU2MzUyMSAzMC41MTIwNzcxLDM0Ljg3OTU5MTEgTDMwLjUxMjA3NzEsMzQuODc5NTkxMSBMMzAuNTEyMDc3MSwyMS41OTAyNTM5IEwzMi41MDM3NTU0LDIxLjU5MDI1MzkgWiBNNDYuNjI2NTM5NiwyNi40NzQzNjc5IEM1MC4yMDI0NDE4LDI2LjQ3NDM2NzkgNTEuMTMwMzcxOSwyOS42MzE5MjE1IDUxLjEzMDM3MTksMzEuNjUzNzk4NSBDNTEuMTMwMzcxOSwzMi4wNjI2NzI5IDUxLjEwNzc2NzYsMzIuMzU4MDA4NyA1MS4wNjI0NjI4LDMyLjU4NTE4MjYgTDUxLjA2MjQ2MjgsMzIuNTg1MTgyNiBMNDMuMzkwMDg2NCwzMi41ODUxODI2IEM0My40MzUyOTUsMzUuMjY1Nzk2NCA0NS4xMzI4MjksMzYuMzc4ODgxMSA0Ny4xMjQ0MTEsMzYuMzc4ODgxMSBDNDguNTUwMzA4OCwzNi4zNzg4ODExIDQ5LjQzMjkzNDEsMzYuMTI5MDE4OCA1MC4xNTcyMzMyLDM1LjgxMDg5OCBMNTAuMTU3MjMzMiwzNS44MTA4OTggTDUwLjUxOTM4MjgsMzcuMjQyMiBDNDkuODE3Njg3OSwzNy41NjAyMjQyIDQ4LjU5NTYxMzUsMzcuOTQ2NDEwMyA0Ni44NTI4NzEsMzcuOTQ2NDEwMyBDNDMuNTAzMjA0MSwzNy45NDY0MTAzIDQxLjQ2NjMxNzIsMzUuNjk3NDU1OSA0MS40NjYzMTcyLDMyLjQwMzM4NTYgQzQxLjQ2NjMxNzIsMjkuMDg2ODE5OSA0My40MzUyOTUsMjYuNDc0MzY3OSA0Ni42MjY1Mzk2LDI2LjQ3NDM2NzkgWiBNMzUuNjI3MDkwOSwyOC4wNDE3ODEyIEMzNC4yNjkxOTg0LDI4LjA0MTc4MTIgMzMuMDAxNzIzLDI4Ljk5NTk1MDMgMzIuNjE2OTY5MiwzMC40OTUyMjExIEMzMi41NDkwNjAxLDMwLjc0NTA4MzQgMzIuNTAzNzU1NCwzMS4wMTc3MzA4IDMyLjUwMzc1NTQsMzEuMzM1NzU1IEwzMi41MDM3NTU0LDMxLjMzNTc1NSBMMzIuNTAzNzU1NCwzMy4zMTIxNTg1IEMzMi41MDM3NTU0LDMzLjU2MjAyMDkgMzIuNTI2MzU5NywzMy44MTE4ODMzIDMyLjU3MTY2NDQsMzQuMDM5MDU3MiBDMzIuOTU2NDE4MywzNS40MjQ3ODkyIDM0LjEzMzI4NDEsMzYuMzc4ODYxOCAzNS41NTkxODE4LDM2LjM3ODg2MTggQzM3LjY2Mzk3NzcsMzYuMzc4ODYxOCAzOC44ODYyNDQ1LDM0LjY3NTEwNTYgMzguODg2MjQ0NSwzMi4xNTM2MDA0IEMzOC44ODYyNDQ1LDI5LjkyNzMzNDUgMzcuNzU0NTg3MywyOC4wNDE3ODEyIDM1LjYyNzA5MDksMjguMDQxNzgxMiBaIE0xMi4zODcxODA5LDI2LjcwMDE3NTIgQzEwLjcxNDc2MTEsMjQuMjMxNjg0NCA3LjM1NDkxMDYyLDIzLjU4NzAxNDIgNC44OTY3MTkyOCwyNS4yNjQzODI1IEMyLjQzNzM4MzA2LDI2Ljk0NTU4MTQgMS43OTUxMDM2MSwzMC4zMTc5Mzg0IDMuNDY3NTIzNDgsMzIuNzg2NDI5MSBDNS4xMzk5NDMzNSwzNS4yNTQ5MTk5IDguNDk4NjQ4ODksMzUuODk4MzEzMyAxMC45NTc5ODUxLDM0LjIyMTA3MjYgQzEzLjQxOTczODMsMzIuNTQxMDIyOSAxNC4wNjA3NDU3LDI5LjE2NzUxNjggMTIuMzg3MTgwOSwyNi43MDAxNzUyIFogTTQ2LjQ2ODExNzIsMjcuOTA1NTczNCBDNDQuNDMxMTM0MSwyNy45MDU1NzM0IDQzLjU3MTExMzEsMjkuNzY4MjQ1MiA0My40MTI2OTA3LDMxLjE1Mzk3NzIgTDQzLjQxMjY5MDcsMzEuMTUzOTc3MiBMNDkuMjA2NjAyNiwzMS4xNTM5NzcyIEM0OS4yMjkzMDMxLDI5Ljg4MTg4MDQgNDguNjg2MDMwNywyNy45MDU1NzM0IDQ2LjQ2ODExNzIsMjcuOTA1NTczNCBaIE0xNi44MTM3ODcyLDQuNDQxMTM5MzllLTA1IEMyMC42OTE4OTkxLDQuNDQxMTM5MzllLTA1IDIzLjI5NDYwMDIsMi42OTA3MDg3MSAyMy4yOTQ2MDAyLDYuNTU3Mjc1NjkgQzIzLjI5NDYwMDIsMTEuMjA3MzcwNyAxOS45ODkxNTEsMTMuMzQ5NTU0MyAxNi42MDU0OTU5LDEzLjM0OTU1NDMgTDE2LjYwNTQ5NTksMTMuMzQ5NTU0MyBMMTYuNTc5NTAxLDEzLjM0OTU1NDMgQzEyLjg1NzU3OTgsMTMuMzQ5NTU0MyA5Ljk5NDU5NzY0LDEwLjg5MzgyNjIgOS45OTQ1OTc2NCw2Ljc2NjIzMTI5IEM5Ljk5NDU5NzY0LDIuNjM4NjM2MzUgMTIuNzAxMzg5LDQuNDQxMTM5MzllLTA1IDE2LjgxMzc4NzIsNC40NDExMzkzOWUtMDUgWiBNNDMuNDEzODQ3NSwxLjExMDI4NDg1ZS0wNSBDNDcuNjU2MzMxLDEuMTEwMjg0ODVlLTA1IDQ4Ljk4MzczMTcsMi41MDc5MjI1MSA0OC45ODM3MzE3LDUuNTEyMjQyMjggTDQ4Ljk4MzczMTcsNS41MTIyNDIyOCBMNDguOTgzNzMxNyw5Ljk3OTQ3MzM2IEM0OC45ODM3MzE3LDExLjE4MTEzNDYgNDkuMDM1ODMyMiwxMi4zNTY4MTUzIDQ5LjE5MjAyMywxMy4wNjIxNzkyIEw0OS4xOTIwMjMsMTMuMDYyMTc5MiBMNDUuNjI2MTgyMSwxMy4wNjIxNzkyIEw0NS4zOTIwMDY1LDExLjc4MjEzMTggTDQ1LjMxMzkxMTEsMTEuNzgyMTMxOCBDNDQuNDgwOTY3MSwxMi44MDA5MjkyIDQzLjE3OTY3MTksMTMuMzQ5NjMyIDQxLjY2OTk3NDgsMTMuMzQ5NjMyIEMzOS4wOTMyNjg3LDEzLjM0OTYzMiAzNy41NTc2ODcyLDExLjQ2ODU4NzQgMzcuNTU3Njg3Miw5LjQzMDg4MTYyIEMzNy41NTc2ODcyLDYuMTEzMTI4NDQgNDAuNTI0ODcwNCw0LjU0NTYyODI5IDQ1LjAyNzUyNDQsNC41NDU2MjgyOSBMNDUuMDI3NTI0NCw0LjU0NTYyODI5IEw0NS4wMjc1MjQ0LDQuMzg4OTY3MSBDNDUuMDI3NTI0NCwzLjcwOTU4MzggNDQuNjYzMTUyOSwyLjc0Mjk2OTgyIDQyLjcxMTA5OTQsMi43NDI5Njk4MiBDNDEuNDA5ODA0MiwyLjc0Mjk2OTgyIDQwLjAzMDMwMywzLjE4NzA4Mzc1IDM5LjE5NzQ2OTYsMy42ODM0OTIxMSBMMzkuMTk3NDY5NiwzLjY4MzQ5MjExIEwzOC40Njg2MTYsMS4xNDk0ODkgQzM5LjM1MzU0OTgsMC42NTMwODA2NDkgNDEuMDk3NDIyNiwxLjExMDI4NDg1ZS0wNSA0My40MTM4NDc1LDEuMTEwMjg0ODVlLTA1IFogTTUuNDkxNzg4NzksMS4xMTAyODQ4NWUtMDUgQzYuOTc1MzgwMzcsMS4xMTAyODQ4NWUtMDUgOC4yNzY3ODYyLDAuMzY1NzM4OTMxIDkuMDU3NTE5MDcsMC43NTc2Njk0ODIgTDkuMDU3NTE5MDcsMC43NTc2Njk0ODIgTDguMzgwODc2NTQsMy40NzQ1MzY1IEM3LjgwODIxMzczLDMuMTg3MDgzNzUgNi42ODkxMDQyNywyLjc2OTE3MjU0IDUuNjIxOTg0NjgsMi43NjkxNzI1NCBDNC42NTg5NTU0MywyLjc2OTE3MjU0IDQuMTEyMzk4MTcsMy4xNjA5OTIwNiA0LjExMjM5ODE3LDMuNzg4MDgwOTQgQzQuMTEyMzk4MTcsNC4zODg5NjcxIDQuNjA2ODU0OTUsNC43Mjg0OTIyMSA2LjE2ODU0MTk0LDUuMjUwOTkyMjYgQzguNTg5MDU3MjIsNi4wODcwMzY3NCA5LjU3ODA4MTQxLDcuMzE0Nzg5NzMgOS42MDQxODY5NSw5LjE2OTYzMTU5IEM5LjYwNDE4Njk1LDExLjU3MzA2NTIgNy43NTYyMjM4NiwxMy4zMjM0MjkzIDQuMTEyMzk4MTcsMTMuMzIzNDI5MyBDMi40NDY2MjA4MywxMy4zMjM0MjkzIDAuOTYzMDI5MjUsMTIuOTMxNDk4NyAwLDEyLjQwOTEwOTcgTDAsMTIuNDA5MTA5NyBMMC43MDI3NDgwODUsOS41ODc2NTM4NCBDMS40MzE0OTExLDEwLjAzMTc2NzggMi45NDEwNzc2MSwxMC41MjgxNzYxIDQuMTEyMzk4MTcsMTAuNTI4MTc2MSBDNS4zMDk2MDMwMywxMC41MjgxNzYxIDUuODA0MTcwNDMsMTAuMTM2MjQ1NiA1LjgwNDE3MDQzLDkuNDgzMDY1IEM1LjgwNDE3MDQzLDguODMwMTA2NDkgNS40MTM2OTMzOCw4LjQ5MDM1OTMyIDMuOTU2MjA3MzQsOC4wMjAxNTM2OSBDMS4zMDE0MDU4Myw3LjEzMjAzNjg0IDAuMjg2Mjc2MDk3LDUuNjk1MTA2MTkgMC4zMTIzODE2NDUsNC4yMDU5OTIxNiBDMC4zMTIzODE2NDUsMS44MDI1NTg1NSAyLjM0MjUzMDQ5LDEuMTEwMjg0ODVlLTA1IDUuNDkxNzg4NzksMS4xMTAyODQ4NWUtMDUgWiBNMzEuOTYxNzUyOCwyLjIyMDQ0NjA1ZS0xNSBDMzQuNTY0NDUzOCwyLjIyMDQ0NjA1ZS0xNSAzNi41MTY2MTc5LDEuNzUwMzY0MDYgMzYuNTE2NjE3OSw1LjUxMjIzMTE4IEwzNi41MTY2MTc5LDUuNTEyMjMxMTggTDM2LjUxNjYxNzksMTMuMDYyMTY4MSBMMzIuNTYwNDEwNSwxMy4wNjIxNjgxIEwzMi41NjA0MTA1LDUuOTgyNDM2ODEgQzMyLjU2MDQxMDUsNC4zMzY2NjE1OCAzMS45ODc3NDc3LDMuMjEzMjc1MzcgMzAuNTU2MjU2NiwzLjIxMzI3NTM3IEMyOS40NjMxNDIxLDMuMjEzMjc1MzcgMjguODEyMzgzOSwzLjk3MDkzMzc1IDI4LjUyNjEwNzgsNC43MDIzODk0MSBDMjguNDIyMDE3NCw0Ljk2MzYzOTQzIDI4LjM5NjAyMjUsNS4zMjk0NzgyOSAyOC4zOTYwMjI1LDUuNjk1MDk1MDkgTDI4LjM5NjAyMjUsNS42OTUwOTUwOSBMMjguMzk2MDIyNSwxMy4wNjIxNjgxIEwyNC40Mzk4MTUyLDEzLjA2MjE2ODEgTDI0LjQzOTgxNTIsNC4zNjI3NTMyOCBDMjQuNDM5ODE1MiwyLjc2OTE2MTQ0IDI0LjM4NzcxNDcsMS40MzY4MTk2MiAyNC4zMzU3MjQ4LDAuMjg3MzQxNzE4IEwyNC4zMzU3MjQ4LDAuMjg3MzQxNzE4IEwyNy43NzEzNjk4LDAuMjg3MzQxNzE4IEwyNy45NTM1NTU2LDIuMDYzNzk3NDcgTDI4LjAzMTY1MSwyLjA2Mzc5NzQ3IEMyOC41NTIxMDI3LDEuMjI3ODY0MDEgMjkuODI3NTEzNiwyLjIyMDQ0NjA1ZS0xNSAzMS45NjE3NTI4LDIuMjIwNDQ2MDVlLTE1IFogTTU3LjgwNzA2NDEsMi4yMjA0NDYwNWUtMTUgQzU4LjE3MTQzNTYsMi4yMjA0NDYwNWUtMTUgNTguMzUzNjIxNCwwLjAyNjA5MTY5MzkgNTguNjM5ODk3NSwwLjA3ODM4NjExMDIgTDU4LjYzOTg5NzUsMC4wNzgzODYxMTAyIEw1OC42Mzk4OTc1LDMuODE0MTYxNTMgQzU4LjMyNzYyNjUsMy43NjE4NjcxMiA1OC4wMTUyNDQ4LDMuNzA5NjgzNzMgNTcuNTcyNzc3OSwzLjcwOTY4MzczIEM1Ni4xMTUyOTE5LDMuNzA5NjgzNzMgNTUuMTI2MjY3Nyw0LjQ2NzIzMTA4IDU0Ljg2NTk4NjUsNS43MjEyOTc4MSBDNTQuODEzODg2LDUuOTgyNDM2ODEgNTQuNzg3ODkxMSw2LjI2OTc3ODUzIDU0Ljc4Nzg5MTEsNi42MDk1MjU2OSBMNTQuNzg3ODkxMSw2LjYwOTUyNTY5IEw1NC43ODc4OTExLDEzLjA2MjE2ODEgTDUwLjgzMTY4MzgsMTMuMDYyMTY4MSBMNTAuODMxMzI5NCw0LjEyNTcwODIyIEM1MC44Mjc5ODYyLDIuNDQ5MzUxNTMgNTAuODAwNDgyNSwxLjMxMTM3OTY0IDUwLjcyNzU5MzQsMC4yODczNDE3MTggTDUwLjcyNzU5MzQsMC4yODczNDE3MTggTDU0LjExMTEzNzksMC4yODczNDE3MTggTDU0LjI2NzMyODgsMi42NjQ3OTQ2NiBMNTQuMzcxNDE5MSwyLjY2NDc5NDY2IEM1NS4wMjIwNjY3LDAuNzgzNzUwMDczIDU2LjU1Nzc1ODgsMi4yMjA0NDYwNWUtMTUgNTcuODA3MDY0MSwyLjIyMDQ0NjA1ZS0xNSBaIE00NS4xNTc3MjAzLDcuMDI3NDQ4MDEgQzQzLjA3NTQ3MDksNy4wMjc0NDgwMSA0MS40NjE3OTQxLDcuNTIzODU2MzYgNDEuNDYxNzk0MSw5LjAzODk1MTA3IEM0MS40NjE3OTQxLDEwLjA1Nzg1OTUgNDIuMTM4NTQ3MiwxMC41NTQyNjc4IDQzLjAyMzQ4MTEsMTAuNTU0MjY3OCBDNDMuOTg2NTEwMywxMC41NTQyNjc4IDQ0LjgxOTM0MzcsOS45MDEwODcyNSA0NS4wNzk2MjQ5LDkuMDkxMjQ1NDggQzQ1LjEzMTcyNTMsOC44ODIyODk4NyA0NS4xNTc3MjAzLDguNjQ3MTMxNTQgNDUuMTU3NzIwMyw4LjQxMjA4NDI0IEw0NS4xNTc3MjAzLDguNDEyMDg0MjQgWiBNMTYuNjgzNTkxMywyLjg0NzU5MTk2IEMxNC44MDk2MzMzLDIuODQ3NTkxOTYgMTQuMDgwODkwMyw0Ljc4MDgxOTkzIDE0LjA4MDg5MDMsNi42ODc3MzQxNiBDMTQuMDgwODkwMyw4Ljg1NjIzMTQ5IDE0Ljk5MTgxOSwxMC41MDIwMDY3IDE2LjY1NzU5NjQsMTAuNTAyMDA2NyBMMTYuNjU3NTk2NCwxMC41MDIwMDY3IEwxNi42ODM1OTEzLDEwLjUwMjAwNjcgQzE4LjI0NTI3ODMsMTAuNTAyMDA2NyAxOS4yMDgzMDc1LDguOTYwNTk4MjYgMTkuMjA4MzA3NSw2LjY2MTc1MzQ5IEMxOS4yMDgzMDc1LDQuNzgwODE5OTMgMTguNDc5NTY0NSwyLjg0NzU5MTk2IDE2LjY4MzU5MTMsMi44NDc1OTE5NiBaIiBpZD0i5b2i54q257uT5ZCIIj48L3BhdGg+CiAgICAgICAgICAgICAgICA8L2c+CiAgICAgICAgICAgICAgICA8ZyBpZD0iR3JvdXAtMTkiIHRyYW5zZm9ybT0idHJhbnNsYXRlKDM4LjU0MzIzMiwgMTYuMzkwOTk2KSI+CiAgICAgICAgICAgICAgICAgICAgPHBhdGggZD0iTTIwLjU4NDMwNTIsMjIuNjEyNjg4NSBMMTkuMjgyNjk3NywyMi42MTI2ODg1IEMxOS4yODI2OTc3LDEyLjA4OTY1NjEgMTAuNjMyMTQ4MiwzLjUyODk2NTY5IDAsMy41Mjg5NjU2OSBMMCwyLjIyMjUxMzE0IEMxMS4zNTA4MTYyLDIuMjIyNTEzMTQgMjAuNTg0MzA1MiwxMS4zNjc0MTAyIDIwLjU4NDMwNTIsMjIuNjEyNjg4NSIgaWQ9IkZpbGwtNCIgZmlsbD0iIzQ5OUNEMiI+PC9wYXRoPgogICAgICAgICAgICAgICAgICAgIDxwYXRoIGQ9Ik0yMS40ODM3NjQ1LDE1LjU5MzgwMzYgQzE5LjkyMjEyMzMsOC45OTI2NTY2MiAxNC41OTIzNzc0LDMuNDgyOTEzNDkgNy45MDk5MzQ3NSwxLjU1Njk1NDUxIEM4LjIwOTcyNDUyLDAuNTA5ODc4NTIxIEMxNS4yNjI1NjQ1LDIuNTQyOTEwNDUgMjAuODg3NjkyOSw4LjM2MzM5OTg4IDIyLjUzODQ3MDQsMTUuMzQxNTU5MiBMMjEuNDgzNzY0NSwxNS41OTM4MDM2IFoiIGlkPSJGaWxsLTYiIGZpbGw9IiM0ODlDRDIiPjwvcGF0aD4KICAgICAgICAgICAgICAgICAgICA8cGF0aCBkPSJNMjIuOTQ5NDI0NCw5LjM5ODk0NzAyIEMyMS4zMzkyMTI0LDUuODc0NDc3MzEgMTguNTkzMTYzMywyLjgwMDUwODQ4IDE1LjIyMzY5ODksMC43NDQzNjQ2ODEgTDE1LjY3NDMyOCwwIEMxOS4xOTI4MzI4LDIuMTQ3MzI3MzQgMjIuMDU0MzcyNSw1LjM1NDAwODg2IDIzLjczNjkwMSw5LjAzNTIwNTkzIEwyMi45NDk0MjQ0LDkuMzk4OTQ3MDIgWiIgaWQ9IkZpbGwtOCIgZmlsbD0iIzQ4OUNEMiI+PC9wYXRoPgogICAgICAgICAgICAgICAgPC9nPgogICAgICAgICAgICA8L2c+CiAgICAgICAgPC9nPgogICAgPC9nPgo8L3N2Zz4=
+    tekton.dev/pipelines.minVersion: 0.56.0
+    tekton.dev/platforms: linux/amd64,linux/arm64
+    tekton.dev/tags: sonarqube, connector, kubernetes, secret, user-token
+  labels:
+    app.kubernetes.io/version: "0.1"
+  name: sonarqube-connector-automatic-creation
+  namespace: ${TARGET_NS}
+spec:
+  description: Automatically provisions and maintains a tenant-scoped SonarQube Connector in one TaskRun. For the given tenant, the Task creates or reuses a dedicated SonarQube user, a permission template scoped to the tenant's project key pattern, and a user token; then creates or updates the tenant SonarQube Connector together with its token Secret. SonarQube projects are not created upfront -- they are auto-created at scan time by the tenant user. The user token is refreshed on every run and auto-renewed before expiry, so the Task is safe to schedule on a recurring basis.
+  params:
+    - description: Target tenant SonarQube Connector to create or update, in <namespace>/<name> format, for example connectors-management/acme-sonarqube. The token Secret is created in the same namespace as the Connector
+      name: connector
+      type: string
+    - description: Tenant identifier. Used to derive default names for the SonarQube user and permission template when those fields are left empty
+      name: tenant
+      type: string
+    - default: ""
+      description: Optional SonarQube server URL, for example https://sonarqube.example.com. Set this to override the address provided by the sonarqube-config workspace; leave empty to use the workspace value
+      name: sonarqubeUrl
+      type: string
+    - description: Regular expression matching the tenant project key space. Used to scope the permission template so it only applies to this tenant. Must not overlap with the patterns used by other tenants
+      name: projectPattern
+      type: string
+    - default: ""
+      description: Name of the SonarQube permission template to create or reuse. Leave empty to use <tenant>-template
+      name: permissionTemplate
+      type: string
+    - default:
+        - user
+        - codeviewer
+        - scan
+      description: Project-level permissions granted to the tenant user. The default covers Browse, See Source Code, and Execute Analysis. Do not include 'admin', otherwise the tenant could change project visibility or delete projects
+      name: templatePermissions
+      type: array
+    - default: ""
+      description: SonarQube user login to create or reuse. Leave empty to use <tenant>-bot
+      name: userName
+      type: string
+    - default: "30"
+      description: Validity of the SonarQube user token, in whole days (positive integer). The token is automatically renewed before it expires on each run, so the Task can be scheduled on a recurring basis
+      name: tokenDuration
+      type: string
+    - default: ${REGISTRY}/devops/sonarqube-connector-automatic-creation:v1.9.0-g8632398
+      description: Tool image used by every step. The default points at the release image published by this repository; override for air-gapped clusters or to pin a specific version
+      name: sonarqubeAutomationImage
+      type: string
+    - default: Always
+      description: Controls when Kubernetes pulls the tool image
+      name: imagePullPolicy
+      type: string
+    - default: "false"
+      description: Enable verbose logging for debugging. Credentials and tokens are never logged regardless of this flag
+      name: verbose
+      type: string
+  results:
+    - description: Tenant identifier handled by this run
+      name: tenant
+    - description: SonarQube user login created or reused by this run
+      name: username
+    - description: SonarQube permission template name created or reused by this run
+      name: permission-template
+    - description: Name of the SonarQube user token created or reused by this run. NEVER exposes the token value as a result; the value is written only to the tenant Secret
+      name: token-name
+    - description: Reference of the tenant Connector created or updated by this run, in <namespace>/<name> format
+      name: connector-ref
+  stepTemplate:
+    securityContext:
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop:
+          - ALL
+      runAsGroup: 65532
+      runAsNonRoot: true
+      runAsUser: 65532
+      seccompProfile:
+        type: RuntimeDefault
+    volumeMounts:
+      - mountPath: /workspace/state
+        name: state
+      - mountPath: /workspace/secrets
+        name: secrets
+  steps:
+    - args:
+        - $(params.templatePermissions[*])
+      computeResources:
+        limits:
+          cpu: 500m
+          memory: 256Mi
+        requests:
+          cpu: 100m
+          memory: 128Mi
+      env:
+        - name: TENANT
+          value: $(params.tenant)
+        - name: CONNECTOR_REF
+          value: $(params.connector)
+        - name: SONARQUBE_URL
+          value: $(params.sonarqubeUrl)
+        - name: PROJECT_PATTERN
+          value: $(params.projectPattern)
+        - name: PERMISSION_TEMPLATE
+          value: $(params.permissionTemplate)
+        - name: USER_NAME
+          value: $(params.userName)
+        - name: TOKEN_DURATION_DAYS
+          value: $(params.tokenDuration)
+        - name: VERBOSE
+          value: $(params.verbose)
+        - name: SONAR_CONFIG_DIR
+          value: $(workspaces.sonarqube-config.path)
+        - name: STATE_DIR
+          value: /workspace/state
+        - name: SECRETS_DIR
+          value: /workspace/secrets
+      image: $(params.sonarqubeAutomationImage)
+      imagePullPolicy: $(params.imagePullPolicy)
+      name: ensure-tenant
+      script: |
+        #!/usr/bin/env bash
+        ensure-tenant.sh "$@"
+    - computeResources:
+        limits:
+          cpu: 500m
+          memory: 256Mi
+        requests:
+          cpu: 100m
+          memory: 128Mi
+      env:
+        - name: TENANT
+          value: $(params.tenant)
+        - name: CONNECTOR_REF
+          value: $(params.connector)
+        - name: SONARQUBE_URL
+          value: $(params.sonarqubeUrl)
+        - name: VERBOSE
+          value: $(params.verbose)
+        - name: SONAR_CONFIG_DIR
+          value: $(workspaces.sonarqube-config.path)
+        - name: STATE_DIR
+          value: /workspace/state
+        - name: SECRETS_DIR
+          value: /workspace/secrets
+        - name: WORKSPACE_KUBECONFIG_BOUND
+          value: $(workspaces.kubeconfig.bound)
+        - name: WORKSPACE_KUBECONFIG_PATH
+          value: $(workspaces.kubeconfig.path)
+      image: $(params.sonarqubeAutomationImage)
+      imagePullPolicy: $(params.imagePullPolicy)
+      name: apply-kubernetes-resources
+      script: |
+        #!/usr/bin/env bash
+        apply-step.sh
+    - computeResources:
+        limits:
+          cpu: 100m
+          memory: 128Mi
+        requests:
+          cpu: 50m
+          memory: 64Mi
+      env:
+        - name: TENANT
+          value: $(params.tenant)
+        - name: CONNECTOR_REF
+          value: $(params.connector)
+        - name: PERMISSION_TEMPLATE
+          value: $(params.permissionTemplate)
+        - name: USER_NAME
+          value: $(params.userName)
+        - name: VERBOSE
+          value: $(params.verbose)
+        - name: RESULT_TENANT_PATH
+          value: $(results.tenant.path)
+        - name: RESULT_USERNAME_PATH
+          value: $(results.username.path)
+        - name: RESULT_PERMISSION_TEMPLATE_PATH
+          value: $(results.permission-template.path)
+        - name: RESULT_TOKEN_NAME_PATH
+          value: $(results.token-name.path)
+        - name: RESULT_CONNECTOR_REF_PATH
+          value: $(results.connector-ref.path)
+      image: $(params.sonarqubeAutomationImage)
+      imagePullPolicy: $(params.imagePullPolicy)
+      name: write-results
+      script: |
+        #!/usr/bin/env bash
+        write-results.sh
+  volumes:
+    - emptyDir:
+        medium: Memory
+      name: state
+    - emptyDir:
+        medium: Memory
+      name: secrets
+  workspaces:
+    - description: |
+        SonarQube admin access for the Task. Bind this workspace to a
+        SonarQube ConnectorClass configuration (recommended), or to a
+        Secret that provides the SonarQube address plus either an admin
+        token or a username/password pair. Credentials are read from
+        the workspace and never appear in the Pod spec, environment
+        variables, or process arguments.
+      name: sonarqube-config
+    - description: |
+        Optional. Bind this workspace to a kubeconfig when the tenant
+        Connector and its Secret need to be applied to a different
+        cluster than the one running the Task. Leave unbound to apply
+        to the current cluster.
+      name: kubeconfig
+      optional: true
+EOF
+```
+{/* END GENERATED TASK YAML */}
+
+Notes:
+
+- The default `sonarqubeAutomationImage` lives at
+  `${REGISTRY}/devops/sonarqube-connector-automatic-creation:v1.9.0-g8632398`. Override the
+  `sonarqubeAutomationImage` param at TaskRun time for air-gapped clusters or to
+  pin a specific version.
+- The Task pod runs as non-root (`runAsUser: 65532`) with
+  `RuntimeDefault` seccomp, no capabilities, and tmpfs-backed
+  `state` / `secrets` volumes.
+
+## Description
+
+Given a tenant identifier and a project key pattern, the Task:
+
+1. Creates (or reuses) a dedicated **local SonarQube user**
+   `<tenant>-bot`.
+2. Grants that user the global `provisioning` permission so the tenant
+   can auto-create projects matching its pattern at scan time.
+3. Creates (or reuses) a **permission template** scoped to the
+   tenant's `projectKeyPattern`, with project-level permissions
+   (`user`, `codeviewer`, `scan` by default) bound **directly to the
+   tenant user** — not via any group.
+4. Mints (or reuses) a `USER_TOKEN` with a configurable validity window
+   (`tokenDuration` days; default 30).
+5. Writes a tenant `sonarqube` **Connector** with `tokenAuth` plus a
+   matching **Secret** (`connectors.cpaas.io/bearer-token`) carrying
+   the freshly-minted token.
+
+Steps 1–3 are write-once; step 4 is reused while the token is still
+valid and the tenant Secret still holds a non-empty token value.
+
+The Task does **not** pre-create any SonarQube projects. Projects are
+auto-created at scan time by the tenant user — the
+`projectKeyPattern` on the tenant template is what restricts that
+auto-creation to the tenant's namespace.
+
+### Why a dedicated user (not a group)
+
+SonarQube permission templates can be bound either to a user or to a
+group. This Task uses the **direct-to-user** binding. The reason is
+external-provisioning compatibility: when SCIM / GitHub / GitLab
+provisioning is enabled on the SonarQube instance, group membership
+for non-IDP users is wiped on every sync, which would silently revoke
+the tenant's project permissions. Binding permissions directly to the
+local tenant user side-steps the group indirection. See
+[Using the Task — Local user creation must be allowed](./using_sonarqube_connector_automatic_creation_task.mdx#local-user-creation).
+
+## Parameters
+
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `connector` | string | _required_ | Target tenant SonarQube Connector to create or update, in `<namespace>/<name>` format (for example `acme-prod/acme-sonarqube`). The token Secret is created in the same namespace. |
+| `tenant` | string | _required_ | Tenant identifier. Used to derive default names for the SonarQube user (`<tenant>-bot`) and permission template (`<tenant>-template`) when those fields are left empty. |
+| `sonarqubeUrl` | string | `""` | Optional SonarQube server URL (for example `https://sonarqube.example.com`). When set, overrides the address provided by the `sonarqube-config` workspace; leave empty to use the workspace value. Useful when the same admin credentials are reused across multiple SonarQube instances. |
+| `projectPattern` | string | _required_ | Regular expression matching the tenant project key space (for example `^acme(:.*)?$`). Used to scope the permission template so it only applies to this tenant. **Must not overlap with patterns used by other tenants.** |
+| `permissionTemplate` | string | `""` | Name of the SonarQube permission template to create or reuse. Leave empty to use `<tenant>-template`. |
+| `templatePermissions` | array | `[user, codeviewer, scan]` | Project-level permissions granted to the tenant user via the template. Covers Browse, See Source Code, and Execute Analysis. **Do not include `admin`** — the tenant could otherwise change project visibility or delete projects. |
+| `userName` | string | `""` | SonarQube user login to create or reuse. Leave empty to use `<tenant>-bot`. |
+| `tokenDuration` | string | `"30"` | Validity of the SonarQube user token, in whole days (positive integer). The token is auto-renewed before it expires on each run, so the Task can be scheduled on a recurring basis. |
+| `sonarqubeAutomationImage` | string | `registry.alauda.cn:60070/devops/sonarqube-connector-automatic-creation:v1.9.0-g8632398` | Tool image used by every step. Override for air-gapped clusters or to pin a specific version. |
+| `imagePullPolicy` | string | `Always` | Controls when Kubernetes pulls the tool image. |
+| `verbose` | string | `"false"` | Enable verbose logging for debugging. Credentials and tokens are never logged regardless of this flag. |
+
+## Workspaces
+
+| Name | Required | Description |
+|------|----------|-------------|
+| `sonarqube-config` | yes | SonarQube admin access for the Task. Bind to a SonarQube ConnectorClass configuration (recommended) or to a Secret that provides the SonarQube address plus either an admin token or a username/password pair. Credentials are read from the workspace and never appear in the Pod spec, environment variables, or process arguments. See [Workspace binding modes](#workspace-binding-modes) below. |
+| `kubeconfig` | no | Bind to a kubeconfig when the tenant Connector and its Secret need to be applied to a **different cluster** than the one running the Task. Leave unbound to apply to the current cluster. |
+
+### Workspace binding modes \{#workspace-binding-modes}
+
+The `sonarqube-config` workspace is auto-detected. Pick the binding
+that best matches how the admin Connector is exposed in your cluster:
+
+**Mode A — Secret-direct (bootstrap / cross-cluster).**
+Bind `sonarqube-config` to a Secret whose data carries credentials
+only — one of:
+
+- `token` — a SonarQube admin token (recommended), **or**
+- `username` + `password` — admin Basic-auth credentials
+
+Pass the SonarQube base URL via the `sonarqubeUrl` parameter at
+TaskRun time. The Task reads the workspace files at runtime and uses
+curl's `--config` shape, so the admin credential never appears in the
+Pod environment or argv. The same Secret can target multiple SonarQube
+instances by varying the `sonarqubeUrl` param.
+
+**Mode B — Connectors CSI Driver (recommended for the day-2 path).**
+Bind `sonarqube-config` to a volume projected by the
+[Connectors CSI Driver](../../connectors/concepts/connectors_csi.mdx)
+from the SonarQube `sonar-scanner` ConnectorClass configuration. The
+Task reads `sonar.host.url` plus the `sonar.scanner.proxy*` routing
+fields from the projected `sonar-project.properties` and routes every
+API call through the
+[Connectors Proxy](../../connectors/concepts/connectors_proxy.mdx),
+which injects the SonarQube `Authorization` header from the admin
+Connector. The admin token never lands in the Task pod.
+
+## Results
+
+| Name | Description |
+|------|-------------|
+| `tenant` | Tenant identifier handled by this run. |
+| `username` | SonarQube user login created or reused by this run (defaults to `<tenant>-bot`). |
+| `permission-template` | SonarQube permission template name created or reused (defaults to `<tenant>-template`). |
+| `token-name` | Name of the SonarQube user token created or reused by this run. **The token value is never emitted as a result** — it is written only to the tenant Secret. |
+| `connector-ref` | Reference of the tenant Connector, in `<namespace>/<name>` format. |
+
+## Steps
+
+The Task runs three steps in order:
+
+| Step | Side-effects | Purpose |
+|------|--------------|---------|
+| `ensure-tenant` | SonarQube Web API + tmpfs `state` / `secrets` | SonarQube-side preflight + provisioning. Verifies the admin identity holds **Administer System** (prerequisite [P5](./using_sonarqube_connector_automatic_creation_task.mdx#prerequisites)), then creates/reuses the user, grants `provisioning`, creates/reuses the permission template with `templatePermissions`, and mints/reuses the user token. Writes the token to the tmpfs `secrets` volume. A `trap` on this step revokes the just-minted token and tears down newly-created template / `provisioning` grant / user on any non-zero exit. |
+| `apply-kubernetes-resources` | Kubernetes API on the target cluster | Cluster-side write. Reads the token from the tmpfs volume and applies the tenant `sonarqube` Connector + Secret via Server-Side Apply with field manager `connector-auto`. Applies to the local cluster by default, or to the cluster identified by the `kubeconfig` workspace when bound. |
+| `write-results` | TaskRun result paths + tmpfs cleanup | Writes the five Task results from the in-memory state file built by step 1, then clears `/workspace/secrets/token` so the freshly-minted token does not survive in the Pod's tmpfs beyond the run. |
+
+The first step uses tmpfs volumes (`emptyDir.medium: Memory`) for both
+state and secrets so credentials never touch the node filesystem.
+
+### Failure handling
+
+Failures are scoped per step:
+
+- **`ensure-tenant` fails.** Its `trap` handler revokes **only the token
+  this run minted**, and deletes only the template / `provisioning`
+  grant / user that this run created — anything reused from a prior
+  run is left intact. The TaskRun exits non-zero.
+- **`apply-kubernetes-resources` fails** (e.g. SSA rejected, kubeconfig
+  invalid, RBAC missing). The SonarQube side is **not** rolled back —
+  the user, template, and token remain. The TaskRun exits non-zero;
+  the next run self-heals: it sees `user_tokens/search` hit but a
+  missing or empty tenant Secret and re-mints + re-applies.
+- **`write-results` fails.** SonarQube state and the cluster Secret /
+  Connector are already correct; only the Task results are missing.
+  Re-running is a no-op for the side-effecting state.
+
+## Three-path lifecycle summary
+
+The Task collapses three lifecycle paths into the same TaskRun shape:
+
+| Path | Trigger | What the Task does |
+|------|---------|---------------------|
+| **Create** | First run for the tenant. | Creates user, grants `provisioning`, creates template, mints token, writes Connector + Secret. |
+| **Refresh** | `user_tokens/search` finds the named token **AND** the tenant Secret still carries a non-empty `token` value, **AND** neither `tokenName` nor `tokenDuration` changed since last run. | Reuses the user, template, `provisioning` grant, and the existing token — no SonarQube-side write. Re-applies the Connector + Secret via SSA (no-op on byte-identical input). |
+| **Recreate** | Any of: `user_tokens/search` misses, the tenant Secret is missing or empty, `tokenName` / `tokenDuration` changed. | Reuses the user and template. Revokes the old token if present, then mints a fresh one (`expirationDate = today UTC + tokenDuration`). Re-applies the Connector + Secret. |
+
+Note: the Task does **not** inspect the token's `expirationDate` —
+SonarQube has no token-renew API and the Task does not poll for expiry.
+If a token in `user_tokens/search` is expired but still present, the
+Task treats it as reused; the expiry surfaces at scan time as a `401`,
+and the next Task run (search-hit but Secret retains the dead value)
+will self-heal only if the operator clears the tenant Secret first. To
+get pure cadence-driven rotation, schedule the TaskRun on a cron and
+pair it with a deliberate revoke (see
+[Using the Task — Rotation](./using_sonarqube_connector_automatic_creation_task.mdx#rotation)).
+
+All three paths are driven by the same params and exit with the same
+results, so the same TaskRun can be scheduled to run on a cron without
+case-splitting in the caller.
+
+## Security notes
+
+- **Admin token never leaves the workspace.** The Task reads admin
+  credentials only via the `sonarqube-config` workspace (curl
+  `--config` shape, or via the Connectors Proxy in Mode B). The admin
+  token does not appear in any env var, command argument, or Pod
+  spec.
+- **Tenant token stored in tmpfs.** The freshly-minted token is
+  written to `/workspace/secrets/token` on a `medium: Memory` volume,
+  cleared by trap on step exit, and never logged.
+- **Pod runs as non-root.** `runAsUser: 65532`,
+  `runAsNonRoot: true`, `allowPrivilegeEscalation: false`, all
+  capabilities dropped, `seccompProfile: RuntimeDefault`.
+- **Verbose mode is safe to enable.** `verbose=true` enables shell
+  tracing for the helper scripts, but credentials and tokens are
+  redacted regardless of this flag.
+- **Restrict who can trigger the TaskRun.** Triggering this Task mints
+  (and rotates) SonarQube tokens and writes Secrets to the target
+  namespace — gate it via Tekton RBAC on `TaskRun.create` plus
+  workspace access.
+
+## See also
+
+- [Using the Task](./using_sonarqube_connector_automatic_creation_task.mdx) —
+  prerequisites, onboarding, rotation, and offboarding.
+- [SonarQube ConnectorClass](../concepts/sonarqube_connectorclass.mdx) —
+  underlying Connector model used by the Task output.
+- [Trouble shooting](../trouble_shooting/index.mdx) — diagnose
+  Connector / proxy / SonarQube errors after the Task has run.

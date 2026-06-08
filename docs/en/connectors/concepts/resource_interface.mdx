@@ -294,6 +294,80 @@ This enables the system to match compatible connectors with ResourceInterfaces a
 
 More about ConnectorClass please refer to [Concept of ConnectorClass](./connectorclass.mdx)
 
+## Schema Version and Tekton Compatibility \{#schema-version}
+
+A `ResourceInterface` carries two version-related labels that serve
+distinct purposes:
+
+| Label | Purpose |
+| ----- | ------- |
+| `resourceinterface.connectors.cpaas.io/version` | Marks successive generations of the same RI object (for example `gitcoderepository-v1` and `gitcoderepository-v2` may coexist on the cluster). Today this label is only used to disambiguate object names — no controller or runtime path consumes it yet. |
+| `resourceinterface.connectors.cpaas.io/schema-version` | Declares the frontend rendering capability this RI requires (sandbox functions, form widgets, expression syntax). The DevOps UI declares its own `currentSchema` and silently skips any RI whose schema-version exceeds it. |
+
+Both default to `"1"` when omitted. The remainder of this section
+covers the **schema-version** dimension, which is where Tekton
+compatibility surfaces.
+
+### Compatibility With Tekton Releases
+
+On a Tekton release that recognizes the `schema-version` label, the
+DevOps frontend automatically picks, for each category, the highest
+ResourceInterface whose schema-version is at or below its own supported
+level. No operator configuration is needed — mixed-schema deployments
+work out of the box.
+
+On an older Tekton release that predates schema-version support, the
+frontend treats every installed ResourceInterface as renderable. When
+the only ResourceInterface for a category has `schema-version > 1`,
+selecting a Connector produces a broken or empty integration form —
+the frontend cannot resolve the higher-schema expressions, workspace
+configuration, or form widgets.
+
+### Recovering From the Broken-Form Symptom
+
+If you hit the broken-form symptom described above on an older Tekton
+release, two recovery paths are available — in order of preference:
+
+#### Preferred: Upgrade the Tekton operator \{#upgrade-tekton}
+
+Upgrade your Tekton release to a version that recognizes the
+`schema-version` label. This is the root fix:
+
+- The DevOps frontend will then transparently pick the highest
+  ResourceInterface its own `currentSchema` supports and silently skip
+  anything beyond it; the broken-form symptom disappears without any
+  Connectors-operator configuration.
+- `ConnectorsConfig.spec.installFlags` stays empty (its default),
+  so every shipped ResourceInterface remains installed and available
+  the moment Tekton can render it.
+- No technical debt is introduced — you don't have to remember to
+  revert an emergency override later.
+
+If upgrading Tekton is feasible in your environment, prefer this path
+and you can stop here.
+
+#### Fallback: Cap the installed schema-version range \{#disable-higher-schema}
+
+If you cannot upgrade Tekton yet, cap which schema-versions install on
+the cluster-singleton `ConnectorsConfig`:
+
+```yaml
+apiVersion: operator.connectors.alauda.io/v1alpha1
+kind: ConnectorsConfig
+metadata:
+  name: connectors-config
+spec:
+  installFlags:
+    pipeline-integration: "<=2"   # install schema-version 1 and 2; skip 3+
+```
+
+Higher-schema ResourceInterfaces are removed from the cluster; categories
+fall back to the version your Tekton can render. After Tekton is upgraded,
+raise the cap (e.g. `"<=3"`) or remove the entry to re-install them.
+
+For the complete `ConnectorsConfig` reference, see
+[Installation → ConnectorsConfig](../../install/install.mdx).
+
 ## Dynamic Form \{#dynamic-form}
 
 Dynamic forms provide a declarative way to configure interactive UI components for Pipeline Integration. With dynamic forms, users can browse and select resources such as Git repositories and revisions directly through the connector.

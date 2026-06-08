@@ -1,0 +1,340 @@
+---
+weight: 25
+title: Nexus Connector Automatic Creation Tekton Task
+---
+
+# Nexus Connector Automatic Creation Tekton Task
+
+> Run the install command on this page **once per cluster** (admin only) to install the Task and the tool-image ConfigMaps. Day-to-day users only create TaskRuns — see the [how-to guide](./using_nexus_connector_automatic_creation_task.mdx) for end-to-end examples.
+
+Set the variables, then run the command below:
+
+- `REGISTRY`: the registry host that stores the `devops/nexus-connector-automatic-creation` image.
+- `TARGET_NS`: the namespace where you want to install the Task. The tool-image ConfigMaps are installed in `kube-public`.
+
+{/* BEGIN GENERATED TASK YAML */}
+```bash
+export REGISTRY=<your-registry>
+export TARGET_NS=<target-namespace>
+
+cat <<'EOF' | envsubst '${REGISTRY} ${TARGET_NS}' | kubectl apply -f -
+apiVersion: v1
+data:
+  image: ${REGISTRY}/devops/nexus-connector-automatic-creation:v0.1
+  name: Nexus Connector Automatic Creation v0.1
+kind: ConfigMap
+metadata:
+  annotations:
+    operator.tekton.dev/preserve-namespace: "true"
+    operator.tekton.dev/resource-policy: keep
+  labels:
+    catalog.tekton.dev/source: system
+    catalog.tekton.dev/tool-image-nexus-connector-automatic-creation: "0.1"
+    catalog.tekton.dev/tool-image-run-script: nexus-connector-automatic-creation-0.1
+    operator.tekton.dev/tool-image: nexus-connector-automatic-creation
+  name: catalog-tool-image-nexus-connector-automatic-creation-0.1
+  namespace: kube-public
+---
+apiVersion: v1
+data:
+  image: ${REGISTRY}/devops/nexus-connector-automatic-creation:latest
+  name: Nexus Connector Automatic Creation latest
+kind: ConfigMap
+metadata:
+  annotations:
+    operator.tekton.dev/preserve-namespace: "true"
+  labels:
+    catalog.tekton.dev/source: system
+    catalog.tekton.dev/tool-image-nexus-connector-automatic-creation: latest
+    catalog.tekton.dev/tool-image-run-script: nexus-connector-automatic-creation-latest
+    operator.tekton.dev/tool-image: nexus-connector-automatic-creation
+  name: catalog-tool-image-nexus-connector-automatic-creation-latest
+  namespace: kube-public
+---
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  annotations:
+    style.tekton.dev/descriptors: |
+      - path: params.connector
+        x-descriptors:
+          - urn:alm:descriptor:label:en:Connector
+          - 'urn:alm:descriptor:description:en:Target Nexus Connector resource to create or update, in [ns]/[name] format, for example project-a/nexus. The namespace is also used for the Connector Secret'
+          - 'urn:alm:descriptor:tooltip:en:Use [ns]/[name], for example project-a/nexus. The Secret SSA-d alongside the Connector lands in the same namespace'
+          - urn:alm:descriptor:com.tectonic.ui:text
+          - urn:alm:descriptor:com.tectonic.ui:validation:required
+      - path: params.nexusUrl
+        x-descriptors:
+          - urn:alm:descriptor:label:en:Nexus URL
+          - 'urn:alm:descriptor:description:en:Nexus 3.x base URL (no trailing slash). Accepts both external URLs (e.g. https://nexus.example.com) and in-cluster Service URLs (e.g. http://<svc>.<ns>.svc)'
+          - urn:alm:descriptor:com.tectonic.ui:text
+          - urn:alm:descriptor:com.tectonic.ui:validation:required
+      - path: params.nexusRepositories
+        x-descriptors:
+          - urn:alm:descriptor:label:en:Nexus Repositories
+          - 'urn:alm:descriptor:description:en:YAML map with two top-level keys — provision: (entries this Task creates + manages) and reference: (entries that already exist; only privilege-link them). Each provision entry needs name + format + type; everything else takes sensible defaults. Each reference entry needs name only; an optional actions: subset narrows the granted privileges. See the connectors-nexus user docs (docs/en/connectors-nexus/how_to/) for the full schema reference and end-to-end examples.'
+          - 'urn:alm:descriptor:tooltip:en:Single string param. See the connectors-nexus user docs (docs/en/connectors-nexus/how_to/) for the full nexusRepositories schema and worked examples.'
+          - urn:alm:descriptor:com.tectonic.ui:textarea
+          - urn:alm:descriptor:com.tectonic.ui:validation:required
+      - path: params.nexusUser
+        x-descriptors:
+          - urn:alm:descriptor:label:en:Nexus Username
+          - 'urn:alm:descriptor:description:en:Optional override for the generated Nexus user name. Default = connector-[ns]-[connector]'
+          - urn:alm:descriptor:com.tectonic.ui:text
+      - path: params.secret
+        x-descriptors:
+          - urn:alm:descriptor:label:en:Secret Name
+          - 'urn:alm:descriptor:description:en:Optional override for the K8s Secret name SSA-d into the connector namespace. Default = [connector]-secret'
+          - urn:alm:descriptor:com.tectonic.ui:text
+      - path: params.nexusCliImage
+        x-descriptors:
+          - urn:alm:descriptor:label:en:Task Tool Image
+          - 'urn:alm:descriptor:description:en:Runtime image providing curl + jq + kubectl + bash for the Task steps.'
+          - urn:alm:descriptor:com.tectonic.ui:select:image
+          - urn:alm:descriptor:expression:props.options:api:/kubernetes/${context.cluster}/api/v1/namespaces/kube-public/configmaps?labelSelector=catalog.tekton.dev%2Ftool-image-nexus-connector-automatic-creation
+          - urn:alm:descriptor:props:select:allowCreate
+          - urn:alm:descriptor:expression:props.options:path:items
+          - urn:alm:descriptor:expression:props.options:label:path:data.name
+          - urn:alm:descriptor:expression:props.options:value:path:data.image
+      - path: params.imagePullPolicy
+        x-descriptors:
+          - urn:alm:descriptor:label:en:Image Pull Policy
+          - 'urn:alm:descriptor:description:en:Controls when Kubernetes pulls the tool images used by this Task'
+          - urn:alm:descriptor:com.tectonic.ui:select
+          - urn:alm:descriptor:com.tectonic.default:Always
+          - urn:alm:descriptor:props:select:options:Always
+          - urn:alm:descriptor:props:select:options:IfNotPresent
+          - urn:alm:descriptor:props:select:options:Never
+      - path: params.verbose
+        x-descriptors:
+          - urn:alm:descriptor:label:en:Verbose
+          - 'urn:alm:descriptor:description:en:Enable shell tracing on non-secret steps. Secrets are still suppressed even when verbose=true'
+          - urn:alm:descriptor:com.tectonic.ui:checkbox
+    style.tekton.dev/displayParams: connector,nexusUrl,nexusRepositories
+    tekton.dev/categories: CLI
+    tekton.dev/displayName: Nexus Connector Automatic Creation
+    tekton.dev/icon: data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB3aWR0aD0iODBweCIgaGVpZ2h0PSI2MHB4IiB2aWV3Qm94PSIwIDAgODAgNjAiIHZlcnNpb249IjEuMSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIiB4bWxuczp4bGluaz0iaHR0cDovL3d3dy53My5vcmcvMTk5OS94bGluayI+CiAgICA8dGl0bGU+bmV4dXM8L3RpdGxlPgogICAgPGcgaWQ9Iumhtemdoi0xIiBzdHJva2U9Im5vbmUiIHN0cm9rZS13aWR0aD0iMSIgZmlsbD0ibm9uZSIgZmlsbC1ydWxlPSJldmVub2RkIj4KICAgICAgICA8ZyBpZD0ibmV4dXMiIHRyYW5zZm9ybT0idHJhbnNsYXRlKDAsIC0wKSI+CiAgICAgICAgICAgIDxyZWN0IGlkPSLnn6nlvaIiIGZpbGw9IiNEOEQ4RDgiIG9wYWNpdHk9IjAiIHg9IjAiIHk9IjcuMTA1NDI3MzZlLTE1IiB3aWR0aD0iODAiIGhlaWdodD0iNjAiPjwvcmVjdD4KICAgICAgICAgICAgPGcgaWQ9Iue8lue7hCIgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMTIsIDApIiBmaWxsLXJ1bGU9Im5vbnplcm8iPgogICAgICAgICAgICAgICAgPHBvbHlnb24gaWQ9Iui3r+W+hCIgZmlsbD0iIzA1QkI2RCIgcG9pbnRzPSI1NiAyNC41Nzg1NzE0IDU2IDMxLjkwNzE0MjkgMzguNjgzMDc2OSA0MS45Nzg1NzE0IDM0LjI4OTIzMDggNDQuNTI4NTcxNCAzNC4yNjc2OTIzIDQ0LjUyODU3MTQgMjcuOTc4NDYxNSA0OC4xOTI4NTcxIDIxLjY2NzY5MjMgNDQuNTI4NTcxNCAxNy4yNzM4NDYyIDQxLjk1NzE0MjkgMCAzMS45MDcxNDI5IDAgMjQuNiA2LjQ2MTUzODQ2IDI4LjM1IDYuNDYxNTM4NDYgMjguNDE0Mjg1NyAyMy41NDE1Mzg1IDM4LjMxNDI4NTcgMjcuOTU2OTIzMSA0MC44ODU3MTQzIDI3Ljk3ODQ2MTUgNDAuOTA3MTQyOSAyOC4wMjE1Mzg1IDQwLjg4NTcxNDMgMzIuNDE1Mzg0NiAzOC4zMzU3MTQzIDQ5LjUxNjkyMzEgMjguNDE0Mjg1NyA0OS41MTY5MjMxIDI4LjM1Ij48L3BvbHlnb24+CiAgICAgICAgICAgICAgICA8cG9seWdvbiBpZD0i6Lev5b6EIiBmaWxsPSIjMUMxRjJBIiBwb2ludHM9IjU2IDM2LjM4NTcxNDMgNTYgNDMuNzE0Mjg1NyAzOC42ODMwNzY5IDUzLjc4NTcxNDMgMzQuMjg5MjMwOCA1Ni4zMzU3MTQzIDM0LjI2NzY5MjMgNTYuMzM1NzE0MyAyNy45Nzg0NjE1IDYwIDIxLjY2NzY5MjMgNTYuMzM1NzE0MyAxNy4yNzM4NDYyIDUzLjc4NTcxNDMgMCA0My43MTQyODU3IDAgMzYuNDA3MTQyOSA2LjQ2MTUzODQ2IDQwLjE1NzE0MjkgNi40NjE1Mzg0NiA0MC4yMjE0Mjg2IDIzLjU0MTUzODUgNTAuMTIxNDI4NiAyNy45NTY5MjMxIDUyLjY5Mjg1NzEgMjcuOTc4NDYxNSA1Mi43MTQyODU3IDI4LjAyMTUzODUgNTIuNjkyODU3MSAzMi40MTUzODQ2IDUwLjE0Mjg1NzEgNDkuNTE2OTIzMSA0MC4yMjE0Mjg2IDQ5LjUxNjkyMzEgNDAuMTU3MTQyOSI+PC9wb2x5Z29uPgogICAgICAgICAgICAgICAgPHBvbHlnb24gaWQ9Iui3r+W+hCIgZmlsbD0iIzFDMUYyQSIgcG9pbnRzPSI0OS41MTY5MjMxIDUuMTIxNDUgNDkuNTE2OTIzMSAxNi41ODU3MTQzIDMyLjQxNTM4NDYgMjYuNTA3MTQyOSAyOC4wMjE1Mzg1IDI5LjA1NzE0MjkgMjggMjkuMDU3MTQyOSAyNy45Nzg0NjE1IDI5LjA1NzE0MjkgMjMuNTYzMDc2OSAyNi40ODU3MTQzIDYuNDgzMDc2OTIgMTYuNTg1NzE0MyA2LjQ4MzA3NjkyIDUuMTIxNDUgMCA1LjEyMTQ1IDAgMjAuMSAxNy4yOTUzODQ2IDMwLjE1IDIxLjY4OTIzMDggMzIuNyAyOCAzNi4zNjQyODU3IDM0LjI4OTIzMDggMzIuNyAzOC42ODMwNzY5IDMwLjE1IDU2IDIwLjA3ODU3MTQgNTYgNS4xMjE0NSI+PC9wb2x5Z29uPgogICAgICAgICAgICAgICAgPHBhdGggZD0iTTI5LjAxMjMwNzcsMTguNjQyODU3MSBMMjkuMDEyMzA3Nyw2LjYyMTQyODU3IEMyOS43ODc2OTIzLDUuNDY0Mjg1NzEgMzEuODk4NDYxNSw0LjU0Mjg1NzE0IDMzLjQ0OTIzMDgsNC41NDI4NTcxNCBDMzQuMDA5MjMwOCw0LjU0Mjg1NzE0IDM0LjQxODQ2MTUsNC41ODU3MTQyOSAzNC43NjMwNzY5LDQuNjUgTDM0Ljc2MzA3NjksMCBDMzIuNTIzMDc2OSwwIDMwLjMyNjE1MzgsMS4zMDcxNDI4NiAyOS4wMTIzMDc3LDIuODkyODU3MTQgTDI5LjAxMjMwNzcsMC40NSBMMjQuMjczODQ2MiwwLjQ1IEwyNC4yNzM4NDYyLDE4LjY0Mjg1NzEgTDI5LjAxMjMwNzcsMTguNjQyODU3MSBaIiBpZD0i6Lev5b6EIiBmaWxsPSIjMDVCOTZDIj48L3BhdGg+CiAgICAgICAgICAgIDwvZz4KICAgICAgICA8L2c+CiAgICA8L2c+Cjwvc3ZnPg==
+    tekton.dev/pipelines.minVersion: 0.56.0
+    tekton.dev/platforms: linux/amd64,linux/arm64
+    tekton.dev/tags: nexus, connector, kubernetes, secret, repository
+  labels:
+    app.kubernetes.io/version: "0.1"
+  name: nexus-connector-automatic-creation
+  namespace: ${TARGET_NS}
+spec:
+  description: |
+    Reconciles a Nexus role + user across a caller-supplied list of
+    repositories (created or referenced, mixed formats and types), then
+    materialises the tenant Nexus Connector + auth Secret in the
+    connector's namespace.
+
+    The `nexus-secret` workspace can bind to either a basic-auth Secret
+    or a mounted Connector; the Task auto-detects which.
+
+    See `docs/en/connectors-nexus/how_to/` in the connectors-operator
+    documentation for the minimum-required Nexus permission set and
+    TaskRun examples.
+  params:
+    - description: '[ns]/[name] of the target Nexus Connector. The Secret is SSA-d into the same namespace.'
+      name: connector
+      type: string
+    - description: Nexus 3.x base URL (no trailing slash). The Task does not derive this from the Connector — it is the sole URL source.
+      name: nexusUrl
+      type: string
+    - default: |
+        # nexusRepositories declares which Nexus repos the scoped user
+        # gets access to, in two buckets:
+        #   provision: repos this Task creates and idempotently manages.
+        #   reference: repos that already exist; the Task only links the
+        #              scoped user's privileges to them.
+        # Full schema + per-format examples: connectors-nexus user docs
+        # (docs/en/connectors-nexus/how_to/).
+        #
+        # The example below provisions a three-repo Maven layout for
+        # project-a — one hosted (where the team pushes releases), one
+        # proxy (fronting Maven Central upstream), and one group (the
+        # single read URL that fronts both, so consumers configure one
+        # repository in their pom.xml). It also attaches read-only access
+        # to an existing maven-central reference repo as a fallback.
+        # Uncomment + edit to taste before running the Task.
+        #
+        # provision:
+        #   - name: project-a-maven-hosted
+        #     format: maven2
+        #     type: hosted
+        #     actions: [read, browse, add, edit]
+        #   - name: project-a-maven-proxy
+        #     format: maven2
+        #     type: proxy
+        #     proxy:
+        #       remoteUrl: https://repo.maven.apache.org/maven2/
+        #     actions: [read, browse, add, edit]
+        #   - name: project-a-maven-group
+        #     format: maven2
+        #     type: group
+        #     group:
+        #       memberNames:
+        #         - project-a-maven-hosted
+        #         - project-a-maven-proxy
+        #     maven:
+        #       versionPolicy: MIXED
+        # reference:
+        #   - name: maven-central
+        #     actions: [read, browse]
+      description: 'YAML map with two top-level keys — provision: (entries this Task creates + manages) and reference: (entries that already exist; only privilege-link them). Each provision entry needs name + format + type; everything else takes sensible defaults. Each reference entry needs name only; an optional actions: subset narrows the granted privileges. See the connectors-nexus user docs (docs/en/connectors-nexus/how_to/) for the full schema reference and end-to-end examples.'
+      name: nexusRepositories
+      type: string
+    - default: ""
+      description: Optional override for the Nexus user name (the local user this Task creates inside Nexus). Default = connector-[ns]-[connector].
+      name: nexusUser
+      type: string
+    - default: ""
+      description: Optional override for the K8s Secret name written into the connector namespace alongside the Connector. Default = [connector]-secret.
+      name: secret
+      type: string
+    - default: ${REGISTRY}/devops/nexus-connector-automatic-creation:v0.1
+      description: Runtime image used by every Task step (curl + jq + yq + kubectl + bash + the helper scripts that drive Nexus). Defaults to the catalog tool-image-nexus-connector-automatic-creation v0.1 image; override per TaskRun if you mirror the image into a private registry. The image MUST be the nexus-connector-automatic-creation image or a derivative that bundles the helper scripts at /usr/local/bin/ — a generic kubectl image will not work.
+      name: nexusCliImage
+      type: string
+    - default: Always
+      description: imagePullPolicy applied to all step images. Defaults to `Always` so each TaskRun pulls the current image at the configured tag — important when the tool image tag is mutable (for example a release `v0.1` tag rebuilt with a script fix). Air-gap deployments that pin tool images to immutable digests can switch this to `IfNotPresent` to avoid the per-step registry round-trip.
+      name: imagePullPolicy
+      type: string
+    - default: "false"
+      description: Enable shell tracing on non-secret steps ("true"/"false").
+      name: verbose
+      type: string
+  results:
+    - description: Per-entry materialised repository names (array of strings).
+      name: nexus-repositories
+      type: array
+    - description: Nexus user identity reconciled by this run.
+      name: nexus-user
+      type: string
+    - description: '[ns]/[name] of the written Connector.'
+      name: connector-ref
+      type: string
+  stepTemplate:
+    env:
+      - name: STATE_DIR
+        value: /state
+      - name: VERBOSE
+        value: $(params.verbose)
+    securityContext:
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop:
+          - ALL
+      runAsGroup: 65532
+      runAsNonRoot: true
+      runAsUser: 65532
+    volumeMounts:
+      - mountPath: /state
+        name: state
+  steps:
+    - computeResources:
+        limits:
+          cpu: 500m
+          memory: 256Mi
+        requests:
+          cpu: 100m
+          memory: 128Mi
+      env:
+        - name: NEXUS_URL
+          value: $(params.nexusUrl)
+        - name: NEXUS_SECRET_DIR
+          value: $(workspaces.nexus-secret.path)
+      image: $(params.nexusCliImage)
+      imagePullPolicy: $(params.imagePullPolicy)
+      name: verify
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+        exec verify.sh
+    - computeResources:
+        limits:
+          cpu: 500m
+          memory: 512Mi
+        requests:
+          cpu: 100m
+          memory: 128Mi
+      env:
+        - name: NEXUS_URL
+          value: $(params.nexusUrl)
+        - name: NEXUS_REPOS_YAML
+          value: $(params.nexusRepositories)
+        - name: CONNECTOR_REF
+          value: $(params.connector)
+        - name: NEXUS_USER_OVERRIDE
+          value: $(params.nexusUser)
+      image: $(params.nexusCliImage)
+      imagePullPolicy: $(params.imagePullPolicy)
+      name: ensure-nexus-resources
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+        exec ensure-nexus-resources.sh
+    - computeResources:
+        limits:
+          cpu: 500m
+          memory: 256Mi
+        requests:
+          cpu: 100m
+          memory: 128Mi
+      env:
+        - name: NEXUS_URL
+          value: $(params.nexusUrl)
+        - name: CONNECTOR_REF
+          value: $(params.connector)
+        - name: SECRET_NAME_OVERRIDE
+          value: $(params.secret)
+        - name: KUBE_CONFIG_DIR
+          value: $(workspaces.kube-config.path)
+      image: $(params.nexusCliImage)
+      imagePullPolicy: $(params.imagePullPolicy)
+      name: apply-kubernetes-resources
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+        exec apply-kubernetes-resources.sh
+    - computeResources:
+        limits:
+          cpu: 200m
+          memory: 128Mi
+        requests:
+          cpu: 50m
+          memory: 64Mi
+      env:
+        - name: RESULTS_PATH_REPOS
+          value: $(results.nexus-repositories.path)
+        - name: RESULTS_PATH_USER
+          value: $(results.nexus-user.path)
+        - name: RESULTS_PATH_CONNECTOR
+          value: $(results.connector-ref.path)
+      image: $(params.nexusCliImage)
+      imagePullPolicy: $(params.imagePullPolicy)
+      name: write-results
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+        exec write-results.sh
+  volumes:
+    - emptyDir: {}
+      name: state
+  workspaces:
+    - description: |
+        Bind either to a basic-auth Secret (`username` + `password` files)
+        or to a mounted Nexus Connector. The Task detects the binding shape
+        and selects the auth strategy.
+      name: nexus-secret
+    - description: |
+        Optional kubeconfig for out-of-cluster SSA. When unbound, the
+        Task uses the Pod's in-cluster ServiceAccount via the Task
+        ServiceAccount.
+      name: kube-config
+      optional: true
+EOF
+```
+{/* END GENERATED TASK YAML */}
+
+For parameter defaults, the `nexusRepositories` schema, the `actions` reference, results, workspaces, and end-to-end TaskRun examples, see [Automatically Create and Reconcile Nexus Connector Resources with Tekton](./using_nexus_connector_automatic_creation_task.mdx). The Task definition above is the authoritative source for every parameter, its default, and its description.

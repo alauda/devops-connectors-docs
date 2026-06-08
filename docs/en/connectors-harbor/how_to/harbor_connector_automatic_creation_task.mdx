@@ -99,8 +99,8 @@ metadata:
       - path: params.permissions
         x-descriptors:
           - urn:alm:descriptor:label:en:Project Permissions
-          - 'urn:alm:descriptor:description:en:Robot account permissions for the Harbor projects, matched one-to-one and in the same order as Harbor Projects. Provide one entry for each project using <resource>:<verb1>,<verb2>, for example repository:pull,push . More about harbor permission, please see https://goharbor.io/docs/2.13.0/administration/robot-accounts/#permission-references-a-namepermission-referencesa'
-          - 'urn:alm:descriptor:tooltip:en:Provide one entry for each project using <resource>:<verb1>,<verb2>, for example repository:pull,push'
+          - 'urn:alm:descriptor:description:en:Robot account permissions for the Harbor projects, matched one-to-one and in the same order as Harbor Projects. Provide one entry per project using <resource>:<verb1>,<verb2>; combine multiple resources with semicolons, for example repository:read,list,pull,push;tag:list;artifact:list,read. More about harbor permission, please see https://goharbor.io/docs/2.13.0/administration/robot-accounts/#permission-references-a-namepermission-referencesa'
+          - 'urn:alm:descriptor:tooltip:en:Provide one entry per project using <resource>:<verb1>,<verb2>; combine multiple resources with semicolons, for example repository:read,list,pull,push;tag:list;artifact:list,read'
           - urn:alm:descriptor:com.tectonic.ui:tagsInput
           - urn:alm:descriptor:com.tectonic.ui:validation:required
       - path: params.robotAccount
@@ -142,7 +142,8 @@ metadata:
 spec:
   description: Use harbor-cli to create or update Harbor projects and robot accounts, then create Kubernetes Secret, Harbor Connector, and optional imagePullSecrets in target namespaces. It is suitable for quickly initializing Harbor connectors for cluster tenants and refreshing connector credentials when needed.
   params:
-    - description: Tool image used by every step of this Task to run harbor-cli, kubectl, and the helper scripts that create Harbor projects, robot accounts, connector Secrets, and Harbor Connector resources
+    - default: registry.alauda.cn:60070/devops/harbor-connector-automatic-creation:v0.0.18
+      description: Tool image used by every step of this Task to run harbor-cli, kubectl, and the helper scripts that create Harbor projects, robot accounts, connector Secrets, and Harbor Connector resources; defaults to the pinned versioned image, override per TaskRun when mirroring to a private registry
       name: harborCliImage
       type: string
     - default: Always
@@ -159,7 +160,7 @@ spec:
     - description: List of Harbor project names to create or update; add one Harbor project name per item
       name: harborProjects
       type: array
-    - description: Robot account permissions for the Harbor projects, matched one-to-one and in the same order as harborProjects; provide one entry for each project using <resource>:<verb1>,<verb2> format, for example repository:pull,push. More about harbor permission, please see https://goharbor.io/docs/2.13.0/administration/robot-accounts/#permission-references-a-namepermission-referencesa
+    - description: Robot account permissions for the Harbor projects, matched one-to-one and in the same order as harborProjects; provide one entry per project using <resource>:<verb1>,<verb2> and combine multiple resources with semicolons, for example repository:read,list,pull,push;tag:list;artifact:list,read. Single-resource entries such as repository:pull,push remain supported. More about harbor permission, please see https://goharbor.io/docs/2.13.0/administration/robot-accounts/#permission-references-a-namepermission-referencesa
       name: permissions
       type: array
     - default: ""
@@ -170,7 +171,8 @@ spec:
       description: Validity period of the Harbor robot account in days; use "-1" for no expiration
       name: robotAccountDuration
       type: string
-    - description: List of Kubernetes image pull Secret references to create from the generated Harbor robot credentials; add one <namespace>/<name> reference per item
+    - default: []
+      description: List of Kubernetes image pull Secret references to create from the generated Harbor robot credentials; add one <namespace>/<name> reference per item
       name: imagePullSecrets
       type: array
     - default: "false"

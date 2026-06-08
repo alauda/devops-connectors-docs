@@ -21,6 +21,7 @@ metadata:
   namespace: connectors-system # example namespace
 data:
   enable-connector-apis-permissions: "false"
+  enable-connector-apis-write-passthrough: "false"
   enable-connector-proxy-permissions: "false"
   enable-connectors-approval: "false"
   enable-multi-connector: "false"
@@ -47,7 +48,7 @@ curl -H "Authorization: Bearer ${K8S_TOKEN}" \
 
 This API requires permission to access `ConnectorClass`. For the endpoint details, see [Connector API](../connectors/concepts/connector_api.mdx#connectors-operator-api).
 
-## Update a Feature Flag
+## Update a Feature Flag \{#update-a-feature-flag}
 
 Feature flags are configured through `ConnectorsConfig.spec.components.core.spec.featureFlags`. The Connectors Operator propagates the value through the managed `ConnectorsCore` child CR, which merges it into the `connectors-config` ConfigMap during reconciliation. CR values override manifest defaults.
 
@@ -89,6 +90,7 @@ Feature flags declared here override the manifest defaults in `connectors-config
 | Flag | Default | Description |
 | ---- | ------- | ----------- |
 | `enable-connector-apis-permissions` | `"false"` | Enables permission checks for access to tool APIs exposed through the Connectors API. |
+| `enable-connector-apis-write-passthrough` | `"false"` | Gates write methods (POST/PUT/DELETE/PATCH) on the Connectors API gateway. When disabled, write requests are rejected with HTTP 405 regardless of RBAC. When enabled, write requests follow the same fine-grained SAR chain used for GET, controlled by `enable-connector-apis-permissions`. |
 | `enable-connector-proxy-permissions` | `"false"` | Enables permission control for traffic handled through Connectors Proxy. |
 | `enable-connectors-approval` | `"false"` | Enables the Connectors approval workflow for gated access to Connectors Proxy. This flag should be enabled together with `enable-connector-proxy-permissions`. |
 | `enable-multi-connector` | `"false"` | Enables mounting and rendering configuration for multiple Connectors in a single CSI volume. |
@@ -108,6 +110,12 @@ Related reading:
 - [Connectors Permission Model](../connectors/concepts/permission_model.mdx)
 - [Connector API](../connectors/concepts/connector_api.mdx)
 - [Connector Resource Levels and Permissions](../connectors/concepts/connector_scope_permissions.mdx)
+
+### `enable-connector-apis-write-passthrough` \{#enable-connector-apis-write-passthrough}
+
+When this flag is enabled, the Connectors API gateway accepts write methods (`POST`, `PUT`, `DELETE`, `PATCH`) and forwards them to the target tool. When the flag is disabled (the default), write requests are rejected with HTTP `405 Method Not Allowed`. Read methods (`GET`, `HEAD`, `OPTIONS`) are accepted regardless of this flag.
+
+For the full behavior — HTTP method to Kubernetes verb mapping, RBAC examples, and the interaction with [`enable-connector-apis-permissions`](#enable-connector-apis-permissions) — see [Connector API › Write methods (passthrough)](../connectors/concepts/connector_api.mdx#write-methods-passthrough).
 
 ### `enable-connector-proxy-permissions` \{#enable-connector-proxy-permissions}
 
@@ -169,7 +177,7 @@ Related reading:
 
 When this flag is enabled, the OCI and Harbor Connector PodWebhooks rewrite Pod container image addresses to the Connector Proxy URL when the Pod has the `connectors.cpaas.io/connector: <namespace>/<connector-name>` annotation. The kubelet then pulls images through the Connector Proxy using a ServiceAccount-token-based imagePullSecret, so long-term registry credentials do not need to be distributed to user namespaces.
 
-When the flag is disabled (the default), the PodWebhook **rejects** Pod creation requests that carry the `connectors.cpaas.io/connector` annotation, with an error message pointing to this flag and the `ConnectorsCore` CR field for enabling it. Pods without that annotation are unaffected, and existing manual `imagePullSecrets` workflows continue to work normally.
+When the flag is disabled (the default), the PodWebhook **rejects** Pod creation requests that carry the `connectors.cpaas.io/connector` annotation, with an error message pointing to this flag and the `ConnectorsConfig.spec.components.core.spec.featureFlags` field for enabling it. Pods without that annotation are unaffected, and existing manual `imagePullSecrets` workflows continue to work normally.
 
 Related reading:
 

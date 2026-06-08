@@ -1,0 +1,37 @@
+# POC RBAC — grants the TaskRun's ServiceAccount the rights to server-side-apply
+# the tenant Connector + Secret. Throwaway; namespace-scoped to the demo ns.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: poc-sonarqube-creator
+  namespace: kychen
+  labels: { poc.devops: "43953" }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: poc-sonarqube-creator
+  namespace: kychen
+  labels: { poc.devops: "43953" }
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create", "get", "patch", "update"]
+  - apiGroups: ["connectors.alauda.io"]
+    resources: ["connectors"]
+    verbs: ["create", "get", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: poc-sonarqube-creator
+  namespace: kychen
+  labels: { poc.devops: "43953" }
+subjects:
+  - kind: ServiceAccount
+    name: poc-sonarqube-creator
+    namespace: kychen
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: poc-sonarqube-creator

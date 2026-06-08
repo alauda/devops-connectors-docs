@@ -23,6 +23,7 @@ The following table shows the compatibility and support matrix between the Alaud
 | v1.9.0                                    | v4.2, v4.1, v4.0       |
 | v1.8.0                                    | v4.2, v4.1, v4.0       |
 | v1.7.0                                    | v4.2, v4.1, v4.0       |
+| v1.6.2                                    | v4.2, v4.1, v4.0       |
 | v1.6.0 (LTS)                              | v4.2, v4.1, v4.0       |
 | v1.4.0                                    | v4.1, v4.0             |
 
@@ -31,6 +32,13 @@ The following table shows the compatibility and support matrix between the Alaud
 ### Features and Enhancements
 
 - Added the `enable-pod-image-pull-via-connector` feature flag (default off) to gate the OCI/Harbor PodWebhook's auto-rewrite of Pod container image addresses to the Connector Proxy URL. See [Feature Flags](./feature_flags.mdx#enable-pod-image-pull-via-connector).
+- Added the `enable-connector-apis-write-passthrough` feature flag (default off) to enable write methods (`POST`/`PUT`/`DELETE`/`PATCH`) on the Connectors API gateway. Authorization for enabled writes follows the same fine-grained SAR chain used for `GET`, controlled by `enable-connector-apis-permissions`. See [Feature Flags](./feature_flags.mdx#enable-connector-apis-write-passthrough) and [Write methods (passthrough)](../connectors/concepts/connector_api.mdx#write-methods-passthrough).
+
+**Nexus Connector Enhancements**
+
+- Provide the `nexus-connector-automatic-creation` Tekton Task to automate Nexus connector initialization and credential refresh for Alauda Container Platform tenants and namespaces. More details:
+  - It can create or reconcile Nexus repositories (hosted, proxy, group), scoped user + role + per-repository privileges, the Connector authentication Secret, and the Nexus Connector resource, with rerun-based self-healing for partial failures.
+  - [Automatically Create and Reconcile Nexus Connector Resources with Tekton](../connectors-nexus/how_to/using_nexus_connector_automatic_creation_task.mdx)
 
 ### Fixed Issues
 
@@ -176,6 +184,20 @@ No breaking changes.
 ### Known Issues
   
 {/* release-notes-for-bugs?template=unfixed&project=DEVOPS&version=v1.7.0 */}
+
+## v1.6.2
+
+### Features and Enhancements
+
+- Security updates: Updated base images, dependencies, and resolved security vulnerabilities.
+
+### Fixed Issues
+
+{/* release-notes-for-bugs?template=fixed&project=DEVOPS&version=v1.6.2 */}
+
+### Known Issues
+
+{/* release-notes-for-bugs?template=unfixed&project=DEVOPS&version=v1.6.2 */}
 
 ## v1.6.0 (LTS)
 

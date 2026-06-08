@@ -140,8 +140,12 @@ type ComponentSpec struct {
 // pkg/apis/v1alpha1/connectorsconfig_types.go
 
 type ConnectorsConfigSpec struct {
-    Global     component.ComponentCommonSpec  `json:"global,omitempty"`
-    Components map[string]ComponentConfig     `json:"components,omitempty"`
+    // ComponentCommonSpec 直接 inline（labels / annotations / registry /
+    // installFlags）作为集群级默认值，按字段下发到每个受管子 CR。
+    // 历史版本曾用过 `spec.global.*` 嵌套包装；DEVOPS-43943 (62caab0)
+    // 改为 inline 嵌入以与 per-component CR 的 spec 形态一致。
+    component.ComponentCommonSpec `json:",inline"`
+    Components map[string]ComponentConfig    `json:"components,omitempty"`
 }
 
 type ComponentConfig struct {
@@ -469,14 +473,15 @@ graph TD
 
 **OwnerReference**：ConnectorsConfig 为 owner，`controller: false`（子 CR 的 controller 是 ConnectorsReconciler），确保级联删除。
 
-**Spec 合并规则**（Global 与 per-component）：
+**Spec 合并规则**（集群级 inline ComponentCommonSpec 与 per-component）：
 
 | 字段 | 合并规则 |
 |------|---------|
-| Registry | per-component 非空则用，否则用 global |
-| Labels / Annotations | global 与 per-component 合并，冲突时 per-component 优先 |
-| Workloads / AdditionalManifests | 仅组件级，不参与 global |
-| FeatureFlags / Expose | 仅特定组件，不参与 global |
+| Registry | per-component 非空则用，否则用集群级 |
+| Labels / Annotations | 集群级与 per-component 合并，冲突时 per-component 优先 |
+| InstallFlags | 集群级与 per-component 按 key 合并，冲突时 per-component 优先 |
+| Workloads / AdditionalManifests | 仅组件级，不参与集群级合并 |
+| FeatureFlags / Expose | 仅特定组件，不参与集群级合并 |
 
 **Spec 漂移**：用户手动修改受管子 CR，下次 reconcile 覆盖回 ConnectorsConfig 配置，通过 Event 通知。
 

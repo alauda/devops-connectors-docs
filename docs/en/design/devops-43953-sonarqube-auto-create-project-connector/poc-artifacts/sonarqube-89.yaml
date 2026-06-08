@@ -1,0 +1,65 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sonarqube-89
+  namespace: kychen-1
+  labels: { app: sonarqube-89, poc.devops: "43953-89" }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: sonarqube-89 } }
+  template:
+    metadata:
+      labels: { app: sonarqube-89 }
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: sonarqube
+          image: registry.alauda.cn:60070/devops/sonarqube:8.9.2-5cfa4340
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+            runAsNonRoot: true
+            runAsUser: 1000
+          imagePullPolicy: IfNotPresent
+          ports:
+            - { containerPort: 9000, name: http }
+          env:
+            - name: SONAR_SEARCH_JAVAADDITIONALOPTS
+              value: "-Dnode.store.allow_mmap=false"
+          volumeMounts:
+            - { name: data, mountPath: /opt/sonarqube/data }
+            - { name: ext, mountPath: /opt/sonarqube/extensions }
+            - { name: logs, mountPath: /opt/sonarqube/logs }
+            - { name: temp, mountPath: /opt/sonarqube/temp }
+          resources:
+            requests: { cpu: "500m", memory: "2Gi" }
+            limits: { cpu: "2", memory: "4Gi" }
+          readinessProbe:
+            httpGet: { path: /api/system/status, port: 9000 }
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            failureThreshold: 60
+            timeoutSeconds: 5
+      volumes:
+        - { name: data, emptyDir: {} }
+        - { name: ext, emptyDir: {} }
+        - { name: logs, emptyDir: {} }
+        - { name: temp, emptyDir: {} }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sonarqube-89
+  namespace: kychen-1
+  labels: { app: sonarqube-89, poc.devops: "43953-89" }
+spec:
+  selector: { app: sonarqube-89 }
+  ports:
+    - { port: 9000, targetPort: 9000, name: http }
+  type: ClusterIP

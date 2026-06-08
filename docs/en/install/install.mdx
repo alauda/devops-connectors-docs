@@ -121,6 +121,49 @@ managed child CR through the owner reference (`Controller=true`,
 finished its own finalizer, so deletion is safe even when a component
 takes time to drain.
 
+### Install Flags \{#install-flags}
+
+`spec.installFlags` lets administrators opt out of a small set of
+install-time behaviors. Each entry is keyed by a stable flag name; the
+value's shape is documented per flag.
+
+Available flags:
+
+| Key                    | Purpose                                                                                                  | Example value |
+| ---------------------- | -------------------------------------------------------------------------------------------------------- | ------------- |
+| `pipeline-integration` | Cap which `ResourceInterface` schema-versions get installed. Use when Tekton is older than what the operator ships. | `"<=2"`       |
+
+Example — restrict Pipeline Integration to schema-version 2 and below
+across the cluster:
+
+```yaml
+apiVersion: operator.connectors.alauda.io/v1alpha1
+kind: ConnectorsConfig
+metadata:
+  name: connectors-config
+spec:
+  installFlags:
+    pipeline-integration: "<=2"   # install v1 and v2; skip v3+
+```
+
+For `pipeline-integration` the value is a string. Supported basic
+forms:
+
+| Value     | Effect                                |
+| --------- | ------------------------------------- |
+| `"<=N"`   | install schema-versions up to N       |
+| `">=N"`   | install schema-version N and higher   |
+| `"=N"`    | install only schema-version N         |
+
+Compound forms such as `"<2 || >=4"`, `"!=2"`, `">=1, <=3"`, and
+wildcard / tilde / caret bounds (`"1.x"`, `"~1.2"`, `"^1.2"`) are also
+accepted — the value is parsed as a full semver constraint expression.
+The basic forms above cover the common case.
+
+The same flag may also be set per component on `ConnectorsConfig`
+(e.g. `spec.components.harbor.spec.installFlags`) to override the
+cluster-wide value for that component only.
+
 ## Step 1: Install the Connectors Operator \{#install-operator}
 
 Install the `Alauda DevOps Connectors` operator from the platform's
@@ -254,7 +297,7 @@ kubectl get connectorclass
 nothing else. Use this section when you need to opt components out,
 tune feature flags, or override workload settings.
 
-`ConnectorsConfig.spec` has two top-level fields:
+`ConnectorsConfig.spec` carries two kinds of settings:
 
 - **`spec.components`** — a map keyed by short component name
   (`core`, `git`, `github`, `gitlab`, `oci`, `harbor`, `k8s`, `maven`,
@@ -263,10 +306,12 @@ tune feature flags, or override workload settings.
   false` is rejected) and `spec` (component-specific configuration,
   same schema as the corresponding standalone component CR).
   Components not listed in the map are enabled with default settings.
-- **`spec.global`** — defaults shared by every component (`registry`,
-  `labels`, `annotations`). Merge precedence is **component value
-  wins** — a key set on both `global` and the component falls back to
-  the global value only when the component omits it.
+- **Cluster-wide defaults at the spec root** — `registry`, `labels`,
+  `annotations`, and `installFlags` live directly under `spec` and
+  apply to every component as defaults. Merge precedence is
+  **component value wins** — a key set on both the spec root and the
+  component falls back to the spec-root value only when the component
+  omits it.
 
 The five examples below cover the most common customizations. For the
 full per-component schema, refer to the
@@ -297,12 +342,11 @@ spec:
           enable-custom-ca-certs: "true"
 ```
 
-### Override the Image Registry (Global) \{#registry}
+### Override the Image Registry (Cluster-wide) \{#registry}
 
 ```yaml
 spec:
-  global:
-    registry: registry.example.com/connectors
+  registry: registry.example.com/connectors
 ```
 
 The registry prefix is applied to every component's workload images

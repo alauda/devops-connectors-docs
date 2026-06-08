@@ -1,5 +1,9 @@
 ---
 weight: 70
+i18n:
+  title:
+    en: Troubleshooting
+title: Troubleshooting
 ---
 
 # Troubleshooting
@@ -161,9 +165,11 @@ Scanner takes too long or times out.
 
 If you continue to experience issues:
 
-1. **Check connector logs**:
+1. **Check connector logs** (replace `<connectors-namespace>` with the
+   namespace where the Connectors system is installed — defaults to
+   `connectors-system` but is configurable):
    ```bash
-   kubectl logs -n connectors-system -l app=connectors-proxy-service
+   kubectl logs -n <connectors-namespace> -l app=connectors-proxy-service
    ```
 
 2. **Review connector events**:

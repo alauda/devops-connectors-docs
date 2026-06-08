@@ -1,0 +1,53 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: poc-sonar-scan-verify
+  namespace: kychen-1
+  labels: { poc.devops: "43953" }
+spec:
+  restartPolicy: Never
+  containers:
+    - name: scanner
+      image: registry.alauda.cn:60070/devops/tektoncd/hub/sonarqube-scanner:v8.0
+      workingDir: /src
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        allowPrivilegeEscalation: false
+        capabilities: { drop: ["ALL"] }
+        seccompProfile: { type: RuntimeDefault }
+      env:
+        # The PROJECT_ANALYSIS_TOKEN minted by the auto-create TaskRun for
+        # project poc-devops-43953:kychen-1. sonar-scanner reads SONAR_TOKEN.
+        - name: SONAR_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: poc-devops-43953-kychen-1-sonarqube-secret
+              key: token
+      command: ["sh", "-c"]
+      args:
+        - |
+          set -e
+          cat > /src/app.py <<'PY'
+          def add(a, b):
+              return a + b
+
+
+          def main():
+              total = add(2, 3)
+              print(total)
+
+
+          main()
+          PY
+          echo "--- running sonar-scanner with the PROJECT_ANALYSIS_TOKEN ---"
+          sonar-scanner \
+            -Dsonar.host.url=https://devops-sonar.alaudatech.net \
+            -Dsonar.projectKey=poc-devops-43953:kychen-1 \
+            -Dsonar.sources=. \
+            -Dsonar.scm.disabled=true
+      volumeMounts:
+        - { name: src, mountPath: /src }
+  volumes:
+    - name: src
+      emptyDir: {}

@@ -14,18 +14,18 @@ This guide demonstrates how to use the OCI Connector to deploy workloads that ne
 
 When deploying workloads with the OCI Connector, keep the following key points in mind:
 
-- To enable image pulls via the OCI Connector proxy in the Kubernetes runtime, you must configure the ConnectorOCI to expose its service using either NodePort or Ingress. Refer to the [Installation Guide](../../../install) for detailed setup instructions.
+- To enable image pulls via the OCI Connector proxy in the Kubernetes runtime, you must expose the `oci` component's service using either NodePort or Ingress, configured through `spec.components.oci.spec.expose` on `ConnectorsConfig`. See [Expose the OCI Proxy Externally](../../install/install.mdx#oci-expose) for the full configuration.
 - The image address specified in your workload will be automatically rewritten to point to the OCI Connector proxy. Since the proxy uses HTTP, you must configure the runtime to allow insecure registries.
 - The OCI Connector acts as a reverse proxy for the OCI registry, handling authentication and image pulls on behalf of your workloads.
 - The OCI Connector proxy authenticates clients using their service account tokens, ensuring that only authorized workloads can access the specified connector.
 
 ## Prerequisites
 
-- **ConnectorsCore is installed and running in the cluster:** Ensure that ConnectorsCore is deployed in your cluster.
-- **ConnectorOCI is installed and exposed externally (NodePort or Ingress):** Deploy ConnectorOCI and expose it outside the cluster. See the [Installation Guide](../../../install) for details.
+- **Connectors system installed:** The Connectors Operator is installed and its `ConnectorsConfig` is reconciled to `Ready`. The `core` and `oci` components must be enabled. See the [Installation Guide](../../install/install.mdx) for details.
+- **OCI component exposed externally (NodePort or Ingress):** Configure `spec.components.oci.spec.expose` on `ConnectorsConfig` to expose the OCI Connector proxy outside the cluster. See [Expose the OCI Proxy Externally](../../install/install.mdx#oci-expose).
 - **Access to a private OCI registry:** You must have valid credentials and access to the target registry.
 - **kubectl configured:** Ensure `kubectl` is installed and configured to access your cluster.
-- **Feature flag enabled:** Set `spec.featureFlags.enable-pod-image-pull-via-connector: "true"` on the `ConnectorsCore` CR. By default this capability is disabled; see [Feature Flags](../../overview/feature_flags.mdx#enable-pod-image-pull-via-connector) for details.
+- **Feature flag enabled:** Set `spec.components.core.spec.featureFlags.enable-pod-image-pull-via-connector: "true"` on `ConnectorsConfig`. By default this capability is disabled; see [Feature Flags](../../overview/feature_flags.mdx#enable-pod-image-pull-via-connector) for details.
 
 With the OCI Connector, you can securely pull images from private registries in your Kubernetes cluster without storing credentials on the client side. This approach ensures that sensitive credentials are managed centrally and never exposed to individual workloads or users.
 
