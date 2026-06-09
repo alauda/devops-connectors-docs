@@ -33,6 +33,7 @@ The following table shows the compatibility and support matrix between the Alaud
 
 - Added the `enable-pod-image-pull-via-connector` feature flag (default off) to gate the OCI/Harbor PodWebhook's auto-rewrite of Pod container image addresses to the Connector Proxy URL. See [Feature Flags](./feature_flags.mdx#enable-pod-image-pull-via-connector).
 - Added the `enable-connector-apis-write-passthrough` feature flag (default off) to enable write methods (`POST`/`PUT`/`DELETE`/`PATCH`) on the Connectors API gateway. Authorization for enabled writes follows the same fine-grained SAR chain used for `GET`, controlled by `enable-connector-apis-permissions`. See [Feature Flags](./feature_flags.mdx#enable-connector-apis-write-passthrough) and [Write methods (passthrough)](../connectors/concepts/connector_api.mdx#write-methods-passthrough).
+- Package the Connectors UI as a Console service-backend plugin managed by the operator.
 
 **Nexus Connector Enhancements**
 
