@@ -1,0 +1,273 @@
+# PoC-3 OSS Approximation — Vault Kubernetes Auth + ConfigMap-based approval bus
+#
+# Architecture
+# ------------
+# Vault has NO native approval gate in OSS. We approximate Vault Enterprise
+# Control Groups using:
+#   1. A ConfigMap (`vault-approval-decisions`) as the "approval status bus"
+#      — one entry per request-id with value `pending` / `approved` / `rejected`.
+#   2. A Tekton ApprovalTask (manual-approval-gate) that humans toggle in UI;
+#      a small writer step flips the ConfigMap entry when ApprovalTask succeeds.
+#   3. A "fetch-secret" Task that gates Vault access on the ConfigMap entry
+#      before exchanging the SA token for a Vault token via Kubernetes Auth.
+#
+# All resources live in `devops-valult-invest` ns (the PoC sandbox).
+#
+---
+# --- 1) Approval status bus (ConfigMap) -------------------------------------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vault-approval-decisions
+  namespace: devops-valult-invest
+data:
+  # Per-request entries are written at runtime, e.g.:
+  #   req-prod-001: pending|approved|rejected
+  README: "Approval bus for Vault-OSS approximation. Each key is a request-id."
+---
+# --- 2) RBAC --------------------------------------------------------------
+# Pipeline pods need to read+patch the ConfigMap and read the approval state.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: vault-approval-bus
+  namespace: devops-valult-invest
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["vault-approval-decisions"]
+    verbs: ["get", "patch", "update"]
+  - apiGroups: ["openshift-pipelines.org"]
+    resources: ["approvaltasks"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["tekton.dev"]
+    resources: ["customruns"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: vault-approval-bus
+  namespace: devops-valult-invest
+subjects:
+  - kind: ServiceAccount
+    name: default
+    namespace: devops-valult-invest
+roleRef:
+  kind: Role
+  name: vault-approval-bus
+  apiGroup: rbac.authorization.k8s.io
+---
+# --- 3) Task: request-prod-secret (writes pending entry) ---------------------
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: vault-request-secret
+  namespace: devops-valult-invest
+spec:
+  description: |
+    Initialize an approval request in the ConfigMap bus. Mirrors the moment
+    a Vault Enterprise client would receive a wrapping_token.
+  params:
+    - name: request-id
+      type: string
+    - name: vault-path
+      type: string
+  steps:
+    - name: open-request
+      image: hub-mirrors.alauda.cn/bitnami/kubectl:latest
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+        REQ="$(params.request-id)"
+        VPATH="$(params.vault-path)"
+        echo "[request] opening approval request id=${REQ} path=${VPATH}"
+        kubectl -n devops-valult-invest patch cm vault-approval-decisions \
+          --type merge -p "{\"data\":{\"${REQ}\":\"pending\"}}"
+        echo "[request] state=pending — waiting for ApprovalTask to flip it"
+---
+# --- 4) Task: bridge-approval (ApprovalTask → ConfigMap) ---------------------
+# Polls the ApprovalTask CustomRun owned by this PipelineRun. When the gate
+# completes, writes the result into the ConfigMap bus. This is the glue that
+# turns "human clicked approve in Tekton UI" into "secret fetcher allowed".
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: vault-bridge-approval
+  namespace: devops-valult-invest
+spec:
+  params:
+    - name: request-id
+      type: string
+    - name: approval-task-name
+      type: string
+  steps:
+    - name: wait-and-bridge
+      image: hub-mirrors.alauda.cn/bitnami/kubectl:latest
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+        REQ="$(params.request-id)"
+        AT="$(params.approval-task-name)"
+        NS=devops-valult-invest
+        echo "[bridge] watching CustomRun/${AT} for terminal status"
+        for i in $(seq 1 360); do
+          STATUS=$(kubectl -n "$NS" get customrun "$AT" \
+            -o jsonpath='{.status.conditions[?(@.type=="Succeeded")].status}' 2>/dev/null || true)
+          REASON=$(kubectl -n "$NS" get customrun "$AT" \
+            -o jsonpath='{.status.conditions[?(@.type=="Succeeded")].reason}' 2>/dev/null || true)
+          if [ "$STATUS" = "True" ]; then
+            echo "[bridge] approved (reason=$REASON) — writing approved"
+            kubectl -n "$NS" patch cm vault-approval-decisions \
+              --type merge -p "{\"data\":{\"${REQ}\":\"approved\"}}"
+            exit 0
+          fi
+          if [ "$STATUS" = "False" ]; then
+            echo "[bridge] rejected (reason=$REASON) — writing rejected"
+            kubectl -n "$NS" patch cm vault-approval-decisions \
+              --type merge -p "{\"data\":{\"${REQ}\":\"rejected\"}}"
+            exit 0
+          fi
+          sleep 5
+        done
+        echo "[bridge] timeout — writing rejected"
+        kubectl -n "$NS" patch cm vault-approval-decisions \
+          --type merge -p "{\"data\":{\"${REQ}\":\"rejected\"}}"
+        exit 1
+---
+# --- 5) Task: fetch-and-use-secret (gating + Vault read) ---------------------
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: vault-fetch-and-use-secret
+  namespace: devops-valult-invest
+spec:
+  params:
+    - name: request-id
+      type: string
+    - name: vault-path
+      type: string
+    - name: vault-role
+      type: string
+      default: git-reader
+    - name: require-approval
+      type: string
+      default: "false"   # "true" in prod profile, "false" in dev profile
+  steps:
+    - name: gate
+      image: hub-mirrors.alauda.cn/bitnami/kubectl:latest
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+        REQ="$(params.request-id)"
+        REQUIRE="$(params.require-approval)"
+        if [ "$REQUIRE" != "true" ]; then
+          echo "[gate] require-approval=false → bypass (dev profile)"
+          exit 0
+        fi
+        echo "[gate] polling ConfigMap bus for ${REQ}"
+        for i in $(seq 1 720); do
+          STATE=$(kubectl -n devops-valult-invest get cm vault-approval-decisions \
+            -o jsonpath="{.data.${REQ}}" 2>/dev/null || true)
+          echo "[gate] state=${STATE}"
+          case "$STATE" in
+            approved) echo "[gate] proceed"; exit 0 ;;
+            rejected) echo "[gate] denied — failing"; exit 1 ;;
+            pending|"") sleep 5 ;;
+            *) echo "[gate] unknown state ${STATE} — failing"; exit 1 ;;
+          esac
+        done
+        echo "[gate] poll timeout — failing"
+        exit 1
+    - name: fetch-and-use
+      image: hub-mirrors.alauda.cn/hashicorp/vault:1.19.5
+      env:
+        - name: VAULT_ADDR
+          value: http://vault.devops-valult-invest.svc:8200
+      script: |
+        #!/bin/sh
+        set -eu
+        SA_JWT=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
+        echo "[vault] exchanging SA token for Vault token via Kubernetes Auth"
+        LOGIN=$(vault write -format=json auth/kubernetes/login \
+          role=$(params.vault-role) jwt="$SA_JWT")
+        TOKEN=$(echo "$LOGIN" | sed -n 's/.*"client_token": "\([^"]*\)".*/\1/p')
+        export VAULT_TOKEN="$TOKEN"
+        echo "[vault] reading $(params.vault-path)"
+        SECRET=$(vault kv get -format=json $(params.vault-path))
+        # Demonstrate use without leaking value
+        echo "$SECRET" | sed -n 's/.*"token": "\(...\).*/[use] obtained credential prefix=\1.../p'
+        echo "[done] secret consumed in this step only; not exported"
+---
+# --- 6) Pipeline: dev profile (no approval) ---------------------------------
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: vault-pipeline-dev
+  namespace: devops-valult-invest
+spec:
+  params:
+    - name: request-id
+      default: req-dev-001
+    - name: vault-path
+      default: secret/git/test
+  tasks:
+    - name: request
+      taskRef: { name: vault-request-secret }
+      params:
+        - { name: request-id, value: $(params.request-id) }
+        - { name: vault-path, value: $(params.vault-path) }
+    - name: fetch
+      runAfter: [request]
+      taskRef: { name: vault-fetch-and-use-secret }
+      params:
+        - { name: request-id, value: $(params.request-id) }
+        - { name: vault-path, value: $(params.vault-path) }
+        - { name: require-approval, value: "false" }
+---
+# --- 7) Pipeline: prod profile (approval gate) ------------------------------
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: vault-pipeline-prod
+  namespace: devops-valult-invest
+spec:
+  params:
+    - name: request-id
+      default: req-prod-001
+    - name: vault-path
+      default: secret/git/test
+  tasks:
+    - name: request
+      taskRef: { name: vault-request-secret }
+      params:
+        - { name: request-id, value: $(params.request-id) }
+        - { name: vault-path, value: $(params.vault-path) }
+    # Native Tekton manual approval gate. The CustomRun is reconciled by the
+    # manual-approval-gate-controller; humans Approve/Reject in Tekton UI.
+    - name: approve
+      runAfter: [request]
+      params:
+        - name: approvers
+          value: ["admin"]    # must match a real platform user so the
+                              # ApprovalTask validation webhook accepts the patch
+        - name: numberOfApprovalsRequired
+          value: "1"
+      taskRef:
+        apiVersion: openshift-pipelines.org/v1alpha1
+        kind: ApprovalTask
+    - name: bridge
+      runAfter: [approve]
+      taskRef: { name: vault-bridge-approval }
+      params:
+        - { name: request-id, value: $(params.request-id) }
+        # PipelineRun expands $(context.pipelineRun.name); we pass the actual
+        # CustomRun name pattern used by manual-approval-gate.
+        - { name: approval-task-name, value: "$(context.pipelineRun.name)-approve" }
+    - name: fetch
+      runAfter: [bridge]
+      taskRef: { name: vault-fetch-and-use-secret }
+      params:
+        - { name: request-id, value: $(params.request-id) }
+        - { name: vault-path, value: $(params.vault-path) }
+        - { name: require-approval, value: "true" }

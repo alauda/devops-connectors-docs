@@ -1,0 +1,59 @@
+# PoC-2: 两个测试 Pod —— 证明 "Vault 同步 Secret" 与 "Pod 能拉私有镜像" 之间的
+# 鸿沟必须由 Pod spec 显式 `imagePullSecrets` 引用来填补，kubelet 不会自动用
+# Vault 提供的凭据。
+#
+# 重要：本 PoC 关心的是 **kubelet 鉴权阶段**，不关心容器是否真的能跑通；因此：
+#  - 场景 1 用一个**不存在**的 fake 私有 registry 域名 `my-private-registry.example.com/foo:latest`
+#    → 期望：ErrImagePull / ImagePullBackOff，错误信息为 DNS 失败 / unauthorized，
+#    证明 kubelet 没有从 vault 拿凭据，也没有自动使用同 ns 的 dockercfg secret。
+#  - 场景 2 用 `hub-mirrors.alauda.cn/library/alpine:3`（真实可拉，免认证）+ 显式
+#    `imagePullSecrets: [vault-synced-dockercfg]` → 期望：Pod Running，证明
+#    "只要 Pod spec 引用了 secret，kubelet 才会带它去鉴权（即使这次目标 registry
+#    不需要认证）"。
+#
+# 即两个场景共同证明 PoC-2 的核心论点：
+#   **Vault 把 dockerconfigjson 同步到 ns 里，并不能解放业务 Pod 的 `imagePullSecrets`
+#     字段** —— 任何业务 Workload 仍然要在 spec 上显式引用，否则 kubelet 视而不见。
+
+---
+# 场景 1：Pod **不引用任何 imagePullSecrets**，使用 fake 私有镜像
+# 期望现象：ErrImagePull（DNS 失败 / 401），证明 vault 同步的凭据完全无用
+apiVersion: v1
+kind: Pod
+metadata:
+  name: poc2-scenario1-no-pullsecret
+  namespace: devops-valult-invest
+  labels:
+    poc: poc-2
+    scenario: "1-no-pullsecret"
+  annotations:
+    poc-2.devops-44108/expected-result: "ErrImagePull (kubelet 没用 vault 凭据)"
+spec:
+  restartPolicy: Never
+  # 故意不写 imagePullSecrets，**也不写 serviceAccountName**（用 default SA）
+  # 即便 ns 内有 vault-synced-dockercfg，kubelet 也不会用
+  containers:
+    - name: app
+      image: my-private-registry.example.com/foo:latest
+      command: ["sh", "-c", "echo should-not-reach-here && sleep 3600"]
+---
+# 场景 2：Pod **显式引用** vault-synced-dockercfg，使用真实可拉镜像
+# 期望现象：Pod Running，证明只要 spec 引用了 secret，kubelet 就会带上它
+apiVersion: v1
+kind: Pod
+metadata:
+  name: poc2-scenario2-with-pullsecret
+  namespace: devops-valult-invest
+  labels:
+    poc: poc-2
+    scenario: "2-with-pullsecret"
+  annotations:
+    poc-2.devops-44108/expected-result: "Running (Pod 显式引用 secret)"
+spec:
+  restartPolicy: Never
+  imagePullSecrets:
+    - name: vault-synced-dockercfg
+  containers:
+    - name: app
+      image: hub-mirrors.alauda.cn/library/alpine:3
+      command: ["sh", "-c", "echo running with explicit imagePullSecrets && sleep 3600"]

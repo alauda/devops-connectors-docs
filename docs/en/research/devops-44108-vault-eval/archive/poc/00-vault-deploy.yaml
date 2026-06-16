@@ -1,0 +1,107 @@
+---
+# Vault dev-mode PoC deployment for devops-44108-vault-eval
+# - Single Pod, in-memory storage, root token=root
+# - No persistence, no TLS, no HA (PoC only)
+# - Namespace `devops-valult-invest` is pre-created (do not manage here)
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vault
+  namespace: devops-valult-invest
+---
+# Allow vault SA to use TokenReview API for Kubernetes auth method.
+# system:auth-delegator grants tokenreviews.create + subjectaccessreviews.create.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: vault-auth-delegator-devops-valult-invest
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:auth-delegator
+subjects:
+  - kind: ServiceAccount
+    name: vault
+    namespace: devops-valult-invest
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vault
+  namespace: devops-valult-invest
+  labels:
+    app: vault
+spec:
+  type: ClusterIP
+  selector:
+    app: vault
+  ports:
+    - name: http
+      port: 8200
+      targetPort: 8200
+      protocol: TCP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vault
+  namespace: devops-valult-invest
+  labels:
+    app: vault
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: vault
+  template:
+    metadata:
+      labels:
+        app: vault
+    spec:
+      serviceAccountName: vault
+      containers:
+        - name: vault
+          image: hub-mirrors.alauda.cn/hashicorp/vault:1.19.5
+          imagePullPolicy: IfNotPresent
+          args:
+            - "server"
+            - "-dev"
+            - "-dev-root-token-id=root"
+            - "-dev-listen-address=0.0.0.0:8200"
+          env:
+            - name: VAULT_ADDR
+              value: "http://127.0.0.1:8200"
+            - name: VAULT_API_ADDR
+              value: "http://127.0.0.1:8200"
+            - name: VAULT_DEV_ROOT_TOKEN_ID
+              value: "root"
+          ports:
+            - name: http
+              containerPort: 8200
+              protocol: TCP
+          securityContext:
+            # vault -dev needs IPC_LOCK for mlock; in dev mode it's effectively disabled,
+            # but adding the capability keeps Vault from logging warnings.
+            capabilities:
+              add: ["IPC_LOCK"]
+          readinessProbe:
+            httpGet:
+              path: /v1/sys/health?standbyok=true&uninitcode=204&sealedcode=204
+              port: 8200
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /v1/sys/health?standbyok=true&uninitcode=204&sealedcode=204
+              port: 8200
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
