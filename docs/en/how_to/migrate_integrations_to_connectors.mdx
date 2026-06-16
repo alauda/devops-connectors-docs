@@ -1,0 +1,418 @@
+---
+weight: 10
+i18n:
+  title:
+    en: Migrate v3 Integrations to Connectors
+title: Migrate v3 Integrations to Connectors
+---
+
+# Migrate v3 Integrations to Connectors
+
+When you move from Alauda DevOps v3 to v4, the tool integrations your projects
+rely on — GitLab, Harbor, SonarQube, and Nexus — need to be re-established in
+their v4 form. v3 models them as `Integration` / `ClusterIntegration` resources;
+v4 models tool access as [Connectors](../connectors/intro.mdx). Because the two
+models describe tool access differently, the move is not a one-to-one
+conversion.
+
+`int2conn` is a command-line **helper** for the implementation team. For an ACP
+project, it reads the existing v3 integrations and re-creates them as v4
+Connectors on a target cluster, asking each target tool to mint a fresh,
+least-privilege credential for every Connector. It takes the repetitive work off
+your hands; treat it as an aid to a migration you still drive and review, not a
+fully automatic switch-over.
+
+## How Connectors Differ From v3 Integrations \{#v3-v4-differences}
+
+A migration re-creates the *intent* of your integrations rather than copying
+fields. Three differences shape every migration decision.
+
+### Per cluster, not platform-wide \{#difference-perspective}
+
+In v3, an integration is owned at the **platform-project** level and is shared by
+every cluster the project spans. In v4, a Connector belongs to a specific cluster
+and exists at one of three scopes — cluster-wide, shared across a project's
+namespaces on that cluster, or a single namespace. Because different clusters can
+have different needs, you migrate one target cluster at a time and decide, per
+cluster, whether to migrate and which integrations to bring over.
+
+### The credential is the access boundary \{#difference-isolation}
+
+In v3, what a project could reach was decided by platform **resource
+allocation**. In v4 there is no separate allocation step: a Connector's access is
+exactly what its credential is scoped to, so each project is isolated by the
+scope of its own credential.
+
+### Credentials are minted in place, scoped, and Secretless \{#difference-credentials}
+
+In v3, a credential is configured when the integration is created. In v4,
+`int2conn` works out which resources each integration covered and asks the tool
+to **mint a new credential scoped to just those resources** — your existing v3
+secrets are never read or carried over. Consuming pods then reach the tool
+[Secretlessly](../connectors/concepts/connectors_proxy.mdx) through the Connectors
+Proxy and CSI Driver, without handling the credential themselves.
+
+**At a glance:**
+
+| Aspect | v3 Integration | v4 Connector |
+| --- | --- | --- |
+| Cluster scope | Owned at the platform-project level and shared across the project's clusters | Belongs to a single cluster (cluster-, project-, or namespace-scoped) |
+| Tenant isolation | A project's access is governed by platform resource allocation | Each project is isolated by its Connector's own credential scope |
+| Credential | Configured when the integration is created | Minted fresh per Connector, least-privilege, and served Secretlessly via Proxy / CSI |
+
+## Before You Begin \{#prerequisites}
+
+Prepare the following:
+
+- **Tekton Pipelines is installed** on the cluster that runs the migration —
+  the migration is performed by a Tekton pipeline.
+- **The Connectors system and the connectors components** (`ConnectorsGitLab`,
+  `ConnectorsHarbor`, `ConnectorsSonarQube`, `ConnectorsNexus`, depending on what
+  you migrate) are installed on the target cluster. See
+  [Installing the Connectors Operator](../install/index.mdx).
+- **The Connector Automatic Creation Task for each connectors component is
+  installed** in the namespace where the migration pipeline runs:
+  - [GitLab Connector Automatic Creation Task](../connectors-gitlab/how_to/using_gitlab_connector_automatic_creation_task.mdx)
+  - [Harbor Connector Automatic Creation Task](../connectors-harbor/how_to/using_harbor_connector_automatic_creation_task.mdx)
+  - [SonarQube Connector Automatic Creation Task](../connectors-sonarqube/how_to/using_sonarqube_connector_automatic_creation_task.mdx)
+  - [Nexus Connector Automatic Creation Task](../connectors-nexus/how_to/using_nexus_connector_automatic_creation_task.mdx)
+- **The `int2conn` CLI and `kubectl`** are available on your workstation.
+
+## How Migration Works \{#how-it-works}
+
+Each connectors component ships a **Connector Automatic Creation Task** — a
+Tekton Task that talks to the tool, mints a scoped credential, and creates the
+matching v4 Connector and its Secret. `int2conn` does not create Connectors
+directly; it drives these Tasks.
+
+For an ACP project and a target cluster, `migrate` reads the project's v3
+integrations, analyzes them into the set of Connectors to create, and renders a
+Tekton **Pipeline** that wires up the right Task for each tool. Running that
+Pipeline — a **PipelineRun** — is what creates the Connectors and their freshly
+minted credentials on the target cluster.
+
+```text
+v3 integrations  ──►  int2conn migrate  ──►  Tekton Pipeline + PipelineRun  ──►  v4 Connectors
+   (read)             (read → analyze →        (runs each tool's Automatic        (+ freshly minted
+                       render pipeline)          Creation Task)                     scoped credentials)
+```
+
+You run `migrate` once per ACP project and target cluster.
+
+### How each tool is mapped \{#mapping-rules}
+
+| Tool | v3 source | v4 result |
+| --- | --- | --- |
+| GitLab | Each owned group | One Connector per group — a subgroup at any depth becomes its own Connector; an explicitly integrated repository maps to its enclosing group |
+| Harbor | All projects on a host | One Connector per Harbor host (a robot account can span projects on that host) |
+| SonarQube | Each `(project, host)` pair | One Connector per host, with a project pattern derived from the project's GitLab groups (or one you configure) |
+| Nexus | All repositories on a host | One Connector per host, aggregating the host's repositories (the repositories must already exist on the target Nexus) |
+
+#### Example: a GitLab integration before and after \{#mapping-example}
+
+Say an ACP project integrates the GitLab group `acme/backend` together with its
+subgroup `acme/backend/api` in v3, both reached through one shared platform
+credential.
+
+After migration the project has **two** GitLab Connectors on the target cluster
+— one for `acme/backend` and one for `acme/backend/api` — because a GitLab Group
+Access Token cannot span groups. Each Connector is backed by its **own** Group
+Access Token, minted on just that group and scoped to repository read/write
+access for that group alone, rather than the single shared credential the v3
+integration used.
+
+Harbor is different because a robot account can span a host's projects: a project
+that integrated three Harbor projects on `harbor.example.com` becomes **one**
+Connector, backed by a single robot account that can pull (read-only by default)
+those three projects. SonarQube and Nexus likewise collapse to one Connector per
+host.
+
+## Implementation \{#implementation}
+
+### Prepare the configuration and credentials \{#prepare}
+
+The migration pipeline runs the tool Automatic Creation Tasks, and those Tasks
+need two kinds of credential: a credential for each tool (used to mint the
+scoped credentials) and a kubeconfig (to create the Connectors on the target
+cluster). You provide both as Connectors and reference them from one
+configuration file.
+
+**Connectors the pipeline needs.** Prepare these in one isolated namespace — the
+same one you set as `pipeline.namespace` below:
+
+- One Connector **per tool host** — its credential is what the Task uses to mint
+  the scoped credentials on that tool. Each tool's Automatic Creation Task guide
+  (linked under [Before You Begin](#prerequisites)) lists the exact permissions
+  this credential needs.
+- One [Kubernetes Connector](../connectors-k8s/concepts/k8s_connectorclass.mdx)
+  **per target cluster** (referenced from the `kubeconfig` map below) — used to
+  create the Connectors and Secrets on that cluster. The permissions it needs are
+  described in the same Automatic Creation Task guides.
+
+:::tip Keep these credentials short-lived
+Prepare these Connectors just before the migration and remove them once it is
+verified. Removing them does not revoke the scoped credentials the Tasks already
+minted — those live on independently.
+:::
+
+**Configuration.** A single file references those Connectors and tells the
+pipeline where to run:
+
+```yaml
+# config.yaml
+schedule: ""                               # optional cron for periodic credential rotation; empty = one-time
+
+pipeline:
+  namespace: integration-migration-mgr     # where the migration Pipeline / PipelineRun run
+
+  connectors:
+    # Per tool host -> the Connector for that host ("<namespace>/<name>").
+    gitlab:
+      devops-gitlab.example.com: integration-migration-mgr/migrate-gitlab
+    harbor:
+      devops-harbor.example.com: integration-migration-mgr/migrate-harbor
+    # add sonarqube: / nexus: in the same shape when migrating those tools
+
+    # Per target-cluster name (the value of --target-cluster) -> the Kubernetes Connector.
+    kubeconfig:
+      global: integration-migration-mgr/migrate-kubeconfig
+```
+
+The two kinds of map are keyed differently, so keep them straight:
+
+- **Tool maps** (`gitlab`, `harbor`, `sonarqube`, `nexus`) are keyed by **tool
+  host** — write the host exactly as it appears in the v3 integration address,
+  for example `devops-gitlab.example.com` or `gitlab.acme.com:8080`.
+- **The `kubeconfig` map** is keyed by **target-cluster name** — the value you
+  pass to `--target-cluster`.
+
+Read the host (and port, if any) of a v3 integration straight from its address
+so the map key matches exactly:
+
+```bash
+kubectl get integration <name> -n <project-namespace> -o jsonpath='{.spec.address.url}'
+```
+
+The minimal configuration above is enough to start; credential scopes use
+least-privilege defaults. For the meaning of every field — naming templates,
+per-project schedules and SonarQube patterns, `taskParams`, and the
+auto-assignment block — see the [Configuration Reference](#config-reference).
+
+### Run the migration \{#run-migration}
+
+There are two things you can migrate: a project's own integrations, and the
+platform's **auto-assignment policies** — v3 rules that assign tool resources to
+a project automatically (for example same-name or public-project assignment).
+Both produce Tekton resources on the target cluster but are run differently, as
+described below.
+
+Point `kubectl` at the cluster that runs the pipeline, or pass
+`--pipeline-kubeconfig`; the v3 integrations are read from your current `kubectl`
+context, or from `--source-kubeconfig`, which can point at a different cluster
+than the target.
+
+#### Migrate a project's integrations \{#run-integration}
+
+This re-creates the integrations an ACP project already has — pass the project
+namespaces and the target cluster. Run without `--run` to apply the Pipeline and
+review what will run; add `--run` to create the PipelineRun that performs the
+migration. Only this project-integration mode supports `--run`.
+
+```bash
+# Apply the Pipeline so you can review what will run — nothing is migrated yet.
+int2conn migrate --config config.yaml --namespaces my-project --target-cluster global
+
+# Create the PipelineRun and perform the migration.
+int2conn migrate --config config.yaml --namespaces my-project --target-cluster global --run
+```
+
+The result, for that project and cluster, is a **Pipeline** plus a
+**PipelineRun** that creates the project's v4 Connectors. Pass several projects
+with `--namespaces a,b`, target another cluster with a different
+`--target-cluster`, or limit to one tool with `--migrate-class harbor`.
+
+#### Migrate the platform auto-assignment policies \{#run-auto-assignment}
+
+Migrating these does not create Connectors for any existing project. Instead, run:
+
+```bash
+int2conn migrate --mode auto-assignment --config config.yaml --target-cluster global
+```
+
+This produces a **Pipeline that takes an ACP project name as a parameter**. After
+an ACP project is created, run that Pipeline for the project to initialize its
+Connectors — what it creates corresponds to the original v3 auto-assignment
+rules. In this mode `--namespaces` and `--run` do not apply, and
+`--target-cluster` is required.
+
+You can tune what the auto-assignment policies grant through an optional
+`autoAssignment` block in the configuration:
+
+```yaml
+autoAssignment:
+  harbor:
+    # Robot permissions for a tenant's own ("private") projects — includes push.
+    privatePermissions: "repository:read,list,pull,push;tag:list;artifact:list,read"
+    # Robot permissions for shared / public ("attribute-based") projects — read-only.
+    attributeBasedPermissions: "repository:read,list,pull;tag:list;artifact:list,read"
+```
+
+### Verify the result \{#verify}
+
+A migration is successful when:
+
+- The command exits with code `0`.
+- The expected v4 Connectors are `Ready` and `AuthReady` (the minted credential
+  works) on the target cluster:
+
+  ```bash
+  kubectl get connector -n my-project
+  ```
+
+- The freshly minted credential is visible on the tool side — for example a
+  GitLab Group Access Token under the group's **Settings → Access Tokens**, a
+  Harbor robot account, a SonarQube user token, or a Nexus user.
+
+`migrate --run` waits for the PipelineRun to finish, then verifies the
+Connectors and reports the result.
+
+For an auto-assignment migration there are no Connectors yet — confirm instead
+that the project-parameterized Pipeline was applied:
+
+```bash
+kubectl get pipeline -n integration-migration-mgr
+```
+
+Its Connectors appear only after you run that Pipeline for a project.
+
+## Command Reference \{#command-reference}
+
+`migrate` is the command most users need.
+
+| Flag | Required | Purpose |
+| --- | --- | --- |
+| `--config` | Yes | Path to the migration configuration file. |
+| `--namespaces` | Yes (integration mode) | Comma-separated ACP project namespaces to migrate. Not used in `auto-assignment` mode. |
+| `--target-cluster` | Yes | Target-cluster name; selects the entry in the `kubeconfig` map. |
+| `--run` | No | Without it, the Pipeline resources are applied so you can review them; with it, the PipelineRun is created (performing the migration), a `ScheduledTrigger` is applied when a `schedule` is set, and the run is waited on and verified. |
+| `--pipeline-kubeconfig` | No | kubeconfig for the cluster that runs the pipeline. Falls back to the standard `kubectl` discovery chain. |
+| `--source-kubeconfig` | No | kubeconfig for the v3 source cluster (read-only). Falls back to the standard `kubectl` discovery chain. |
+| `--migrate-class` | No | Comma-separated tools to include (`gitlab`, `harbor`, `sonarqube`, `nexus`). Omit to migrate all. |
+| `--mode` | No | `integration` (default) migrates a project's integrations; `auto-assignment` migrates the platform policies. In `auto-assignment` mode, `--namespaces` and `--run` are not accepted and `--target-cluster` is required. |
+
+Advanced: `migrate` composes four subcommands — `dump`, `analyze`, `execute`,
+and `verify` — that you can run individually for finer control, for example to
+dump from a read-only audit cluster and execute against the target cluster
+separately. Run any subcommand with `--help` for its flags.
+
+## Configuration Reference \{#config-reference}
+
+The configuration is a single YAML file. `pipeline.namespace` is required. The
+`pipeline.connectors` maps are required only for the tools and target cluster a
+migration actually uses — a missing entry is reported when the migration runs,
+not at load time. Every other field has a default.
+
+**Top level**
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `schedule` | `""` | Cron expression for periodic credential rotation. Empty means a one-time migration (no `ScheduledTrigger`). A per-project value can override it. |
+
+**`analyze` / `verify`**
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `analyze.includeUnhealthy` | `false` | Also migrate v3 integrations whose status was not healthy. By default those are left out. |
+| `verify.skipConnectorReady` | `false` | Stop verifying once the PipelineRun succeeds, without waiting for each Connector to become `AuthReady`. Useful when Connector reconciliation is slow or an external tool is briefly unreachable. |
+
+**Connector naming**
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `gitlab.connectorNameTemplate` | `{hostTag}-{group}` | Name template for generated GitLab Connectors. |
+| `harbor.connectorNameTemplate` | `{hostTag}` | Name template for generated Harbor Connectors. |
+
+The default templates use `{hostTag}` (the host's short tag) and `{group}` (the
+GitLab group path); `{tool}`, `{host}`, `{project}`, and `{sourceName}` are also
+available. The generated names are the stable identifiers downstream consumers
+reference, so change them with care.
+
+**`pipeline`**
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `pipeline.namespace` | (required) | Namespace where the migration `Pipeline` / `PipelineRun` run; prepare the referenced Connectors here too. |
+| `pipeline.connectors.gitlab` / `.harbor` / `.sonarqube` / `.nexus` | (required per tool you migrate) | Map of **tool host** → `"<namespace>/<name>"` of the Connector whose credential mints scoped credentials for that host. |
+| `pipeline.connectors.kubeconfig` | (required for the target cluster you use) | Map of **target-cluster name** (the `--target-cluster` value) → `"<namespace>/<name>"` of the Kubernetes Connector that creates Connectors on that cluster. |
+| `pipeline.taskParams.gitlab` / `.harbor` / `.sonarqube` / `.nexus` | task defaults | Tekton-style `{name, value}` parameters forwarded to each tool's Automatic Creation Task — use them to override a task default such as token lifetime. The available parameters are listed in each task's guide; some are set automatically and cannot be overridden. The defaults are least-privilege, so most migrations need none. |
+
+**`autoAssignment`** (used only in `auto-assignment` mode)
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `autoAssignment.harbor.privatePermissions` | task default | Harbor robot permissions for a tenant's own ("private") projects — includes push. |
+| `autoAssignment.harbor.attributeBasedPermissions` | task default | Harbor robot permissions for shared / public ("attribute-based") projects — read-only. |
+
+**`projects`** — a map keyed by ACP project name, for per-project overrides
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `projects.<name>.schedule` | global `schedule` | Override the rotation cron for one project. |
+| `projects.<name>.sonarProjectPattern` | auto-derived | Override the SonarQube `projectPattern` for one project when the automatically derived pattern is not what you want. |
+
+## Examples \{#examples}
+
+```bash
+# Migrate one ACP project's integrations to the Connectors on the global cluster.
+int2conn migrate --config config.yaml --namespaces my-project --target-cluster global --run
+
+# Migrate several projects at once.
+int2conn migrate --config config.yaml --namespaces my-project,team-devops --target-cluster global --run
+
+# Migrate a project to a business cluster instead of global.
+int2conn migrate --config config.yaml --namespaces my-project --target-cluster biz-1 --run
+
+# Migrate only the Harbor integrations of a project.
+int2conn migrate --config config.yaml --namespaces my-project --target-cluster global --migrate-class harbor --run
+
+# Read the v3 data from a separate source cluster.
+int2conn migrate --config config.yaml --namespaces my-project --target-cluster global \
+  --source-kubeconfig ~/.kube/v3-cluster --run
+```
+
+## Frequently Asked Questions \{#faq}
+
+**Which tool types can be migrated?**
+GitLab, Harbor, SonarQube, and Nexus. Integrations of any other type (for
+example JFrog, GitHub, or solution-specific plugins) are not migrated; they are
+listed in the plan so they are never dropped silently.
+
+**My project integrates several GitLab or Harbor instances. Is that supported?**
+Yes. The tool maps are keyed by host, so each host becomes its own v4 Connector
+and the original host-to-resource mapping is preserved.
+
+**How do I migrate the same project to more than one cluster?**
+Run `migrate` once per target cluster, with the matching row in the `kubeconfig`
+map. Each cluster gets its own Connectors and its own credential, so they are
+independent.
+
+**How are credentials rotated after migration?**
+Set a `schedule` in the configuration and run with `--run`. The migration then
+produces a `ScheduledTrigger` that re-runs the pipeline on that cron, minting a
+new credential each time; on a successful run the Connector keeps serving the
+rotated credential.
+
+**A Connector is not `Ready` / `AuthReady`, or a tool credential was not created. What do I check?**
+Look at the migration `PipelineRun` (and its `TaskRun`) logs on the pipeline
+cluster. The usual causes are a host key in the configuration that does not
+exactly match the v3 integration address, or a Connector whose credential lacks
+the permissions the Task needs.
+
+**Is it safe to run a migration twice?**
+Yes. Pipeline and Connector names are deterministic, so re-running reconciles the
+existing resources rather than creating duplicates.
+
+## Related Reading \{#related-reading}
+
+- [Connectors introduction](../connectors/intro.mdx)
+- [Installing the Connectors Operator](../install/index.mdx)

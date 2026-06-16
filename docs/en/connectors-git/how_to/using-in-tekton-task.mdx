@@ -16,9 +16,9 @@ Git Connector essentially injects temporary Git credentials through a CSI Driver
 For example:
 
 ```
-[http]
+[http "http://c-git-connector.git-connector-demo.svc"]
     extraHeader = Authorization: Basic OmV5Smhixxxxxxxxx==
-[url "http://c-git-connector.git-connector-demo.svc]
+[url "http://c-git-connector.git-connector-demo.svc"]
     insteadOf = https://github.com
 ```
 

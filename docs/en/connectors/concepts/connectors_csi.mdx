@@ -114,6 +114,7 @@ You can exclude specific mounted files by using `!<fileName>` in `configuration.
 | `.env`                           | Environment variables file containing `http_proxy`, `https_proxy`, and `no_proxy` in `key=value` format. <br></br> If multiple Connector Categories are present, the proxy settings from the last ConnectorClass are applied. |
 | `http.proxy`                     | Forward proxy URL with authentication for HTTP. <br></br> If multiple Connector Categories are present, the proxy settings from the last ConnectorClass are applied.                             |
 | `https.proxy`                    | Forward proxy URL with authentication for HTTPS. <br></br> If multiple Connector Categories are present, the proxy settings from the last ConnectorClass are applied.                             |
+| `.curlrc`                        | A `curl` config file containing a single `proxy = <scheme>://<username>:<token>@<host>:<port>` line, so tools can run `curl --config /{mount-path}/.curlrc` without manually exporting proxy environment variables. <br></br> If multiple Connectors are mounted, all Connector identities are joined into the username (`ns1%2Fname1,ns2%2Fname2,...`) and the proxy address from the last ConnectorClass will be used. |
 | `context.token`                  | Authentication token for the proxy service                                  |
 | `context.proxy.caCert`           | CA certificate for the Connectors proxy                                     |
 | `connector.status.proxyAddress`  | Proxy address (see [Connectors Proxy](./connectors_proxy.mdx)). <br></br> If multiple Connectors are present, the proxy information from the last ConnectorClass will be used. |
@@ -130,7 +131,22 @@ export https_proxy=$(cat /{mount-path}/https.proxy)
 
 # Option 2
 source /{mount-path}/.env
+
+# Option 3 — for tools driven by curl
+curl --config /{mount-path}/.curlrc http://{backend-url}
 ```
+
+:::info HTTPS destinations require the proxy CA certificate
+
+The Connectors forward proxy re-signs TLS traffic, so curl rejects the proxy certificate by default. Pass the built-in `ca.crt` (mounted alongside `.curlrc`) via `--cacert`:
+
+```bash
+curl --config /{mount-path}/.curlrc --cacert /{mount-path}/ca.crt https://{backend-url}
+```
+
+The `cacert` directive cannot be baked into `.curlrc` itself: the CSI driver does not know the in-container mount path at template-render time, and the mounted volume is read-only — so each curl invocation must specify the absolute `ca.crt` path on the command line.
+
+:::
 
 **Reverse Proxy Usage:**
 
@@ -267,6 +283,8 @@ Example — `strictSSL` has a default of `"true"`, so it can be omitted:
 # This is equivalent to passing '{"npmrc": {"registry": "npm-proxy", "strictSSL": "true"}}'
 configuration.params: '{"npmrc": {"registry": "npm-proxy"}}'
 ```
+
+If a parameter has no `default` declared and the caller omits it, the CSI mount fails with `required configuration param "<name>" is missing`. To make a parameter optional, ConnectorClass authors should declare `default: ""` (or another sentinel) **and** template-guard the body so a missing value renders a placeholder comment instead of producing a broken file. The Nexus and JFrog connectors follow this pattern for their `npmrc.registry`, `yarnrc.registry`, `pipconf.repository`, and `pypirc.deployRepository` parameters — see the [Nexus](../../connectors-nexus/concepts/nexus_connectorclass.mdx#configuration-params-nexus) and [JFrog](../../connectors-jfrog/concepts/jfrog_connectorclass.mdx#configuration-params-jfrog) ConnectorClass pages for the rendered placeholder format.
 
 ### Available Variables in Templates
 
@@ -489,13 +507,15 @@ The following ConnectorClass provides a file named `.gitconfig`, which automatic
     - name: config
       data:
         .gitconfig: |
-          [http]
-              extraHeader = Authorization: Basic {{ printf ":%s" .context.token | b64enc }}
           {{- range .connectors }}
-          [url "{{ .status.proxyAddress }}"]
+          [http "{{ .status.proxy.httpAddress.url }}"]
+              extraHeader = Authorization: Basic {{ printf ":%s" $.context.token | b64enc }}
+          [url "{{ .status.proxy.httpAddress.url }}"]
               insteadOf = {{.spec.address}}
           {{- end }}
   ```
+
+Inside the `range` block, `.` refers to the current connector, so the volume-level token is referenced through the root context as `$.context.token`. The `[http "<proxyAddress>"]` section scopes the Authorization header to the proxy address only — requests to any other host carry no connector-injected header.
 
 ## Next Steps
 

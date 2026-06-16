@@ -206,14 +206,14 @@ kubectl exec -it inspect-gitlab-config -n gitlab-connector-demo -- cat /opt/gitl
 Example output:
 
 ```
-[http]
+[http "http://c-gitlab-connector.gitlab-connector-demo.svc"]
     extraHeader = Authorization: Basic OmV5Smhixxxxxxxxx==
 [url "http://c-gitlab-connector.gitlab-connector-demo.svc"]
     insteadOf = https://gitlab.com
 ```
 
 This configuration:
-- Adds an Authorization header with the encoded K8S API Token
+- Adds an Authorization header with the encoded K8S API Token, applied only to requests sent to the proxy service address
 - Rewrites the GitLab URL to use the proxy service
 
 ## Troubleshooting

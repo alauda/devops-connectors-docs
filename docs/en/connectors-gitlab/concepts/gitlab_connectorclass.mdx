@@ -200,14 +200,14 @@ Git configuration file for Git CLI operations.
 Example of the `.gitconfig` file generated in the Pod:
 
 ```ini
-[http]
+[http "http://c-gitlab-demo.default.svc"]
     extraHeader = Authorization: Basic OmV5Smhixxxxxxxxx==
 [url "http://c-gitlab-demo.default.svc"]
     insteadOf = https://gitlab.com
 ```
 
 **How it works:**
-1. The `[http]` section adds an Authorization header with a Kubernetes API server token (a temporary token used for requests to the GitLab connector proxy service)
+1. The URL-scoped `[http "<proxy address>"]` section adds an Authorization header with a Kubernetes API server token (a temporary token used for requests to the GitLab connector proxy service); the header is sent only to the proxy address, so requests to other hosts (for example submodules hosted on a different git server) are not affected
 2. The `[url]` section rewrites the GitLab server address to use the proxy service
 3. When Git CLI performs operations, it automatically uses these settings
 

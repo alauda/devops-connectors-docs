@@ -219,9 +219,9 @@ kubectl exec -it inspect-git-config -n git-connector-demo -- cat /root/.gitconfi
 
 Example output:
 ```
-[http]
+[http "http://c-git-connector.git-connector-demo.svc"]
     extraHeader = Authorization: Basic OmV5Smhixxxxxxxxx==
-[url "http://c-git-connector.git-connector-demo.svc]
+[url "http://c-git-connector.git-connector-demo.svc"]
     insteadOf = https://github.com
 ```
 

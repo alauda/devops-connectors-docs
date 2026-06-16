@@ -18,6 +18,7 @@ Harbor Connector injects proxy configurations through a CSI Driver. It provides 
 - `.env`: Environment variables file containing `http_proxy`, `https_proxy`, and `no_proxy` in `key=value` format
 - `http.proxy`: Forward proxy URL with authentication for HTTP
 - `https.proxy`: Forward proxy URL with authentication for HTTPS
+- `.curlrc`: A `curl` config file containing the forward proxy URL with credentials, so curl-driven steps can opt in via `curl --config /{mount-path}/.curlrc` without exporting environment variables
 
 **Therefore, Tekton Tasks must meet the following requirements to use Harbor Connector Forward Proxy:**
 
@@ -27,6 +28,8 @@ Harbor Connector injects proxy configurations through a CSI Driver. It provides 
 > This can be done by:
 > - Mounting a workspace containing a `.env` file
 > - Using custom commands to read environment variables from files
+>
+> Alternatively, curl-driven Tasks can skip environment variables entirely by passing `--config /{mount-path}/.curlrc` directly to each curl invocation. For HTTPS destinations, also pass `--cacert /{mount-path}/ca.crt` because the forward proxy re-signs TLS traffic.
 
 **3. The Task must support configuring insecure registries**
 > This can be done by:

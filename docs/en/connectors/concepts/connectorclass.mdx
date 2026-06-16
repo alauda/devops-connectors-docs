@@ -729,8 +729,8 @@ spec:
   - name: gitconfig
     data:
       .gitconfig: |
-        [http]
-            extraHeader = Authorization: Basic {{ .context.token | b64enc }}
+        [http "{{ .connector.status.proxyAddress }}"]
+            extraHeader = Authorization: Basic {{ printf ":%s" .context.token | b64enc }}
         [url "{{ .connector.status.proxyAddress }}"]
             insteadOf = {{ .connector.spec.address }}
 ```

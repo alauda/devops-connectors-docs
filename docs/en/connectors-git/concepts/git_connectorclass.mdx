@@ -199,11 +199,13 @@ The Git connector created based on the Git connectorclass provides the following
 Example of the configuration file generated in the Pod:
 
 ```
-[http]
+[http "http://c-github-demo.default.svc"]
     extraHeader = Authorization: Basic <base64 encoded token of the service account>
 [url "http://c-github-demo.default.svc"]
     insteadOf = https://github.com
 ```
+
+The Authorization header is scoped to the proxy address, so it is sent only on requests that go through the proxy. Requests to other hosts — for example a submodule hosted on a different git server during `git clone --recurse-submodules` — carry no connector-injected header.
 
 More usage cases can be referenced in [Using Git Connector in Clone Job](../how_to/use-git-connector-in-clone-job.md).
 

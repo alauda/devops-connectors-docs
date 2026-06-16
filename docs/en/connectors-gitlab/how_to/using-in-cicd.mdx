@@ -19,7 +19,7 @@ GitLab Connector injects temporary credentials through a CSI Driver. It provides
 Example of generated `.gitconfig`:
 
 ```ini
-[http]
+[http "http://c-gitlab-connector.gitlab-demo.svc"]
     extraHeader = Authorization: Basic OmV5Smhixxxxxxxxx==
 [url "http://c-gitlab-connector.gitlab-demo.svc"]
     insteadOf = https://gitlab.com

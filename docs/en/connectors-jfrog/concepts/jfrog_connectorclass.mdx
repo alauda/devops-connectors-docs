@@ -190,8 +190,8 @@ The JFrog connector provides `.npmrc` and `.yarnrc.yml` configuration files for 
 
 **Configuration Parameters**:
 
-- `repository`: The JFrog Artifactory NPM repository key, used to build the NPM/Yarn registry URL
-- `strictSSL` (optional): If set, the connector writes this value to `.npmrc` (`strict-ssl`) and `.yarnrc.yml` (`enableStrictSsl`)
+- `registry` (optional, default `""`): The JFrog Artifactory NPM repository key, used to build the NPM/Yarn registry URL. When empty, `.npmrc` / `.yarnrc.yml` is rendered with a placeholder comment instead of failing the CSI mount; supply this parameter to enable `npm install` / `yarn install` / publish.
+- `strictSSL` (optional, default `"true"`): If set, the connector writes this value to `.npmrc` (`strict-ssl`) and `.yarnrc.yml` (`enableStrictSsl`)
 
 Example CSI volume definition:
 
@@ -204,7 +204,7 @@ volumes:
     volumeAttributes:
       connector.name: "jfrog-connector"
       configuration.names: "npmrc"
-      configuration.params: '{"npmrc":{"repository":"npm-local"}}'
+      configuration.params: '{"npmrc":{"registry":"npm-local"}}'
 - name: yarnrc
   csi:
     readOnly: true
@@ -212,7 +212,7 @@ volumes:
     volumeAttributes:
       connector.name: "jfrog-connector"
       configuration.names: "yarnrc"
-      configuration.params: '{"yarnrc":{"repository":"npm-local"}}'
+      configuration.params: '{"yarnrc":{"registry":"npm-local"}}'
 ```
 
 ### PyPI Configuration: pip.conf and .pypirc \{#pip-conf-configuration-file}
@@ -221,8 +221,8 @@ The JFrog connector provides `pip.conf` and `.pypirc` configuration files for Py
 
 **Configuration Parameters**:
 
-- `repository`: The JFrog Artifactory PyPI repository key (for `pip.conf`)
-- `deployRepository`: The JFrog Artifactory PyPI repository key for publishing (for `.pypirc`)
+- `repository` (optional, default `""`): The JFrog Artifactory PyPI repository key (for `pip.conf`). When empty, `pip.conf` is rendered with a placeholder comment instead of failing the CSI mount; supply this parameter to enable `pip install`.
+- `deployRepository` (optional, default `""`): The JFrog Artifactory PyPI repository key for publishing (for `.pypirc`). When empty, `.pypirc` is rendered with a placeholder comment instead of failing the CSI mount; supply this parameter to enable `twine upload`.
 
 Example CSI volume definition:
 
@@ -262,17 +262,19 @@ CSI volume parameter descriptions:
 
 For the general format, validation flow, and merge behavior of `configuration.params`, see [configuration.params](../../connectors/concepts/connectors_csi.mdx#configuration-params) in the Connectors CSI Driver documentation.
 
-In the current JFrog ConnectorClass manifest, `configurations[].params` schema/defaults are not explicitly declared. The configuration templates read the following keys from `configuration.params`:
+The parameters accepted by each JFrog configuration are:
 
-| Configuration | Parameter | Template behavior |
-| ------------- | --------- | ----------------- |
-| `settings` | `mirrorRepository` | If set, generates Maven mirror URL `<address>/artifactory/{mirrorRepository}` in `settings.xml` |
-| `npmrc` | `repository` | Generates NPM registry/auth URL `<address>/artifactory/api/npm/{repository}` in `.npmrc` |
-| `npmrc` | `strictSSL` | If set, writes `strict-ssl` in `.npmrc` |
-| `yarnrc` | `repository` | Generates Yarn registry URL `<address>/artifactory/api/npm/{repository}` in `.yarnrc.yml` |
-| `yarnrc` | `strictSSL` | If set, writes `enableStrictSsl` in `.yarnrc.yml` |
-| `pipconf` | `repository` | Generates PyPI index URL `<address>/artifactory/api/pypi/{repository}/simple/` in `pip.conf` |
-| `pypirc` | `deployRepository` | Generates PyPI publish URL `http://<proxy-host>/artifactory/api/pypi/{deployRepository}/` in `.pypirc` |
+| Configuration | Parameter | Required | Default | Description |
+| ------------- | --------- | -------- | ------- | ----------- |
+| `settings` | `mirrorRepository` | No | `""` | JFrog Artifactory repository key for the Maven mirror in `settings.xml` |
+| `npmrc` | `registry` | No | `""` | JFrog Artifactory NPM repository key for the NPM registry URL in `.npmrc` |
+| `npmrc` | `strictSSL` | No | `"true"` | Whether to require SSL (`"true"` or `"false"`); written to `.npmrc` as `strict-ssl` |
+| `yarnrc` | `registry` | No | `""` | JFrog Artifactory NPM repository key for the Yarn registry URL in `.yarnrc.yml` |
+| `yarnrc` | `strictSSL` | No | `"true"` | Whether to require SSL; written to `.yarnrc.yml` as `enableStrictSsl` |
+| `pipconf` | `repository` | No | `""` | JFrog Artifactory PyPI repository key for the index URL in `pip.conf` |
+| `pypirc` | `deployRepository` | No | `""` | JFrog Artifactory PyPI repository key for the publish URL in `.pypirc` |
+
+When a parameter defaults to `""` and the caller omits the corresponding entry from `configuration.params`, the rendered file contains a placeholder comment block (starting with `# WARNING: empty configuration`) that names the missing parameter and shows the JSON snippet needed to supply it — the CSI mount still succeeds and downstream tooling can detect the empty state without the Pod failing to start.
 
 ## Further Reading
 

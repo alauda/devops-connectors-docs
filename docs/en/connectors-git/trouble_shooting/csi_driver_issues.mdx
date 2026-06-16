@@ -133,9 +133,9 @@ kubectl exec <pod-name> -n <namespace> -- cat /path/to/.gitconfig
 
 **Expected configuration elements**:
 
-1. HTTP header with authentication token:
+1. HTTP header with authentication token, scoped to the proxy address:
    ```
-   [http]
+   [http "http://c-<connector-name>.<connector-namespace>.svc"]
        extraHeader = Authorization: Basic <token>
    ```
 

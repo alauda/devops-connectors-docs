@@ -22,10 +22,10 @@ feature:
   paused_at: null
   paused_reason: null
   profile_history: []
-  shipped_at: null
+  shipped_at: "2026-06-03T01:24:33Z"
 
 stage:
-  current: ship
+  current: archived
   history:
     - stage: init
       outcome: auto-complete
@@ -72,6 +72,9 @@ stage:
     - stage: retrospective
       outcome: advance
       closed_at: "2026-06-02T11:18:00Z"
+    - stage: ship
+      outcome: shipped
+      closed_at: "2026-06-03T01:24:33Z"
 
 story: null
 stories:
@@ -768,8 +771,41 @@ maturity:
         writes maturity-report.md, archives the umbrella, and back-
         links to the parent epic (DEVOPS-43559, recorded in
         research.md as the eventual link target).
+    - stage: ship
+      command: /feature:ship
+      primary_blocker: none
+      ai_turns: 4
+      driver_edits:
+        files_touched: 0
+        lines_changed: 0
+      custom_prompts: 0
+      duration_min: 6
+      opened_at: "2026-06-03T01:18:33Z"
+      closed_at: "2026-06-03T01:24:33Z"
+      closed_by: ai
+      notes: >
+        Mechanical ship. Prerequisites verified: regression.status=passed,
+        security-sign-off=approved (risk=sensitive consumed the deferred
+        design-review signature), retrospective closed 2026-06-02T11:18Z.
+        Wrote maturity-report.md from templates/maturity-report.md with
+        the blocker-stratified summary (none=5, template=3, skill=0,
+        kb=2, judgment=2, flake=0) and three named intervention sources
+        (template/research, template/design, kb/qa). Jira DEVOPS-43953
+        was already in 完成/Done state from an earlier manual transition
+        (verified via `jira issue view`); posted the ship-summary
+        comment (bundle tag+digest, maturity totals, top sources,
+        archived path) in Jira wiki markup via the jira CLI. Umbrella
+        moved from docs/en/design/devops-43953-...-/ to
+        docs/en/design/archive/devops-43953-...-/ in one mv. parent_epic
+        is null so no epic back-link is written; the research.md
+        eventual-link note to DEVOPS-43559 stays as a forward-looking
+        record. Stage advances to archived. primary_blocker=none —
+        no driver edits, no synthesis required beyond rendering the
+        template from state.yaml; ai_turns counts the four turns inside
+        this stage (verify prerequisites, write maturity report, post
+        Jira comment, move + re-sign state).
   category_totals:
-    none: 5
+    none: 6
     template: 3
     skill: 0
     kb: 2
@@ -793,7 +829,7 @@ collisions:
     plan_decision: null
 
 integrity:
-  last_hash: "sha256:fde0e57df0b1532dc411b9041cbd4921eed8a624cd0dfdd613eacae08c222351"
-  last_written_by: /feature:regress
-  last_written_at: "2026-06-02T11:32:00Z"
+  last_hash: "sha256:dd40a1f8aecfec9a7593d1f2420f46249c7b04a5f0a713237170363652ba51ed"
+  last_written_by: /feature:ship
+  last_written_at: "2026-06-03T01:24:33Z"
   repairs: []

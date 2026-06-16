@@ -159,7 +159,7 @@ kubectl exec -it pod-git-clone -n connectors-git-demo -- cat /root/.gitconfig
 
 Example of the generated configuration file:
 
-    [http]
+    [http "http://connectors-proxy-service.connectors-system.svc/namespaces/default/connectors/test-connector"]
         extraHeader = Authorization: Basic OmV5Smhixxxxxxxxx==
     [url "http://connectors-proxy-service.connectors-system.svc/namespaces/default/connectors/test-connector"]
         insteadOf = https://github.com
