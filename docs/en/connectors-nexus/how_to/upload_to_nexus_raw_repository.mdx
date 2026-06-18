@@ -1,0 +1,249 @@
+---
+weight: 30
+title: Upload Artifacts to a Nexus Raw Repository with the nexus-upload Tekton Task
+---
+
+# Upload Artifacts to a Nexus Raw Repository with the nexus-upload Tekton Task
+
+Pipelines that ship binaries, tarballs, documentation bundles, or test
+reports to Nexus often need to **upload** to a hosted **raw** repository
+rather than install packages from a maven/npm/pypi format. Without a
+Connector, this means a pipeline author has to:
+
+1. Find the exact Nexus raw repository name in the Nexus console and
+   paste it into the `TaskRun`.
+2. Create and maintain a `kubernetes.io/basic-auth` Secret in the user
+   namespace, carrying the long-lived username and password.
+3. Re-create that Secret in every namespace that needs to upload, and
+   rotate it everywhere whenever the Nexus credential changes.
+
+This guide shows the alternative path: reference a platform Nexus
+Connector through the `nexus-raw-repository` ResourceInterface, and let
+the connectors CSI driver inject the proxy URL and CA certificate at
+TaskRun time. The user namespace never stores a plaintext Nexus Secret,
+and credential rotation is transparent.
+
+A **ResourceInterface** (RI) is a reusable Connector-to-Task binding
+template. The platform ships `nexus-raw-repository` to map a Nexus
+Connector plus a selected raw repository onto the inputs the
+`nexus-upload` Task expects.
+
+## What Problem This Solves
+
+Use this approach when you need to:
+
+- **Upload artifacts to a hosted raw repository** from a Tekton
+  `TaskRun` (single file, directory tree, glob expansion, optional
+  packaging into a tarball, optional `sha256` checksum manifest — all
+  capabilities shipped by the `nexus-upload` Tekton Task that comes
+  with the platform).
+- **Drop hand-managed Secrets** in user namespaces and let the platform
+  Connector own the credential lifecycle.
+- **Pick the target repository from a list** (filtered to `raw` format
+  and `hosted` type) instead of typing the name from memory.
+
+## Before You Begin
+
+### Prerequisites
+
+> Examples below assume the default install namespace `connectors-system`.
+> If your platform installs the Connectors component into a different
+> namespace, substitute that namespace where you see `connectors-system`.
+
+- Tekton Pipelines is installed.
+- The Connectors system and the **Nexus Connector** component are
+  installed (`ConnectorsCore` and `ConnectorsNexus` CRs reconciled
+  Ready).
+- The `nexus-upload` Tekton Task is installed in the namespace where
+  you will run the `TaskRun`. The Task must be on a version that
+  consumes the `nexus-raw-repository` ResourceInterface — earlier
+  versions still require a hand-mounted Secret. Refer to the platform
+  release notes for the Task version that introduces Connector
+  support.
+- A Nexus Connector pointing at the target Nexus instance, with a
+  Secret that holds a Nexus user that has **write** permission on at
+  least one hosted raw repository.
+- The target raw repository already exists in Nexus. This guide does
+  not provision repositories — see [Nexus Connector Automatic
+  Creation](./using_nexus_connector_automatic_creation_task.mdx) for
+  that flow.
+
+### How the Connector Path Differs
+
+| Aspect | Hand-managed Secret | Connector via `nexus-raw-repository` RI |
+| --- | --- | --- |
+| Where credentials live | Plaintext Secret in the user namespace | Connector-owned Secret in a platform namespace |
+| Repository name input | Typed by the pipeline author | Selected from a dropdown filtered to `raw` + `hosted` |
+| Credential rotation | Manual edit + redeploy in every namespace | Rotate the Connector Secret once; new `TaskRun`s pick it up |
+| Pod environment | Caller mounts the Secret as the `auth` workspace | CSI driver injects `.env` (with the forward-proxy URL) and `ca.crt` |
+| Data path | `curl PUT` directly to Nexus with `--user $u:$p` | `curl PUT` to Nexus through `HTTPS_PROXY`; the forward proxy authenticates the upstream connection using the Connector's stored credentials |
+
+Both paths upload through HTTP `PUT` to `<address>/repository/<repo>/<path>`. The
+Connector path simply changes how `curl` authenticates: instead of
+seeing the Nexus user, it sees the forward-proxy URL, and the proxy
+authenticates the upstream connection using the Connector's stored
+credentials.
+
+## Step 1 — Create the Nexus Connector
+
+If you already have a Nexus Connector for `mvn`, `npm`, or `pypi`
+workflows, the same Connector also serves raw uploads — skip to Step 2.
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: my-nexus-cred
+  namespace: connectors-system
+type: kubernetes.io/basic-auth
+stringData:
+  username: <nexus-user-with-write-on-target-raw-repo>
+  password: <password>
+---
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: my-nexus
+  namespace: connectors-system
+spec:
+  connectorClassName: nexus
+  address: https://nexus.example.com
+  auth:
+    name: basicAuth
+    secretRef:
+      name: my-nexus-cred
+```
+
+Wait until the Connector reports `Ready=True`:
+
+```bash
+kubectl -n connectors-system get connector my-nexus -w
+```
+
+## Step 2 — Reference the RI in the TaskRun
+
+The `nexus-upload` Task declares an `auth` workspace and a `repository`
+parameter, both of which the `nexus-raw-repository` ResourceInterface
+provides. A `TaskRun` consumes the RI by setting a workspace `csi`
+binding that points at the RI:
+
+```yaml
+apiVersion: tekton.dev/v1
+kind: TaskRun
+metadata:
+  generateName: upload-dist-
+spec:
+  taskRef:
+    name: nexus-upload
+  params:
+  # In a UI-driven TaskRun, both nexusServerURL and repository are
+  # auto-filled from the Connector via the RI's `address` and
+  # `repository` attributes. In a hand-written YAML you pass the
+  # values directly; they must agree with the chosen Connector
+  # (nexusServerURL = the Connector's spec.address).
+  - name: nexusServerURL
+    value: https://nexus.example.com
+  - name: repository
+    value: my-raw-hosted              # filled from the RI dropdown in the UI
+  - name: targetPath
+    value: releases/$(context.taskRun.name)
+  - name: sources
+    value: ["dist/*.tar.gz"]
+  workspaces:
+  - name: source
+    persistentVolumeClaim:
+      claimName: build-output
+  - name: auth
+    csi:
+      driver: connectors-csi
+      readOnly: true
+      volumeAttributes:
+        connectors: connectors-system/my-nexus
+        # Empty configuration.names tells the CSI driver to mount only the
+        # builtin configuration: .env (HTTPS_PROXY with the connector
+        # context token embedded) and ca.crt (the forward-proxy CA bundle).
+        configuration.names: ""
+        token.expiration: 30m
+```
+
+When the pod starts, the CSI driver writes two files into the `auth`
+workspace:
+
+- `.env` — exports `HTTPS_PROXY`, `HTTP_PROXY`, `https_proxy`,
+  `http_proxy`, `no_proxy`, all pointing at the platform forward
+  proxy. The proxy URL embeds short-lived credentials derived from
+  the Connector identity and the TaskRun ServiceAccount token.
+- `ca.crt` — the CA bundle that signs the forward proxy's TLS
+  certificate.
+
+The Task internally sources `.env` to pick up `HTTPS_PROXY`, then runs
+`curl -X PUT --cacert <auth_workspace>/ca.crt --upload-file <file>
+<address>/repository/<repository>/<path>`. The forward proxy validates
+the TaskRun-scoped credential, looks up the Nexus Connector, swaps the
+proxy auth for the Connector's real Nexus username and password, and
+forwards the `PUT` to Nexus.
+
+## Step 3 — Verify the Upload
+
+After the `TaskRun` succeeds:
+
+1. List `result`s on the `TaskRun` — `nexus-upload` exposes a result
+   per uploaded file containing the final absolute URL.
+2. Open one of the URLs from the previous step. Nexus should return
+   the artifact unchanged.
+3. Check the Nexus console under **Browse → Components** for the
+   target raw repository to confirm the upload appeared there.
+
+## Credential Rotation
+
+To rotate the Nexus user password used by all `TaskRun`s of all
+namespaces that reference this Connector:
+
+```bash
+kubectl -n connectors-system patch secret my-nexus-cred \
+  --type=strategic \
+  -p '{"stringData":{"password":"<new-password>"}}'
+```
+
+Future `TaskRun`s pick up the new credential automatically. There is
+no need to redeploy pipelines or edit user-namespace Secrets — those
+Secrets do not exist on this path.
+
+## Troubleshooting
+
+### `401 Unauthorized` on `PUT`
+
+The Connector's Secret holds a user that does not have write
+permission on the target raw repository in Nexus. Adjust the Nexus
+user's role to include `nx-repository-view-raw-<repo>-add` and
+`nx-repository-view-raw-<repo>-edit`, then retry.
+
+### `403 Forbidden` on the dropdown query
+
+The TaskRun ServiceAccount does not have `get` on
+`connectors/apis/nexus/service/rest/v1/repositories`. Aggregate one of
+the platform roles
+(`cpaas:connectors-nexus-apis:view` or higher) to the namespace.
+
+### Pod stuck in `ContainerCreating`
+
+The CSI driver is reporting a mount error. `kubectl describe pod` will
+show the underlying message — common causes are a wrong
+`volumeAttributes.connectors` namespace/name, a Connector that has
+never reached `Ready=True`, or an unbound `auth` workspace in the
+`TaskRun`.
+
+### `x509: certificate signed by unknown authority` on `PUT`
+
+`curl` is being invoked without `--cacert` pointing at the workspace
+`ca.crt`. The CA bundle is present in the `auth` workspace but `curl`
+is not being told to trust it. Recent versions of the `nexus-upload`
+Task wire this up automatically; older versions may need an explicit
+step.
+
+## Reference
+
+- The `nexus-upload` Tekton Task — the Task that consumes this RI.
+- [Nexus ConnectorClass concept](../concepts/nexus_connectorclass.mdx)
+  — the underlying ConnectorClass, including the forward-proxy URL
+  derivation and the configurations exposed for other formats.
