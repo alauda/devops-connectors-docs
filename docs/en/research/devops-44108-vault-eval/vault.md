@@ -38,7 +38,7 @@
 | Auth methods | 决定调用者是谁，发 Vault token | Kubernetes / OIDC / AppRole / LDAP |
 | Audit devices | 决定审计日志写哪 | file / syslog / socket |
 
-> **关于 OpenBao**：Vault 2023 改 BSL 许可后，社区 fork 出 OpenBao（AGPL-3.0，Linux Foundation 托管，API 兼容 Vault）。本指南所有 OSS 能力描述对 OpenBao 同样适用；Enterprise 能力在 OpenBao 中的状态另见 **§14 OpenBao**。
+> **关于 OpenBao**：Vault 2023 改 BSL 许可后，社区 fork 出 OpenBao（MPL-2.0，Linux Foundation 托管，API 兼容 Vault）。本指南所有 OSS 能力描述对 OpenBao 同样适用；Enterprise 能力在 OpenBao 中的状态另见 **§14 OpenBao**。
 
 ---
 
@@ -1601,7 +1601,7 @@ CSI Provider 不像 Injector 那样长期持 token 不停续；通常每次"挂�
 **许可与试用**
 - Vault Enterprise 需 license，可向 HashiCorp 申请 30 天免费试用
 - HCP Vault Dedicated（SaaS 托管 Vault）也提供 Enterprise 功能
-- BSL 2.0 许可（2023 年从 MPL 改）——非 production 评估可用 Community Edition
+- BSL 1.1 许可（2023 年从 MPL 改）——非 production 评估可用 Community Edition
 
 **谁会买**
 - 金融 / 政府 / 关键基础设施（合规驱动）
@@ -1919,7 +1919,7 @@ Sentinel 脚本就是文本文件，可以 git 管 + PR review + CI 测试 + Arg
 
 2023 年 8 月 HashiCorp Vault 从 MPL-2.0 改为 **BSL（Business Source License）**——不允许商业竞品使用、第三方集成受限。社区随即 fork 出 **OpenBao**：
 
-- **AGPL-3.0 许可**——纯开源，可商用、可二次分发
+- **MPL-2.0 许可**——纯开源，可商用、可二次分发
 - **Linux Foundation 托管**（Sandbox 项目），独立于 HashiCorp（HashiCorp 已被 IBM 收购）
 - **API 兼容 Vault**——大多数 Vault CLI / SDK / plugin / 集成（VSO / CSI Provider / Vault Agent Injector）直接复用
 - 从 Vault 1.14.x fork 后持续独立演进，部分新功能已与 Vault 分歧

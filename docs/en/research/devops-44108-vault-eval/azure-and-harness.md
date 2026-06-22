@@ -20,7 +20,11 @@ steps:
 
 **保护机制**:Service Connection 是 ADO 的 "protected resource",可挂 **approvals & checks**(N-of-M 审批、分支限制、branch protection)作为解密前的 gate。
 
-→ ADO 的本质是 **"Service Connection 自存 secret + Variable Group 可选 KMS-backed"** 的双轨,身份和 secret material 在 Azure 内部可解耦(WIF/KV),出了 Azure 闭环就退化。
+**运行时凭据泄露问题(微软如何看待与缓解)**:ADO 自己承认存在残余泄露风险——核心在于运行期凭据**一定落到执行环境里**。机制链路:① **授权与审批在 server 端、job 派发前(queue time)完成**——server 按 pipeline 定义解析出需要哪些 Service Connection,核对逐 pipeline 授权(不推荐 `Grant access to all pipelines`)并跑 approvals & checks,过了才把该 endpoint 的凭据放进 job 消息;② agent 收到后,在启动每个 task **子进程前**把凭据以 `ENDPOINT_AUTH_*` 环境变量传入;task SDK 启动时会把这些 secret **移出 `process.env`、转存进程内 secret vault 并删除原 env 变量**,task 经 `getEndpointAuthorization*` 从该 vault **本地读取**(不主动回 server 拉) —— 凭据始终在 task 进程地址空间内;**是否落盘取决于 task 自身**(如内置 `checkout`/git 默认会把 token 留在仓库 git config 的 `http.…extraheader` 里,受 `persistCredentials` 控制,默认关闭)。缓解三件套:**日志 mask**(官方明说 best-effort、`isn't foolproof`,不 mask 子串/结构化值)、**逐 pipeline 授权 + approvals/checks**、以及 **WIF 去长期 secret**。但微软自己强调 `Be careful about who has access to alter your pipeline`——**有改 task/pipeline 权限者即可 echo/外带凭据**,故 task 逻辑需安全审查。
+
+**WIF 改变了什么、没改变什么**:WIF **不存长期 secret**,改用 OIDC 在运行时换**短期**联邦 token,泄露价值大幅下降;但**那枚短期 token 运行期仍出现在 task 子进程里**——仍是注入模型、只是短命,**并非"真凭据永不到达 runner"**。且 WIF 仅覆盖**能向 Entra/Azure 联邦**的连接(ARM 为主);**GitHub Service Connection 走 PAT/OAuth 时无 WIF**,落到 agent 上的就是连接本身的长期凭据(且默认还会写进 `.git/config`)。
+
+→ ADO 的本质是 **"Service Connection 自存 secret + Variable Group 可选 KMS-backed"** 的双轨,身份和 secret material 在 Azure 内部可解耦(WIF/KV),出了 Azure 闭环就退化。**无论传统还是 WIF,凭据/令牌运行期都进执行进程**——这正是 data-plane proxy(真凭据永不进执行 task 地址空间)始终未被 ADO 走的那条路。
 
 ---
 
@@ -62,6 +66,8 @@ steps:
 
 **保护机制**:Pipeline-level **Approval stage**(manual / Jira / ServiceNow)作为门控,但**不是绑在 Secret 解密事件上的细粒度 N-of-M**。
 
+**运行时凭据泄露问题(与 ADO 同类,一处更优)**:基本模式与结论和 ADO 一致——执行边界仍是 secret-injection、**无 data-plane proxy(文档未描述任何此类机制)**,故运行期明文会进执行进程,且和 ADO 一样的三条仍成立:**凭据运行期注入 step 进程(env / 表达式解析值)、执行 step 拿到明文、有改 step/pipeline 权限者即可 echo/外带**(后者为推断:基于 sanitizer 可被绕过 + output variable 暴露行为)**→ task 逻辑需安全审查**。日志 mask 同为 best-effort(sanitizer 仅做 secret 的精确匹配)且有明确缺口:`File secrets are not masked`、且**含 secret 的 output variable 会在 Output 标签与后续 step 日志暴露**([log sanitization](https://developer.harness.io/docs/platform/secrets/secrets-management/secrets-and-log-sanitization/) / [Run step output](https://developer.harness.io/docs/continuous-integration/use-ci/run-step-settings/))。**一处结构更优**:Harness **平台(SaaS Manager)不持 secret 值**,只存 ref/元数据;明文解密只在你私网内的 **Delegate** 完成(`only the Harness Delegate ... has access`),secret material 留在你的信任域——优于 ADO 传统 Service Connection 把 secret 落 ADO DB(但与 **ADO-WIF** 比则是"殊途、都不存长期 secret":Harness 靠外置 Secret Manager + Delegate,WIF 靠 Entra OIDC 联邦)。
+
 **模糊点**:Vault dynamic credentials(DB user / AWS IAM)的 lease/renew/revoke 生命周期文档没明确章节,目前判定是"按 static path 读取"近似实现;Vault namespace 多租隔离亦未单列章节(**未确认**)。
 
 → Harness 的本质是 **"Vault/KMS 是真相来源,Connector 只引用"** 模型,三层抽象清晰,Manager 不见明文是关键安全断言。
@@ -99,6 +105,10 @@ steps:
 - [Azure Pipelines Variable Groups](https://learn.microsoft.com/en-us/azure/devops/pipelines/library/variable-groups)
 - [Link Variable Group to Azure Key Vault](https://learn.microsoft.com/en-us/azure/devops/pipelines/library/link-variable-groups-to-key-vaults)
 - [Configure Workload Identity Service Connection](https://learn.microsoft.com/en-us/azure/devops/pipelines/release/configure-workload-identity)
+- [Use an Azure Resource Manager service connection (WIF 现行推荐)](https://learn.microsoft.com/en-us/azure/devops/pipelines/library/connect-to-azure)
+- [Set secret variables(运行期凭据在 agent 上 / mask best-effort)](https://learn.microsoft.com/en-us/azure/devops/pipelines/process/set-secret-variables)
+- [Securing Azure Pipelines(secrets / fork 保护 / approvals&checks)](https://learn.microsoft.com/en-us/azure/devops/pipelines/security/overview)
+- [azure-pipelines-task-lib(getEndpointAuthorization*/ENDPOINT_AUTH env 机制)](https://github.com/microsoft/azure-pipelines-task-lib/blob/master/node/docs/azure-pipelines-task-lib.md)
 - [Harness Connectors category](https://developer.harness.io/docs/category/connectors/)
 - [Create a Connector using YAML](https://developer.harness.io/docs/platform/connectors/create-a-connector-using-yaml/)
 - [Harness Secret Manager overview](https://developer.harness.io/docs/platform/secrets/secrets-management/harness-secret-manager-overview/)
