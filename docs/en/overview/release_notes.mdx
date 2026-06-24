@@ -34,12 +34,47 @@ The following table shows the compatibility and support matrix between the Alaud
 - Added the `enable-pod-image-pull-via-connector` feature flag (default off) to gate the OCI/Harbor PodWebhook's auto-rewrite of Pod container image addresses to the Connector Proxy URL. See [Feature Flags](./feature_flags.mdx#enable-pod-image-pull-via-connector).
 - Added the `enable-connector-apis-write-passthrough` feature flag (default off) to enable write methods (`POST`/`PUT`/`DELETE`/`PATCH`) on the Connectors API gateway. Authorization for enabled writes follows the same fine-grained SAR chain used for `GET`, controlled by `enable-connector-apis-permissions`. See [Feature Flags](./feature_flags.mdx#enable-connector-apis-write-passthrough) and [Write methods (passthrough)](../connectors/concepts/connector_api.mdx#write-methods-passthrough).
 - Package the Connectors UI as a Console service-backend plugin managed by the operator.
+- Added a guide for migrating Alauda DevOps v3 Integration and ClusterIntegration resources to Connectors using the `int2conn` CLI. See [Migrating v3 Integrations to Connectors](../how_to/migrate_integrations_to_connectors.mdx).
+
+**ConnectorsConfig Management**
+
+- Introduced `ConnectorsConfig` — a cluster-singleton CR that manages all connector components from a single spec, replacing the need to manage individual component CRs (ConnectorsCore, ConnectorsGit, ConnectorsHarbor, etc.) directly. The operator auto-creates a `ConnectorsConfig` on startup and automatically adopts any existing standalone component CRs. Configure the shared registry, labels, annotations, and feature flags once for all components, with per-component overrides where needed. See [Installation](../install/install.mdx).
+- Added `spec.installFlags` to `ConnectorsConfig` to control installation behavior for specific cluster configurations. The `pipeline-integration` flag allows administrators to cap which ResourceInterface schema versions are deployed on clusters running legacy Tekton releases. See [Install Flags](../install/install.mdx#install-flags) and [Feature Maturity](./feature_maturity.mdx).
+
+**SonarQube Connector Enhancements**
+
+- Provide the `sonarqube-connector-automatic-creation` Tekton Task to automate SonarQube project creation and connector initialization for Alauda Container Platform tenants and namespaces. Supports SonarQube 8.9.2 LTS and 25.1 LTA. More details:
+  - [Automatically Create and Reconcile SonarQube Connector Resources with Tekton](../connectors-sonarqube/how_to/using_sonarqube_connector_automatic_creation_task.mdx)
+
+**GitLab Connector Enhancements**
+
+- Provide the `gitlab-connector-automatic-creation` Tekton Task to automate GitLab Personal Access Token initialization, rotation, and credential refresh for Alauda Container Platform tenants and namespaces. More details:
+  - [Automatically Create and Reconcile GitLab Connector Resources with Tekton](../connectors-gitlab/how_to/using_gitlab_connector_automatic_creation_task.mdx)
 
 **Nexus Connector Enhancements**
 
 - Provide the `nexus-connector-automatic-creation` Tekton Task to automate Nexus connector initialization and credential refresh for Alauda Container Platform tenants and namespaces. More details:
   - It can create or reconcile Nexus repositories (hosted, proxy, group), scoped user + role + per-repository privileges, the Connector authentication Secret, and the Nexus Connector resource, with rerun-based self-healing for partial failures.
   - [Automatically Create and Reconcile Nexus Connector Resources with Tekton](../connectors-nexus/how_to/using_nexus_connector_automatic_creation_task.mdx)
+
+**CSI Driver Enhancements**
+
+- The CSI Driver built-in configuration now includes a `.curlrc` file that workloads can pass to `curl --config` to configure proxy and TLS settings without exporting environment variables. When using an HTTPS destination behind a TLS-intercepting forward proxy, pass `--cacert /{mount-path}/ca.crt` alongside `--config` to satisfy certificate verification. See [Built-in Configurations](../connectors/concepts/connectors_csi.mdx#built-in-configurations).
+
+**Git Connector Enhancements**
+
+- Git and GitLab ConnectorClasses now scope the proxy `Authorization` header to the proxy address (`[http "<proxyAddress>"]`) in the rendered `.gitconfig`, so the credential is not sent to other hosts such as submodule servers on a different Git instance. See [Git ConnectorClass](../connectors-git/concepts/git_connectorclass.mdx).
+
+**Harbor Connector Enhancements**
+
+- The `harborCliImage` parameter of the `harbor-connector-automatic-creation` task now has a built-in default and can be omitted in most deployments.
+- The `permissions` parameter now supports a multi-resource format (`<resource1>:<verbs>;<resource2>:<verbs>`), allowing a single entry to grant access to multiple Harbor resource types for the same project. The existing single-resource format remains fully supported. See [Using Harbor Connector Automatic Creation Task](../connectors-harbor/how_to/using_harbor_connector_automatic_creation_task.mdx).
+
+**Security updates**
+
+- The operator pod now uses an explicit projected ServiceAccount token volume and sets `automountServiceAccountToken: false`, resolving Kubescape control C-0190.
+- Updated base images and resolved security vulnerabilities in OpenSSL (CVE-2026-45447 and related CVEs).
+- Updated Go toolchain to 1.26.4, resolving GO-2026-5039 (net/textproto), GO-2026-5038 (mime), and GO-2026-5037 (crypto/x509).
 
 ### Fixed Issues
 
