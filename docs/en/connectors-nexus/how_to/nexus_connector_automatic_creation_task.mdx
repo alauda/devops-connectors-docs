@@ -9,7 +9,7 @@ title: Nexus Connector Automatic Creation Tekton Task
 
 Set the variables, then run the command below:
 
-- `REGISTRY`: the registry host that stores the `devops/nexus-connector-automatic-creation` image.
+- `REGISTRY`: the registry host that stores the `alauda-connectors/connectors-extensions/nexus-connector-automatic-creation` image.
 - `TARGET_NS`: the namespace where you want to install the Task. The tool-image ConfigMaps are installed in `kube-public`.
 
 {/* BEGIN GENERATED TASK YAML */}
@@ -20,7 +20,7 @@ export TARGET_NS=<target-namespace>
 cat <<'EOF' | envsubst '${REGISTRY} ${TARGET_NS}' | kubectl apply -f -
 apiVersion: v1
 data:
-  image: ${REGISTRY}/devops/nexus-connector-automatic-creation:v0.1
+  image: ${REGISTRY}/alauda-connectors/connectors-extensions/nexus-connector-automatic-creation:v1.12.0-rc.299.g74beee4
   name: Nexus Connector Automatic Creation v0.1
 kind: ConfigMap
 metadata:
@@ -37,7 +37,7 @@ metadata:
 ---
 apiVersion: v1
 data:
-  image: ${REGISTRY}/devops/nexus-connector-automatic-creation:latest
+  image: ${REGISTRY}/alauda-connectors/connectors-extensions/nexus-connector-automatic-creation:latest
   name: Nexus Connector Automatic Creation latest
 kind: ConfigMap
 metadata:
@@ -192,7 +192,7 @@ spec:
       description: Optional override for the K8s Secret name written into the connector namespace alongside the Connector. Default = [connector]-secret.
       name: secret
       type: string
-    - default: ${REGISTRY}/devops/nexus-connector-automatic-creation:v0.1
+    - default: ${REGISTRY}/alauda-connectors/connectors-extensions/nexus-connector-automatic-creation:v1.12.0-rc.299.g74beee4
       description: Runtime image used by every Task step (curl + jq + yq + kubectl + bash + the helper scripts that drive Nexus). Defaults to the catalog tool-image-nexus-connector-automatic-creation v0.1 image; override per TaskRun if you mirror the image into a private registry. The image MUST be the nexus-connector-automatic-creation image or a derivative that bundles the helper scripts at /usr/local/bin/ — a generic kubectl image will not work.
       name: nexusCliImage
       type: string

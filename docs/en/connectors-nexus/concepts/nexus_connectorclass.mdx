@@ -124,6 +124,12 @@ The required permissions depend on how you intend to use the connector:
 
 For security best practices, create credentials with minimal required permissions.
 
+### Subconnector Generation \{#subconnector-generation}
+
+A single Nexus server usually fronts several package ecosystems — npm, Maven and PyPI — under different repository paths. Rather than creating one Connector per ecosystem (or mounting the per-format configuration files described below), you can declare a Nexus **aggregator** Connector that generates one child Connector per ecosystem: set `spec.generation.supportedClasses: [npm, maven, pypi]` on the Nexus ConnectorClass and list the ecosystems in the Nexus Connector's `spec.generators`. The controller materializes per-class `npm` / `maven` / `pypi` child Connectors that share the aggregator's host and credentials, and pipelines consume packages through those children.
+
+This is the recommended way to serve multiple ecosystems from one Nexus server. For the full model — address templating, auth inheritance, the `GenerationReady` condition, recovery and lifecycle — see [Connector Generation](../../connectors/concepts/connector_generation.mdx).
+
 ### Proxy and Configuration Files
 
 To provide clients with the ability to access Nexus repositories without credentials, the Nexus connector provides a proxy server that automatically injects authentication information.
@@ -137,6 +143,12 @@ The Nexus ConnectorClass provides the following configuration files that can be 
 | `yarnrc`           | `.yarnrc.yml`     | Yarn package operations       |
 | `pipconf`          | `pip.conf`        | PyPI package download         |
 | `pypirc`           | `.pypirc`         | PyPI package publish          |
+
+:::warning Deprecated in favor of subconnector generation
+
+Mounting these per-format configuration files directly (`settings` / `npmrc` / `yarnrc` / `pipconf` / `pypirc`) is **deprecated**. Prefer [Subconnector Generation](#subconnector-generation), which materializes per-class `npm` / `maven` / `pypi` child Connectors that pipelines consume instead of these raw configuration mounts.
+
+:::
 
 #### Proxy Address
 

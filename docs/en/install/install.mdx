@@ -307,13 +307,15 @@ tune feature flags, or override workload settings.
   same schema as the corresponding standalone component CR).
   Components not listed in the map are enabled with default settings.
 - **Cluster-wide defaults at the spec root** — `registry`, `labels`,
-  `annotations`, and `installFlags` live directly under `spec` and
-  apply to every component as defaults. Merge precedence is
-  **component value wins** — a key set on both the spec root and the
-  component falls back to the spec-root value only when the component
-  omits it.
+  `annotations`, `imagePullSecrets`, and `installFlags` live directly
+  under `spec` and apply to every component as defaults. Merge
+  precedence is **component value wins** — a key set on both the spec
+  root and the component falls back to the spec-root value only when
+  the component omits it. The one exception is `imagePullSecrets`,
+  which merges as a **de-duplicated union** of the spec-root list and
+  the component list rather than overriding.
 
-The five examples below cover the most common customizations. For the
+The examples below cover the most common customizations. For the
 full per-component schema, refer to the
 [`ConnectorsConfig` CRD reference](../apis/kubernetes_apis/operator/operator.connectors.alauda.io_connectorsconfigs.mdx).
 
@@ -352,6 +354,29 @@ spec:
 The registry prefix is applied to every component's workload images
 unless a component overrides it locally with its own
 `spec.components.<name>.spec.registry`.
+
+### Pull Images from a Private Registry \{#image-pull-secrets}
+
+When component images live in a registry that requires authentication,
+list the names of the image-pull `Secret`s to attach to every
+component's workload pods:
+
+```yaml
+spec:
+  imagePullSecrets:
+    - my-registry-cred
+```
+
+The referenced `Secret`s (type `kubernetes.io/dockerconfigjson`) must
+already exist in the components namespace — the operator injects the
+names into each reconciled workload's `imagePullSecrets` but does not
+create the secrets.
+
+A component may add its own secrets under
+`spec.components.<name>.spec.imagePullSecrets`; unlike most settings the
+two lists are merged as a **de-duplicated union** (cluster-wide +
+component), so a component entry adds to — rather than replaces — the
+cluster-wide list.
 
 ### Tune Workload Replicas and Resources \{#workloads}
 

@@ -98,6 +98,27 @@ The typical flow is:
 
 This means `AccessRequest` is the runtime bridge between approval status and actual RBAC permission syncing.
 
+### How a Check Resource's State Is Computed \{#how-a-check-is-evaluated}
+
+Each matched check resource is turned into a pass / pending / reject result in one of two ways, depending on the check rule:
+
+- **With a Rego script** (`state.rego` in the check rule): the controller evaluates the script, passing `{ "object": <the check resource>, "check": <the check rule, including its params> }` as input. This is how the built-in `connectors-approvals-in-pipeline` rule works, and how the approver constraint (`params.approvers`) is enforced. See [Restricting Who Can Approve](./connectors_approval.mdx#restricting-who-can-approve).
+- **Without a Rego script** (default behavior): the controller reads the check resource's own status conditions. It looks at the standard `Ready` / `Succeeded` condition and maps it directly:
+  - condition `True` → check **passed** (`AccessCheckReady = True`, reason `Passed`);
+  - condition `False` → check **rejected** (`AccessCheckReady = False`, reason `Rejected`);
+  - anything else, or no such condition yet → **pending** (`AccessCheckReady = Unknown`, reason `Pending`).
+
+  In this no-Rego path, `params` on the check rule have **no effect** — approver constraints only apply to check rules that use a Rego script.
+
+:::warning Upgrading a custom Rego script
+Earlier versions passed the check resource itself as the input, so scripts read it at the top
+level (`input.data.…`, `input.status.…`). Read through `input.object` instead — for example
+`input.data.result` becomes `input.object.data.result`.
+
+Only custom scripts are affected, and only when the `enable-connectors-approval` feature flag
+is on; the built-in rules ship already migrated.
+:::
+
 ## Example
 
 The following example shows the shape of one request:

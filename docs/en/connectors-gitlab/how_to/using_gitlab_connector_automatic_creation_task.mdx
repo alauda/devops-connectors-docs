@@ -173,7 +173,7 @@ for the full comparison.
      token: glpat-xxxxxxxxxxxxxxxxxxxx
    ```
 
-4. **Create the admin Connector** pointing at the umbrella Secret:
+5. **Create the admin Connector** pointing at the umbrella Secret:
 
    ```yaml
    apiVersion: connectors.alauda.io/v1alpha1
@@ -373,6 +373,8 @@ spec:
   params:
     - name: connector
       value: connectors-management/acme-corp
+    - name: gitlabUrl
+      value: https://gitlab.example.com
     - name: tenantGroup
       value: acme-corp
     - name: subgroups
@@ -386,6 +388,9 @@ spec:
         - api
     - name: tokenDuration
       value: "30"
+    - name: basicAuthSecrets
+      value:
+        - connectors-management/acme-corp-basic-auth
   workspaces:
     - name: gitlabconfig
       csi:
@@ -440,6 +445,8 @@ spec:
   params:
     - name: connector
       value: connectors-management/acme-corp
+    - name: gitlabUrl
+      value: https://gitlab.example.com
     - name: tenantGroup
       value: umbrella/acme-corp
     - name: subgroups
@@ -451,6 +458,8 @@ spec:
         - api
     - name: tokenDuration
       value: "30"
+    - name: basicAuthSecrets
+      value: []
   workspaces:
     - name: gitlabconfig
       csi:
@@ -556,6 +565,8 @@ spec:
   params:
     - name: connector
       value: connectors-management/acme-corp
+    - name: gitlabUrl
+      value: https://gitlab.example.com
     - name: tenantGroup
       value: acme-corp
     - name: subgroups
@@ -570,6 +581,9 @@ spec:
         - read_registry
     - name: tokenDuration
       value: "30"
+    - name: basicAuthSecrets
+      value:
+        - connectors-management/acme-corp-basic-auth
   workspaces:
     - name: gitlabconfig
       csi:

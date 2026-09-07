@@ -1,0 +1,1605 @@
+---
+weight: 20
+title: Automatically Create Connectors for a Project
+---
+
+# Automatically Create Connectors for a Project
+
+## Overview
+
+When a new project namespace is created on an ACP cluster, the
+connectors for Harbor, Nexus, GitLab, and SonarQube need to be
+provisioned for that project. `connectors-autocreate` automates this by
+watching for namespace events and triggering a Tekton `PipelineRun` that
+reconciles the project's Connectors.
+
+### Architecture
+
+The system has two components:
+
+- **Adapter** (`ns-event-source`): watches Kubernetes namespace events and
+  forwards them as CloudEvents to a Tekton EventListener.
+- **EventListener** + **Pipeline**: receives the event, extracts the project
+  context, and runs the connector reconciliation tasks.
+
+The two components can run in the same cluster or across clusters:
+
+#### Single-cluster mode
+
+Use this when the project namespaces and the management automation are in
+the same cluster.
+
+```
+Management cluster
+┌─────────────────────────────────────────────────────┐
+│ ns-event-source ──CloudEvent──▶ EventListener       │
+│ (watches namespaces)            autocreate-el        │
+│                                   │                  │
+│                                   ▼                  │
+│                              PipelineRun             │
+│                         connector-auto-create        │
+└─────────────────────────────────────────────────────┘
+```
+
+#### Multi-cluster mode
+
+Use this when the project namespaces are on separate business clusters and
+only the management automation (EventListener, Pipeline, admin Connectors)
+lives on the management cluster.
+
+One EventListener per business cluster is created on the management
+cluster. Each EventListener's NodePort (or Ingress) address is set as the
+adapter's `K_SINK` on the corresponding business cluster. The
+`target-kubeconfig` workspace in the TriggerTemplate is fixed at install
+time to point to that business cluster's credentials.
+
+```
+Business cluster A                    Management cluster
+┌──────────────────────┐             ┌──────────────────────────────────┐
+│ ns-event-source      │──CloudEvent─▶ EventListener autocreate-el-a   │
+│ K_SINK = EL-A:port   │             │  TriggerTemplate                 │
+└──────────────────────┘             │    workspace: target-kubeconfig-a│
+                                     ├──────────────────────────────────┤
+Business cluster B                   │ EventListener autocreate-el-b    │
+┌──────────────────────┐             │  TriggerTemplate                 │
+│ ns-event-source      │──CloudEvent─▶   workspace: target-kubeconfig-b│
+│ K_SINK = EL-B:port   │             └──────────────────────────────────┘
+└──────────────────────┘
+```
+
+## Prerequisites
+
+- The Connectors system is installed.
+- Tekton Pipelines and Tekton Triggers are installed.
+- The management cluster already contains these admin Connectors:
+  `harbor-admin`, `nexus-admin`, `gitlab-admin`, and `sonarqube-admin`.
+- Install these Tekton Tasks in the management namespace where the
+  auto-create Pipeline runs. Each linked page provides the variables and
+  `kubectl apply` command for installing the Task:
+  [Harbor Connector Automatic Creation Task](../connectors-harbor/how_to/harbor_connector_automatic_creation_task.mdx),
+  [Nexus Connector Automatic Creation Task](../connectors-nexus/how_to/nexus_connector_automatic_creation_task.mdx),
+  [GitLab Connector Automatic Creation Task](../connectors-gitlab/how_to/gitlab_connector_automatic_creation_task.mdx#installation),
+  and
+  [SonarQube Connector Automatic Creation Task](../connectors-sonarqube/how_to/sonarqube_connector_automatic_creation_task.mdx#installation).
+
+---
+
+## Single-cluster Installation
+
+Use this section when the project namespaces and the management automation
+are in the same cluster.
+
+Export these variables first — they are referenced by `envsubst` in the
+steps below:
+
+```bash
+export REGISTRY=<your-registry>
+export TARGET_NS=<auto-create-namespace>
+kubectl config set-context --current --namespace="$TARGET_NS"
+export HARBOR_ADMIN=<harbor-admin-connector-name>
+export NEXUS_ADMIN=<nexus-admin-connector-name>
+export GITLAB_ADMIN=<gitlab-admin-connector-name>
+export SONARQUBE_ADMIN=<sonarqube-admin-connector-name>
+```
+
+### Step 1 — Install the adapter
+
+Apply the namespace watcher and receive adapter:
+
+```bash
+cat <<'EOF' | envsubst '$TARGET_NS $REGISTRY' | kubectl apply -f -
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ns-event-source
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ns-event-source
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ns-event-source
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: ns-event-source
+subjects:
+  - kind: ServiceAccount
+    name: ns-event-source
+    namespace: $TARGET_NS
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ns-event-source
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ns-event-source
+  template:
+    metadata:
+      labels:
+        app: ns-event-source
+    spec:
+      serviceAccountName: ns-event-source
+      enableServiceLinks: false
+      containers:
+        - name: receive-adapter
+          image: ${REGISTRY}/alauda-connectors/connectors-extensions/apiserver-receive-adapter:v1.22.0-alauda.3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 100Mi
+            limits:
+              cpu: 200m
+              memory: 200Mi
+          env:
+            - name: K_SINK
+              value: http://el-autocreate-el:8080
+            - name: K_SOURCE_CONFIG
+              value: '{"allNamespaces":true,"resources":[{"gvr":{"Group":"","Version":"v1","Resource":"namespaces"},"selector":"cpaas.io/project"}],"mode":"Resource"}'
+            - name: NAME
+              value: ns-event-source
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+EOF
+```
+
+> **Note:** The adapter's `K_SINK` points at the EventListener service created in Step 3.
+> The adapter pod starts immediately but cannot connect until Step 3 is applied; it will
+> reconnect automatically once the service is available.
+
+### Step 2 — Install the pipeline
+
+Apply the pipeline RBAC and the Tekton `Pipeline`:
+
+```bash
+cat <<'EOF' | envsubst '$TARGET_NS $REGISTRY' | kubectl apply -f -
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: connector-auto-create-pipeline
+  namespace: $TARGET_NS
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/component: connector-auto-create
+    app.kubernetes.io/name: connectors-operator
+    connectors.alauda.io/install-flag: auto-create
+  name: connector-auto-create-pipeline
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "create", "patch"]
+  - apiGroups: ["connectors.alauda.io"]
+    resources: ["connectors"]
+    verbs: ["get", "create", "patch"]
+  - apiGroups: [""]
+    resources: ["serviceaccounts"]
+    verbs: ["get", "patch"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "create", "delete", "patch"]
+  - apiGroups: ["tekton.dev"]
+    resources: ["pipelineruns"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: connector-auto-create-pipeline
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: connector-auto-create-pipeline
+subjects:
+  - kind: ServiceAccount
+    name: connector-auto-create-pipeline
+    namespace: $TARGET_NS
+---
+# The four <tool>-connector-automatic-creation Tasks are provided by
+# connectors-{harbor,nexus,gitlab,sonarqube} and must be installed in the run namespace.
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  annotations:
+    skip-sync: "true"
+  labels:
+    connectors.alauda.io/install-flag: auto-create
+  name: connector-auto-create
+spec:
+  params:
+  - name: namespace
+    description: Business namespace whose creation or update triggered this reconciliation
+    type: string
+  - name: project
+    description: ACP project name used as the tenant and generated Connector name prefix
+    type: string
+  - name: harborAdmin
+    description: Name of the Harbor administrator Connector mounted in the harbor-admin workspace
+    type: string
+  - name: nexusAdmin
+    description: Name of the Nexus administrator Connector used to resolve the base URL
+    type: string
+  - name: gitlabAdmin
+    description: Name of the GitLab administrator Connector used to resolve the base URL
+    type: string
+  - name: sonarqubeAdmin
+    description: Name of the SonarQube administrator Connector used to resolve the base URL
+    type: string
+  - default: "true"
+    description: Whether to reconcile the project Harbor Connector and image pull credentials
+    name: enableHarbor
+    type: string
+  - default: "true"
+    description: Bind each generated Harbor image pull Secret to the ServiceAccount selected by serviceAccountName in every namespace in the project
+    name: bindImagePullSecretToSA
+    type: string
+  - default: default
+    description: Name of the existing ServiceAccount that receives Harbor image pull Secrets when bindImagePullSecretToSA is true; the same name is used in every namespace in the project
+    name: serviceAccountName
+    type: string
+  - default: "false"
+    description: Whether to reconcile the project Nexus Connector when it does not already exist
+    name: enableNexus
+    type: string
+  - default: "false"
+    description: Whether to reconcile the project GitLab Connector when it does not already exist
+    name: enableGitLab
+    type: string
+  - default: "false"
+    description: Whether to reconcile the project SonarQube Connector when it does not already exist
+    name: enableSonarQube
+    type: string
+  - default: "30"
+    description: Validity period, in whole days, for the GitLab group access token and SonarQube user token
+    name: tokenDurationDays
+    type: string
+  - default: ""
+    description: GitLab parent group path under which the project group is created; required when GitLab reconciliation is enabled
+    name: gitlabParentGroup
+    type: string
+  - default: ""
+    description: Optional regular-expression fragment inserted before the project name in the SonarQube permission-template project-key pattern
+    name: sonarPatternPrefix
+    type: string
+  - default: ""
+    description: Optional regular-expression fragment inserted after the project name in the SonarQube permission-template project-key pattern
+    name: sonarPatternSuffix
+    type: string
+  - default: ""
+    description: Optional Nexus base URL override; empty resolves the URL from the mounted nexus-admin Connector
+    name: nexusUrl
+    type: string
+  - default: ""
+    description: Optional GitLab base URL override; empty resolves the URL from the mounted gitlab-admin Connector
+    name: gitlabUrl
+    type: string
+  - default: "300"
+    description: Duration in seconds after which a project reconciliation Lease is considered expired
+    name: lockDurationSeconds
+    type: string
+  - default: "600"
+    description: Maximum time in seconds to wait for another reconciliation of the same project to release its lock
+    name: lockWaitSeconds
+    type: string
+  results:
+  - description: Namespace in which the generated project Connectors are stored
+    name: inner-namespace
+    value: $(tasks.prepare-project-context.results.innerNs)
+  tasks:
+  - name: prepare-project-context
+    params:
+    - name: namespace
+      value: $(params.namespace)
+    - name: project
+      value: $(params.project)
+    - name: holder
+      value: $(context.pipelineRun.name)
+    - name: runNamespace
+      value: $(context.pipelineRun.namespace)
+    - name: nexusUrl
+      value: $(params.nexusUrl)
+    - name: gitlabUrl
+      value: $(params.gitlabUrl)
+    - name: nexusAdmin
+      value: $(params.nexusAdmin)
+    - name: gitlabAdmin
+      value: $(params.gitlabAdmin)
+    - name: sonarqubeAdmin
+      value: $(params.sonarqubeAdmin)
+    - name: enableNexus
+      value: $(params.enableNexus)
+    - name: enableGitLab
+      value: $(params.enableGitLab)
+    - name: enableHarbor
+      value: $(params.enableHarbor)
+    - name: enableSonarQube
+      value: $(params.enableSonarQube)
+    - name: lockDurationSeconds
+      value: $(params.lockDurationSeconds)
+    - name: lockWaitSeconds
+      value: $(params.lockWaitSeconds)
+    taskSpec:
+      metadata: {}
+      params:
+      - name: namespace
+        type: string
+      - name: project
+        type: string
+      - name: holder
+        type: string
+      - name: runNamespace
+        type: string
+      - name: nexusUrl
+        type: string
+      - name: gitlabUrl
+        type: string
+      - name: enableNexus
+        type: string
+      - name: enableGitLab
+        type: string
+      - name: enableHarbor
+        type: string
+      - name: enableSonarQube
+        type: string
+      - name: lockDurationSeconds
+        type: string
+      - name: lockWaitSeconds
+        type: string
+      results:
+      - name: innerNs
+        type: string
+      - name: needsNexus
+        type: string
+      - name: needsGitlab
+        type: string
+      - name: needsSonarqube
+        type: string
+      - name: nexusUrl
+        type: string
+      - name: gitlabUrl
+        type: string
+      - name: harborImagePullSecrets
+        type: array
+      steps:
+      - name: resolve-context
+        image: ${REGISTRY}/alauda-connectors/kubectl:v1.33
+        computeResources: {}
+        env:
+        - name: TARGET_NAMESPACE
+          value: $(params.namespace)
+        - name: PROJECT
+          value: $(params.project)
+        securityContext: &restrictedStepSecurityContext
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          runAsNonRoot: true
+          seccompProfile:
+            type: RuntimeDefault
+        script: |
+          #!/usr/bin/env sh
+          set -eu
+
+          log() { printf '[%s] [context] %s\n' "$1" "$2"; }
+          [ -n "$PROJECT" ] || { log ERROR "project must not be empty"; exit 1; }
+
+          log INFO "resolving project context for ${TARGET_NAMESPACE}"
+          actual_project="$(kubectl get namespace "$TARGET_NAMESPACE" -o jsonpath='{.metadata.labels.cpaas\.io/project}')"
+          [ "$actual_project" = "$PROJECT" ] || {
+            log ERROR "namespace project label '${actual_project}' does not match '${PROJECT}'"
+            exit 1
+          }
+          inner_ns="$(kubectl get namespace "$TARGET_NAMESPACE" -o jsonpath='{.metadata.annotations.cpaas\.io/project-inner-namespace}')"
+          [ -n "$inner_ns" ] || { log ERROR "missing cpaas.io/project-inner-namespace annotation"; exit 1; }
+          printf '%s' "$inner_ns" > "$(results.innerNs.path)"
+          log INFO "inner namespace: ${inner_ns}"
+
+      - name: acquire-project-lock
+        image: ${REGISTRY}/alauda-connectors/kubectl:v1.33
+        computeResources: {}
+        env:
+        - name: HOLDER
+          value: $(params.holder)
+        - name: RUN_NAMESPACE
+          value: $(params.runNamespace)
+        - name: LOCK_DURATION_SECONDS
+          value: $(params.lockDurationSeconds)
+        - name: LOCK_WAIT_SECONDS
+          value: $(params.lockWaitSeconds)
+        securityContext: *restrictedStepSecurityContext
+        script: |
+          #!/usr/bin/env sh
+          set -eu
+
+          lock_name=connector-autocreate
+          retry_seconds=5
+          wait_log_interval_seconds=15
+          holder="$HOLDER"
+          run_ns="$RUN_NAMESPACE"
+          duration="$LOCK_DURATION_SECONDS"
+          wait_seconds="$LOCK_WAIT_SECONDS"
+          inner_ns="$(cat "$(results.innerNs.path)")"
+
+          log() { printf '[%s] [%s] %s\n' "$1" "$2" "$3"; }
+
+          validate_inputs() {
+            case "$duration:$wait_seconds" in
+              *[!0-9:]*|:*) log ERROR lock "lock durations must be positive integers"; return 1 ;;
+            esac
+            if [ "$duration" -le 0 ] || [ "$wait_seconds" -le 0 ]; then
+              log ERROR lock "lock durations must be greater than zero"
+              return 1
+            fi
+          }
+
+          discover_lease_resource() {
+            response="$(mktemp)"
+            error="$(mktemp)"
+            if kubectl get --raw /apis/coordination.k8s.io/v1 >"$response" 2>"$error"; then
+              if grep -Eq '"name"[[:space:]]*:[[:space:]]*"leases"' "$response"; then
+                rm -f "$response" "$error"
+                return 0
+              fi
+            elif ! grep -Eq 'NotFound|404|the server could not find the requested resource' "$error"; then
+              cat "$error" >&2
+              rm -f "$response" "$error"
+              log ERROR lock "failed to discover coordination.k8s.io/v1 Lease resource"
+              return 1
+            fi
+            rm -f "$response" "$error"
+            log WARN lock "coordination.k8s.io/v1 Lease resource is not served; continuing without project-level concurrency protection"
+            return 2
+          }
+
+          create_lock() {
+            create_error="$(mktemp)"
+            if cat <<EOF | kubectl create -f - >/dev/null 2>"$create_error"
+          apiVersion: coordination.k8s.io/v1
+          kind: Lease
+          metadata:
+            name: ${lock_name}
+            namespace: ${inner_ns}
+            labels:
+              app.kubernetes.io/component: connector-auto-create
+          spec:
+            holderIdentity: ${holder}
+            leaseDurationSeconds: ${duration}
+            acquireTime: "$(date -u +%Y-%m-%dT%H:%M:%S.000000Z)"
+            renewTime: "$(date -u +%Y-%m-%dT%H:%M:%S.000000Z)"
+          EOF
+            then
+              rm -f "$create_error"
+              return 0
+            fi
+            if grep -q 'AlreadyExists' "$create_error"; then
+              rm -f "$create_error"
+              return 2
+            fi
+            cat "$create_error" >&2
+            rm -f "$create_error"
+            return 1
+          }
+
+          read_lock_state() {
+            if ! state="$(kubectl get lease "$lock_name" -n "$inner_ns" \
+                -o jsonpath='{.spec.holderIdentity}{"|"}{.spec.renewTime}{"|"}{.spec.leaseDurationSeconds}{"|"}{.metadata.resourceVersion}')"; then
+              log ERROR lock "failed to inspect project provisioning lock ${inner_ns}/${lock_name}"
+              return 1
+            fi
+            old_ifs="$IFS"
+            IFS='|'
+            read -r current_holder renew_time lease_duration resource_version <<EOF
+          $state
+          EOF
+            IFS="$old_ifs"
+          }
+
+          holder_is_terminal() {
+            holder_state=""
+            holder_exists=false
+            [ -n "$current_holder" ] || return 1
+            if kubectl get pipelinerun "$current_holder" -n "$run_ns" >/dev/null 2>&1; then
+              holder_exists=true
+              holder_state="$(kubectl get pipelinerun "$current_holder" -n "$run_ns" \
+                -o jsonpath='{.status.conditions[-1].status}' 2>/dev/null || true)"
+            fi
+            [ "$holder_state" = "True" ] || [ "$holder_state" = "False" ]
+          }
+
+          lease_is_expired() {
+            [ -n "$renew_time" ] && [ -n "$lease_duration" ] || return 1
+            normalized="$(printf '%s\n' "$renew_time" | sed 's/\.[0-9][0-9]*Z$/Z/')"
+            if ! renew_epoch="$(date -D '%Y-%m-%dT%H:%M:%SZ' -d "$normalized" +%s 2>/dev/null)"; then
+              log ERROR lock "cannot parse Lease renewTime: ${renew_time}"
+              return 2
+            fi
+            [ $((renew_epoch + lease_duration)) -le "$(date +%s)" ]
+          }
+
+          lock_is_reclaimable() {
+            [ -z "$current_holder" ] && return 0
+            holder_is_terminal && return 0
+            if [ "$holder_exists" = false ]; then
+              if lease_is_expired; then return 0; else expired_status=$?; fi
+              [ "$expired_status" -ne 2 ] || return 2
+            fi
+            return 1
+          }
+
+          take_over_lock() {
+            now="$(date -u +%Y-%m-%dT%H:%M:%S.000000Z)"
+            kubectl patch lease "$lock_name" -n "$inner_ns" --type=json \
+              -p="[{\"op\":\"test\",\"path\":\"/metadata/resourceVersion\",\"value\":\"${resource_version}\"},{\"op\":\"add\",\"path\":\"/spec/holderIdentity\",\"value\":\"${holder}\"},{\"op\":\"add\",\"path\":\"/spec/acquireTime\",\"value\":\"${now}\"},{\"op\":\"add\",\"path\":\"/spec/renewTime\",\"value\":\"${now}\"}]" \
+              >/dev/null 2>&1
+          }
+
+          acquire_lock() {
+            waited=0
+            last_logged_holder=""
+            while true; do
+              if create_lock; then return 0; else create_status=$?; fi
+              if [ "$create_status" -ne 2 ]; then
+                log ERROR lock "failed to create project provisioning lock ${inner_ns}/${lock_name}"
+                return "$create_status"
+              fi
+              read_lock_state || return 1
+              [ "$current_holder" = "$holder" ] && return 0
+              if lock_is_reclaimable; then
+                take_over_lock && return 0
+              else
+                reclaim_status=$?
+                [ "$reclaim_status" -ne 2 ] || return 1
+              fi
+              if [ "$current_holder" != "$last_logged_holder" ] || [ $((waited % wait_log_interval_seconds)) -eq 0 ]; then
+                log INFO lock "waiting for lock ${inner_ns}/${lock_name} holder=${current_holder:-<empty>} waited=${waited}s timeout=${wait_seconds}s; retrying in ${retry_seconds}s"
+                last_logged_holder="$current_holder"
+              fi
+              waited=$((waited + retry_seconds))
+              if [ "$waited" -ge "$wait_seconds" ]; then
+                log ERROR lock "timed out waiting for lock held by ${current_holder}"
+                return 1
+              fi
+              sleep "$retry_seconds"
+            done
+          }
+
+          validate_inputs
+          if discover_lease_resource; then
+            acquire_lock
+            if [ "$waited" -gt 0 ]; then
+              log INFO lock "acquired ${inner_ns}/${lock_name} holder=${holder} after waiting ${waited} seconds; duration=${duration}s"
+            else
+              log INFO lock "acquired ${inner_ns}/${lock_name} holder=${holder} duration=${duration}s"
+            fi
+          else
+            discovery_status=$?
+            [ "$discovery_status" -eq 2 ] || exit "$discovery_status"
+          fi
+
+      - name: inspect-project
+        image: ${REGISTRY}/alauda-connectors/kubectl:v1.33
+        computeResources: {}
+        env:
+        - name: PROJECT
+          value: $(params.project)
+        - name: RUN_NAMESPACE
+          value: $(params.runNamespace)
+        - name: ENABLE_NEXUS
+          value: $(params.enableNexus)
+        - name: ENABLE_GITLAB
+          value: $(params.enableGitLab)
+        - name: ENABLE_HARBOR
+          value: $(params.enableHarbor)
+        - name: ENABLE_SONARQUBE
+          value: $(params.enableSonarQube)
+        - name: NEXUS_URL_OVERRIDE
+          value: $(params.nexusUrl)
+        - name: GITLAB_URL_OVERRIDE
+          value: $(params.gitlabUrl)
+        - name: NEXUS_ADMIN
+          value: $(params.nexusAdmin)
+        - name: GITLAB_ADMIN
+          value: $(params.gitlabAdmin)
+        - name: SONARQUBE_ADMIN
+          value: $(params.sonarqubeAdmin)
+        securityContext: *restrictedStepSecurityContext
+        script: |
+          #!/usr/bin/env sh
+          set -eu
+
+          log() { printf '[%s] [%s] %s\n' "$1" "$2" "$3" >&2; }
+          inner_ns="$(cat "$(results.innerNs.path)")"
+          run_ns="$RUN_NAMESPACE"
+          nexus_url="$NEXUS_URL_OVERRIDE"
+          if [ "$ENABLE_NEXUS" = "true" ] && [ -z "$nexus_url" ]; then
+            nexus_url="$(kubectl get connector.connectors.alauda.io "$NEXUS_ADMIN" -n "$run_ns" \
+              -o jsonpath='{.spec.address}')"
+          fi
+          if [ "$ENABLE_NEXUS" = "true" ] && [ -z "$nexus_url" ]; then
+            echo "$NEXUS_ADMIN Connector has no spec.address" >&2
+            exit 1
+          fi
+          printf '%s' "$nexus_url" > "$(results.nexusUrl.path)"
+
+          gitlab_url="$GITLAB_URL_OVERRIDE"
+          if [ "$ENABLE_GITLAB" = "true" ] && [ -z "$gitlab_url" ]; then
+            gitlab_url="$(kubectl get connector.connectors.alauda.io "$GITLAB_ADMIN" -n "$run_ns" \
+              -o jsonpath='{.spec.address}')"
+          fi
+          if [ "$ENABLE_GITLAB" = "true" ] && [ -z "$gitlab_url" ]; then
+            echo "$GITLAB_ADMIN Connector has no spec.address" >&2
+            exit 1
+          fi
+          printf '%s' "$gitlab_url" > "$(results.gitlabUrl.path)"
+
+          sonar_url=""
+          if [ "$ENABLE_SONARQUBE" = "true" ]; then
+            sonar_url="$(kubectl get connector.connectors.alauda.io "$SONARQUBE_ADMIN" -n "$run_ns" \
+              -o jsonpath='{.spec.address}')"
+            sonar_url="${sonar_url%/}"
+            if [ -z "$sonar_url" ]; then
+              echo "$SONARQUBE_ADMIN Connector has no spec.address" >&2
+              exit 1
+            fi
+          fi
+
+          needs_connector() {
+            suffix="$1"
+            expected_address="$2"
+            connector="${PROJECT}-${suffix}"
+            expected_secret="${connector}-secret"
+            if ! kubectl get connector.connectors.alauda.io "$connector" -n "$inner_ns" >/dev/null 2>&1; then
+              log INFO connector "connector=${connector} exists=false expectedAddress=${expected_address} expectedSecret=${expected_secret} reconcile=true"
+              printf true
+              return
+            fi
+
+            ready="$(kubectl get connector.connectors.alauda.io "$connector" -n "$inner_ns" \
+              -o jsonpath='{range .status.conditions[?(@.type=="Ready")]}{.status}{end}' 2>/dev/null || true)"
+            actual_address="$(kubectl get connector.connectors.alauda.io "$connector" -n "$inner_ns" \
+              -o jsonpath='{.spec.address}' 2>/dev/null || true)"
+            secret_name="$(kubectl get connector.connectors.alauda.io "$connector" -n "$inner_ns" \
+              -o jsonpath='{.spec.auth.secretRef.name}' 2>/dev/null || true)"
+            secret_ns="$(kubectl get connector.connectors.alauda.io "$connector" -n "$inner_ns" \
+              -o jsonpath='{.spec.auth.secretRef.namespace}' 2>/dev/null || true)"
+            secret_exists=false
+            if kubectl get secret "$expected_secret" -n "$inner_ns" >/dev/null 2>&1; then
+              secret_exists=true
+            fi
+            reconcile=true
+            if [ "$ready" = "True" ] && [ "$actual_address" = "$expected_address" ] \
+                && [ "$secret_name" = "$expected_secret" ] && [ "$secret_ns" = "$inner_ns" ] \
+                && [ "$secret_exists" = "true" ]; then
+              reconcile=false
+            fi
+            log INFO connector "connector=${connector} expectedAddress=${expected_address} actualAddress=${actual_address} expectedSecret=${inner_ns}/${expected_secret} actualSecret=${secret_ns}/${secret_name} ready=${ready:-missing} secretExists=${secret_exists} reconcile=${reconcile}"
+            if [ "$reconcile" = "false" ]; then
+              printf false
+            else
+              printf true
+            fi
+          }
+
+          needs_connector nexus "$nexus_url" > "$(results.needsNexus.path)"
+          needs_connector gitlab "$gitlab_url" > "$(results.needsGitlab.path)"
+          needs_connector sonarqube "$sonar_url" > "$(results.needsSonarqube.path)"
+          pull_secret_name="${PROJECT}-harbor-pull"
+          namespace_names="$(kubectl get namespaces -l "cpaas.io/project=${PROJECT}" \
+            -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')"
+          harbor_target_count="$(printf '%s\n' "$namespace_names" | awk 'NF { count++ } END { print count + 0 }')"
+          printf '%s\n' "$namespace_names" | awk -v secret="$pull_secret_name" '
+            BEGIN { printf "["; separator = "" }
+            NF { printf "%s\"%s/%s\"", separator, $0, secret; separator = "," }
+            END { print "]" }
+          ' > "$(results.harborImagePullSecrets.path)"
+          log INFO summary "harborEnabled=${ENABLE_HARBOR} harborPullSecretTargets=${harbor_target_count} nexus=$(cat "$(results.needsNexus.path)") gitlab=$(cat "$(results.needsGitlab.path)") sonarqube=$(cat "$(results.needsSonarqube.path)")"
+  - name: harbor-connector-automatic-creation
+    params:
+    - name: connector
+      value: $(tasks.prepare-project-context.results.innerNs)/$(params.project)-harbor
+    - name: harborProjects
+      value:
+      - $(params.project)
+    - name: permissions
+      value:
+      - repository:pull,push
+    - name: robotTokenPolicy
+      value: reuse
+    - name: bindImagePullSecretToSA
+      value: $(params.bindImagePullSecretToSA)
+    - name: serviceAccountName
+      value: $(params.serviceAccountName)
+    - name: imagePullSecrets
+      value: $(tasks.prepare-project-context.results.harborImagePullSecrets[*])
+    runAfter:
+    - prepare-project-context
+    taskRef:
+      kind: Task
+      name: harbor-connector-automatic-creation
+    when:
+    - input: $(params.enableHarbor)
+      operator: in
+      values:
+      - "true"
+    workspaces:
+    - name: harbor-config
+      workspace: harbor-admin
+  - name: nexus-connector-automatic-creation
+    params:
+    - name: connector
+      value: $(tasks.prepare-project-context.results.innerNs)/$(params.project)-nexus
+    - name: nexusUrl
+      value: $(tasks.prepare-project-context.results.nexusUrl)
+    - name: nexusRepositories
+      value: |
+        provision:
+          - name: $(params.project)-maven-hosted
+            format: maven2
+            type: hosted
+            actions: [read, browse, add, edit]
+    runAfter:
+    - prepare-project-context
+    taskRef:
+      kind: Task
+      name: nexus-connector-automatic-creation
+    when:
+    - input: $(params.enableNexus)
+      operator: in
+      values:
+      - "true"
+    - input: $(tasks.prepare-project-context.results.needsNexus)
+      operator: in
+      values:
+      - "true"
+    workspaces:
+    - name: nexus-secret
+      workspace: nexus-admin
+  - name: gitlab-connector-automatic-creation
+    params:
+    - name: connector
+      value: $(tasks.prepare-project-context.results.innerNs)/$(params.project)-gitlab
+    - name: tenantGroup
+      value: $(params.gitlabParentGroup)
+    - name: gitlabUrl
+      value: $(tasks.prepare-project-context.results.gitlabUrl)
+    - name: tokenDuration
+      value: $(params.tokenDurationDays)
+    runAfter:
+    - prepare-project-context
+    taskRef:
+      kind: Task
+      name: gitlab-connector-automatic-creation
+    when:
+    - input: $(params.enableGitLab)
+      operator: in
+      values:
+      - "true"
+    - input: $(tasks.prepare-project-context.results.needsGitlab)
+      operator: in
+      values:
+      - "true"
+    workspaces:
+    - name: gitlabconfig
+      workspace: gitlab-admin
+  - name: sonarqube-auto-create
+    params:
+    - name: connector
+      value: $(tasks.prepare-project-context.results.innerNs)/$(params.project)-sonarqube
+    - name: projectPattern
+      value: ^$(params.sonarPatternPrefix)$(params.project)$(params.sonarPatternSuffix).*
+    - name: tenant
+      value: $(params.project)
+    - name: tokenDuration
+      value: $(params.tokenDurationDays)
+    runAfter:
+    - prepare-project-context
+    taskRef:
+      kind: Task
+      name: sonarqube-connector-automatic-creation
+    when:
+    - input: $(params.enableSonarQube)
+      operator: in
+      values:
+      - "true"
+    - input: $(tasks.prepare-project-context.results.needsSonarqube)
+      operator: in
+      values:
+      - "true"
+    workspaces:
+    - name: sonarqube-config
+      workspace: sonar-admin
+  finally:
+  - name: release-project-lock
+    params:
+    - name: namespace
+      value: $(params.namespace)
+    - name: holder
+      value: $(context.pipelineRun.name)
+    taskSpec:
+      metadata: {}
+      params:
+      - name: namespace
+        type: string
+      - name: holder
+        type: string
+      steps:
+      - name: release
+        image: ${REGISTRY}/alauda-connectors/kubectl:v1.33
+        securityContext: *restrictedStepSecurityContext
+        computeResources: {}
+        script: |
+          #!/usr/bin/env sh
+          set -eu
+          inner_ns="$(kubectl get namespace "$(params.namespace)" \
+            -o jsonpath='{.metadata.annotations.cpaas\.io/project-inner-namespace}' 2>/dev/null || true)"
+          [ -n "$inner_ns" ] || exit 0
+          current_holder="$(kubectl get lease connector-autocreate -n "$inner_ns" \
+            -o jsonpath='{.spec.holderIdentity}' 2>/dev/null || true)"
+          if [ "$current_holder" = "$(params.holder)" ]; then
+            kubectl delete lease connector-autocreate -n "$inner_ns" --ignore-not-found
+            echo "released project provisioning lock ${inner_ns}/connector-autocreate"
+          fi
+  workspaces:
+  - name: harbor-admin
+    description: Harbor administrator configuration mounted by the harbor-admin Connector
+  - name: nexus-admin
+    description: Nexus administrator credentials and connection configuration mounted by the nexus-admin Connector
+  - name: gitlab-admin
+    description: GitLab administrator token and connection configuration mounted by the gitlab-admin Connector
+  - name: sonar-admin
+    description: SonarQube administrator credentials and connection configuration mounted by the sonarqube-admin Connector
+  - name: target-kubeconfig
+    description: Reserved optional kubeconfig workspace; current tasks reconcile resources in the PipelineRun cluster
+    optional: true
+EOF
+```
+
+### Step 3 — Install Triggers
+
+Apply the EventListener RBAC, TriggerBinding, TriggerTemplate, and
+EventListener:
+
+```bash
+cat <<'EOF' | envsubst '$TARGET_NS $REGISTRY $HARBOR_ADMIN $NEXUS_ADMIN $GITLAB_ADMIN $SONARQUBE_ADMIN' | kubectl apply -f -
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: autocreate-el-sa
+  namespace: $TARGET_NS
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: autocreate-el-sa-binding
+  namespace: $TARGET_NS
+  labels:
+    connectors.alauda.io/install-flag: auto-create
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: tekton-triggers-eventlistener-roles
+subjects:
+  - kind: ServiceAccount
+    name: autocreate-el-sa
+    namespace: $TARGET_NS
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: autocreate-el-sa-clusterbinding
+  labels:
+    connectors.alauda.io/install-flag: auto-create
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: tekton-triggers-eventlistener-clusterroles
+subjects:
+  - kind: ServiceAccount
+    name: autocreate-el-sa
+    namespace: $TARGET_NS
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: autocreate-el-sa-pipelinerun-creator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: tekton-triggers-eventlistener-roles
+subjects:
+  - kind: ServiceAccount
+    name: autocreate-el-sa
+    namespace: $TARGET_NS
+---
+apiVersion: triggers.tekton.dev/v1beta1
+kind: TriggerBinding
+metadata:
+  name: autocreate-binding
+spec:
+  params:
+    - name: namespace
+      value: $(body.metadata.name)
+    - name: project
+      value: $(extensions.project)
+---
+apiVersion: triggers.tekton.dev/v1beta1
+kind: TriggerTemplate
+metadata:
+  name: autocreate-template
+spec:
+  params:
+    - name: namespace
+    - name: project
+    - default: connector-auto-create
+      name: pipelineRef
+    - default: connector-auto-create-pipeline
+      name: pipelineSA
+    - default: $HARBOR_ADMIN
+      name: harborAdmin
+    - default: $NEXUS_ADMIN
+      name: nexusAdmin
+    - default: $GITLAB_ADMIN
+      name: gitlabAdmin
+    - default: $SONARQUBE_ADMIN
+      name: sonarqubeAdmin
+  resourcetemplates:
+    - apiVersion: tekton.dev/v1
+      kind: PipelineRun
+      metadata:
+        generateName: autocreate-triggered-
+        labels:
+          autocreate.connectors.alauda.io/project: $(tt.params.project)
+      spec:
+        params:
+          - name: namespace
+            value: $(tt.params.namespace)
+          - name: project
+            value: $(tt.params.project)
+          - name: harborAdmin
+            value: $(tt.params.harborAdmin)
+          - name: nexusAdmin
+            value: $(tt.params.nexusAdmin)
+          - name: gitlabAdmin
+            value: $(tt.params.gitlabAdmin)
+          - name: sonarqubeAdmin
+            value: $(tt.params.sonarqubeAdmin)
+          - name: enableHarbor
+            value: "true"
+          - name: enableNexus
+            value: "true"
+          - name: enableGitLab
+            value: "true"
+          - name: enableSonarQube
+            value: "true"
+          - name: tokenDurationDays
+            value: "30"
+          - name: lockDurationSeconds
+            value: "300"
+          - name: lockWaitSeconds
+            value: "600"
+          - name: gitlabParentGroup
+            value: $(tt.params.project)
+        pipelineRef:
+          name: $(tt.params.pipelineRef)
+        taskRunTemplate:
+          podTemplate:
+            securityContext:
+              fsGroup: 65532
+              runAsNonRoot: true
+              seccompProfile:
+                type: RuntimeDefault
+          serviceAccountName: $(tt.params.pipelineSA)
+        workspaces:
+          - csi:
+              driver: connectors-csi
+              readOnly: true
+              volumeAttributes:
+                configuration.names: harbor-cli-config
+                connector.name: $HARBOR_ADMIN
+            name: harbor-admin
+          - csi:
+              driver: connectors-csi
+              readOnly: true
+              volumeAttributes:
+                connector.name: $NEXUS_ADMIN
+            name: nexus-admin
+          - csi:
+              driver: connectors-csi
+              readOnly: true
+              volumeAttributes:
+                configuration.names: gitlabconfig
+                connector.name: $GITLAB_ADMIN
+            name: gitlab-admin
+          - csi:
+              driver: connectors-csi
+              readOnly: true
+              volumeAttributes:
+                configuration.names: sonar-scanner
+                connector.name: $SONARQUBE_ADMIN
+            name: sonar-admin
+---
+apiVersion: triggers.tekton.dev/v1beta1
+kind: EventListener
+metadata:
+  name: autocreate-el
+spec:
+  namespaceSelector: {}
+  resources: {}
+  serviceAccountName: autocreate-el-sa
+  triggers:
+    - bindings:
+        - kind: TriggerBinding
+          ref: autocreate-binding
+      interceptors:
+        - params:
+            - name: filter
+              value: (header.match('ce-type', 'dev.knative.apiserver.resource.add') || header.match('ce-type', 'dev.knative.apiserver.resource.update')) && body.metadata.labels['cpaas.io/project'] != ''
+            - name: overlays
+              value:
+                - expression: body.metadata.labels['cpaas.io/project']
+                  key: project
+          ref:
+            kind: ClusterInterceptor
+            name: cel
+      name: autocreate-trigger
+      template:
+        ref: autocreate-template
+EOF
+```
+
+---
+
+## Multi-cluster Installation
+
+Use this section when project namespaces live on separate business clusters.
+Repeat steps 1–3 for each business cluster, using a different `CLUSTER_NAME`
+each time.
+
+Steps 2 and 3 (Pipeline + Pipeline RBAC) are identical to the single-cluster
+installation — apply them once on the management cluster if not already done.
+
+### Step 1 — Prepare the target cluster credential
+
+Export `CLUSTER_NAME` first — the same value is reused throughout:
+
+```bash
+export CLUSTER_NAME=<cluster-name>   # e.g. prod-biz-01
+export TARGET_NS=<auto-create-namespace>
+```
+
+#### Option A — kubeconfig Secret
+
+Create a Secret in the management namespace that holds the kubeconfig for
+the business cluster:
+
+```bash
+kubectl create secret generic target-kubeconfig-${CLUSTER_NAME} \
+  --from-file=kubeconfig=<path-to-cluster-kubeconfig> \
+  -n "$TARGET_NS"
+```
+
+#### Option B — Kubernetes Connector
+
+If you prefer to manage the cluster credential through the Connectors system,
+create a Kubernetes Connector for the business cluster instead. See the
+[Kubernetes Connector quick start](../connectors-k8s/quick_start.mdx) for
+how to create the Connector, then use the CSI volume form shown in the
+TriggerTemplate workspace below.
+
+### Step 2 — Create TriggerBinding and TriggerTemplate
+
+Apply the management cluster Tekton Trigger resources:
+
+```bash
+export HARBOR_ADMIN=<harbor-admin-connector-name>
+export NEXUS_ADMIN=<nexus-admin-connector-name>
+export GITLAB_ADMIN=<gitlab-admin-connector-name>
+export SONARQUBE_ADMIN=<sonarqube-admin-connector-name>
+
+cat <<'EOF' | envsubst | kubectl apply -f -
+---
+apiVersion: triggers.tekton.dev/v1beta1
+kind: TriggerBinding
+metadata:
+  name: autocreate-binding-$CLUSTER_NAME
+  namespace: $TARGET_NS
+spec:
+  params:
+    - name: namespace
+      value: $(body.metadata.name)
+    - name: project
+      value: $(extensions.project)
+---
+apiVersion: triggers.tekton.dev/v1beta1
+kind: TriggerTemplate
+metadata:
+  name: autocreate-template-$CLUSTER_NAME
+  namespace: $TARGET_NS
+spec:
+  params:
+    - name: namespace
+    - name: project
+    - default: connector-auto-create
+      name: pipelineRef
+    - default: connector-auto-create-pipeline
+      name: pipelineSA
+  resourcetemplates:
+    - apiVersion: tekton.dev/v1
+      kind: PipelineRun
+      metadata:
+        generateName: autocreate-triggered-
+        labels:
+          autocreate.connectors.alauda.io/project: $(tt.params.project)
+          autocreate.connectors.alauda.io/cluster: $CLUSTER_NAME
+      spec:
+        params:
+          - name: namespace
+            value: $(tt.params.namespace)
+          - name: project
+            value: $(tt.params.project)
+          - name: enableHarbor
+            value: "true"
+          - name: enableNexus
+            value: "true"
+          - name: enableGitLab
+            value: "true"
+          - name: enableSonarQube
+            value: "true"
+          - name: tokenDurationDays
+            value: "30"
+          - name: lockDurationSeconds
+            value: "300"
+          - name: lockWaitSeconds
+            value: "600"
+          - name: gitlabParentGroup
+            value: $(tt.params.project)
+        pipelineRef:
+          name: $(tt.params.pipelineRef)
+        taskRunTemplate:
+          podTemplate:
+            securityContext:
+              fsGroup: 65532
+              runAsNonRoot: true
+              seccompProfile:
+                type: RuntimeDefault
+          serviceAccountName: $(tt.params.pipelineSA)
+        workspaces:
+          - csi:
+              driver: connectors-csi
+              readOnly: true
+              volumeAttributes:
+                configuration.names: harbor-cli-config
+                connector.name: $HARBOR_ADMIN
+            name: harbor-admin
+          - csi:
+              driver: connectors-csi
+              readOnly: true
+              volumeAttributes:
+                connector.name: $NEXUS_ADMIN
+            name: nexus-admin
+          - csi:
+              driver: connectors-csi
+              readOnly: true
+              volumeAttributes:
+                configuration.names: gitlabconfig
+                connector.name: $GITLAB_ADMIN
+            name: gitlab-admin
+          - csi:
+              driver: connectors-csi
+              readOnly: true
+              volumeAttributes:
+                configuration.names: sonar-scanner
+                connector.name: $SONARQUBE_ADMIN
+            name: sonar-admin
+          # Option A — kubeconfig Secret (matches step 1 Option A)
+          - name: target-kubeconfig
+            secret:
+              secretName: target-kubeconfig-$CLUSTER_NAME
+          # Option B — Kubernetes Connector (matches step 1 Option B)
+          # Replace the entry above with the block below when using a
+          # Kubernetes Connector instead of a plain kubeconfig Secret:
+          #
+          # - name: target-kubeconfig
+          #   csi:
+          #     driver: connectors-csi
+          #     readOnly: true
+          #     volumeAttributes:
+          #       connector.name: <k8s-connector-name>
+EOF
+```
+
+### Step 3 — Create the EventListener
+
+Choose NodePort or Ingress based on your network setup. The EventListener
+RBAC (`autocreate-el-sa`) is shared — apply it once from the single-cluster
+Step 3 if not already done.
+
+#### Option A — NodePort
+
+Set `serviceType: NodePort` directly on the EventListener object. Patching
+the generated Service has no effect because the controller resets it.
+
+```bash
+cat <<'EOF' | envsubst | kubectl apply -f -
+apiVersion: triggers.tekton.dev/v1beta1
+kind: EventListener
+metadata:
+  name: autocreate-el-$CLUSTER_NAME
+  namespace: $TARGET_NS
+spec:
+  serviceAccountName: autocreate-el-sa
+  resources:
+    kubernetesResource:
+      serviceType: NodePort
+  triggers:
+    - name: autocreate-trigger-$CLUSTER_NAME
+      interceptors:
+        - ref:
+            kind: ClusterInterceptor
+            name: cel
+          params:
+            - name: filter
+              value: >-
+                (header.match('ce-type', 'dev.knative.apiserver.resource.add') ||
+                 header.match('ce-type', 'dev.knative.apiserver.resource.update')) &&
+                has(body.metadata.labels) &&
+                body.metadata.labels['cpaas.io/project'] != ''
+            - name: overlays
+              value:
+                - expression: body.metadata.labels['cpaas.io/project']
+                  key: project
+      bindings:
+        - kind: TriggerBinding
+          ref: autocreate-binding-$CLUSTER_NAME
+      template:
+        ref: autocreate-template-$CLUSTER_NAME
+EOF
+```
+
+Query the allocated NodePort — you will use it as `K_SINK` in step 4:
+
+```bash
+kubectl get svc el-autocreate-el-${CLUSTER_NAME} -n "$TARGET_NS" \
+  -o jsonpath='{.spec.ports[0].nodePort}'
+```
+
+#### Option B — Ingress
+
+If NodePort is not available, use `ClusterIP` (the default) and expose the
+EventListener through an Ingress:
+
+```bash
+cat <<'EOF' | envsubst | kubectl apply -f -
+apiVersion: triggers.tekton.dev/v1beta1
+kind: EventListener
+metadata:
+  name: autocreate-el-$CLUSTER_NAME
+  namespace: $TARGET_NS
+spec:
+  serviceAccountName: autocreate-el-sa
+  resources:
+    kubernetesResource:
+      serviceType: ClusterIP
+  triggers:
+    - name: autocreate-trigger-$CLUSTER_NAME
+      interceptors:
+        - ref:
+            kind: ClusterInterceptor
+            name: cel
+          params:
+            - name: filter
+              value: >-
+                (header.match('ce-type', 'dev.knative.apiserver.resource.add') ||
+                 header.match('ce-type', 'dev.knative.apiserver.resource.update')) &&
+                has(body.metadata.labels) &&
+                body.metadata.labels['cpaas.io/project'] != ''
+            - name: overlays
+              value:
+                - expression: body.metadata.labels['cpaas.io/project']
+                  key: project
+      bindings:
+        - kind: TriggerBinding
+          ref: autocreate-binding-$CLUSTER_NAME
+      template:
+        ref: autocreate-template-$CLUSTER_NAME
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: autocreate-el-$CLUSTER_NAME
+  namespace: $TARGET_NS
+spec:
+  rules:
+    - host: autocreate-el-$CLUSTER_NAME.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: el-autocreate-el-$CLUSTER_NAME
+                port:
+                  number: 8080
+EOF
+```
+
+Use `http://autocreate-el-$CLUSTER_NAME.example.com` as the `K_SINK` in
+step 4.
+
+### Step 4 — Deploy the adapter on the business cluster
+
+Switch to the **business cluster** kubeconfig, then deploy the namespace
+watcher adapter with `K_SINK` pointing at the management cluster EventListener:
+
+```bash
+# NodePort
+export MGMT_NODE_IP=<management-cluster-node-ip>
+export EL_NODE_PORT=<nodeport-from-step-3>
+export K_SINK=http://$MGMT_NODE_IP:$EL_NODE_PORT
+
+# Ingress (use instead of the two lines above)
+# export K_SINK=http://autocreate-el-$CLUSTER_NAME.example.com
+
+cat <<'EOF' | envsubst '$TARGET_NS $REGISTRY $K_SINK' | kubectl apply -f -
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ns-event-source
+  namespace: $TARGET_NS
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ns-event-source
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ns-event-source
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: ns-event-source
+subjects:
+  - kind: ServiceAccount
+    name: ns-event-source
+    namespace: $TARGET_NS
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ns-event-source
+  namespace: $TARGET_NS
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ns-event-source
+  template:
+    metadata:
+      labels:
+        app: ns-event-source
+    spec:
+      serviceAccountName: ns-event-source
+      enableServiceLinks: false
+      containers:
+        - name: receive-adapter
+          image: ${REGISTRY}/alauda-connectors/connectors-extensions/apiserver-receive-adapter:v1.22.0-alauda.3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 100Mi
+            limits:
+              cpu: 200m
+              memory: 200Mi
+          env:
+            - name: K_SINK
+              value: $K_SINK
+            - name: K_SOURCE_CONFIG
+              value: '{"allNamespaces":true,"resources":[{"gvr":{"Group":"","Version":"v1","Resource":"namespaces"},"selector":"cpaas.io/project"}],"mode":"Resource"}'
+            - name: NAME
+              value: ns-event-source
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+EOF
+```
+
+Repeat steps 1–4 for each additional business cluster, using a different
+`CLUSTER_NAME` each time.
+
+---
+
+## Configuration Reference
+
+### Adjusting which connectors are created
+
+By default, the TriggerTemplate enables all four connector types. To disable
+one, edit the TriggerTemplate and set the corresponding `enable*` param to
+`"false"`, then remove the matching workspace entry:
+
+| Connector | Set this param to disable | Workspace to remove |
+|---|---|---|
+| Harbor | `enableHarbor: "false"` | `harbor-admin` |
+| Nexus | `enableNexus: "false"` | `nexus-admin` |
+| GitLab | `enableGitLab: "false"` | `gitlab-admin` |
+| SonarQube | `enableSonarQube: "false"` | `sonar-admin` |
+
+### Pipeline parameters
+
+The following parameters are available on the `connector-auto-create` Pipeline.
+Override them in the TriggerTemplate's `resourcetemplates[].spec.params`
+section to change behavior without modifying the Pipeline itself.
+
+| Parameter | Default | Description |
+|---|---|---|
+| `enableHarbor` | `"true"` | Reconcile the project Harbor Connector and image pull credentials |
+| `bindImagePullSecretToSA` | `"true"` | Bind the generated Harbor image pull Secret to the service account |
+| `serviceAccountName` | `"default"` | ServiceAccount that receives the Harbor image pull Secret |
+| `harborAdmin` | required | Harbor administrator Connector name |
+| `nexusAdmin` | required | Nexus administrator Connector name |
+| `gitlabAdmin` | required | GitLab administrator Connector name |
+| `sonarqubeAdmin` | required | SonarQube administrator Connector name |
+| `enableNexus` | `"false"` | Reconcile the project Nexus Connector |
+| `enableGitLab` | `"false"` | Reconcile the project GitLab Connector |
+| `enableSonarQube` | `"false"` | Reconcile the project SonarQube Connector |
+| `tokenDurationDays` | `"30"` | Validity period (days) for GitLab and SonarQube tokens |
+| `gitlabParentGroup` | `""` | GitLab parent group path; required when GitLab is enabled |
+| `sonarPatternPrefix` | `""` | Regex prefix for SonarQube permission-template project-key pattern |
+| `sonarPatternSuffix` | `""` | Regex suffix for SonarQube permission-template project-key pattern |
+| `nexusUrl` | `""` | Nexus URL override; empty resolves from `nexus-admin` Connector |
+| `gitlabUrl` | `""` | GitLab URL override; empty resolves from `gitlab-admin` Connector |
+| `lockDurationSeconds` | `"300"` | Seconds before a project reconciliation lock expires |
+| `lockWaitSeconds` | `"600"` | Max seconds to wait for another run to release the lock |
+
+### Changing defaults via TriggerTemplate
+
+To permanently change a default for all future PipelineRuns, edit the
+`autocreate-template` (or `autocreate-template-$CLUSTER_NAME`) TriggerTemplate:
+
+```bash
+kubectl edit triggertemplate autocreate-template -n "$TARGET_NS"
+```
+
+Find the `spec.resourcetemplates[].spec.params` list and update the relevant
+value. For example, to change `tokenDurationDays` to 60:
+
+```yaml
+- name: tokenDurationDays
+  value: "60"
+```
+
+### Changing defaults via Pipeline
+
+Alternatively, edit the `connector-auto-create` Pipeline directly to change
+the `default` values of its params. This affects every TriggerTemplate that
+references the Pipeline:
+
+```bash
+kubectl edit pipeline connector-auto-create -n "$TARGET_NS"
+```
+
+Find the matching entry under `spec.params` and update its `default` field.
+
+---
+
+## How It Works
+
+Once installation is complete, the system runs automatically whenever an
+ACP project namespace is created or updated.
+
+### Trigger flow
+
+1. A namespace with the label `cpaas.io/project: <project-name>` is
+   created or updated on the watched cluster.
+2. The `ns-event-source` adapter detects the event and POSTs a CloudEvent
+   to the EventListener.
+3. The CEL interceptor filters for namespace events that carry a
+   `cpaas.io/project` label and extracts the project name.
+4. The TriggerTemplate creates a `PipelineRun` for the
+   `connector-auto-create` Pipeline, passing the namespace name and
+   project name as parameters.
+5. The Pipeline reconciles the project's Connectors — Harbor, Nexus,
+   GitLab, and SonarQube — creating them if they do not exist or are not
+   in a Ready state.
+
+### What gets created
+
+For each project, the Pipeline creates one Connector per enabled tool in
+the project's inner namespace (`cpaas.io/project-inner-namespace`):
+
+| Connector | Resource name | Enabled in provided TriggerTemplate | Pipeline default |
+|---|---|---|---|
+| Harbor | `<project>-harbor` | Yes | `"true"` |
+| Nexus | `<project>-nexus` | Yes¹ | `"false"` |
+| GitLab | `<project>-gitlab` | Yes¹ | `"false"` |
+| SonarQube | `<project>-sonarqube` | Yes¹ | `"false"` |
+
+¹ The TriggerTemplate in this doc explicitly overrides the Pipeline default to `"true"`.
+To disable a connector, set the corresponding `enable*` param to `"false"` in the TriggerTemplate
+(see [Configuration Reference](#configuration-reference)).
+
+The Pipeline is idempotent: if a Connector already exists and is Ready
+with the correct address and credentials, the reconciliation task skips
+it. A project-level `Lease` lock prevents concurrent PipelineRuns from
+racing on the same project.
+
+### Adjusting connector-specific parameters
+
+Each task exposes additional parameters for fine-grained control of the
+connector it manages — for example, which Harbor projects to include,
+which Nexus repositories to provision, or the GitLab parent group path.
+Add or override these parameters in the TriggerTemplate's
+`resourcetemplates[].spec.params` section.
+
+For the full list of parameters available on each task, see:
+
+- [Harbor Connector Automatic Creation Task](../connectors-harbor/how_to/using_harbor_connector_automatic_creation_task.mdx)
+- [Nexus Connector Automatic Creation Task](../connectors-nexus/how_to/using_nexus_connector_automatic_creation_task.mdx)
+- [GitLab Connector Automatic Creation Task](../connectors-gitlab/how_to/using_gitlab_connector_automatic_creation_task.mdx)
+- [SonarQube Connector Automatic Creation Task](../connectors-sonarqube/how_to/using_sonarqube_connector_automatic_creation_task.mdx)
+
+### Checking pipeline run results
+
+To see the PipelineRuns triggered for a project:
+
+```bash
+kubectl get pipelineruns -n "$TARGET_NS" \
+  -l autocreate.connectors.alauda.io/project=<project-name>
+```
+
+To inspect the Connectors created in the project's inner namespace:
+
+```bash
+kubectl get connectors -n <inner-namespace>
+```

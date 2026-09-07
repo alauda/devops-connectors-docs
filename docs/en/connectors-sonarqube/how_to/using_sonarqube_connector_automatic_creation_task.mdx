@@ -289,45 +289,29 @@ verified visibility and the cross-tenant denial.
 
 ## Rotation \{#rotation}
 
-The Task is idempotent: re-running it with the same params reuses the
-tenant user, template, and `provisioning` grant; the token is reused
-when it is still tracked by SonarQube **and** the tenant Secret holds
-a non-empty `token`. The simplest rotation is to re-run the same
-TaskRun on a cron — with one wrinkle (below) about when the Task
-actually mints a new token.
+The Task is idempotent for the tenant user, permission template, and
+`provisioning` grant. A token is different: every successful run revokes
+the existing token (when present), mints a new token, and rewrites the
+tenant Secret and Connector. Do not run overlapping TaskRuns for the same
+tenant, because the later run invalidates the token written by the earlier
+run.
 
-| State at cron time | Task behaviour |
-|--------------------|----------------|
-| `user_tokens/search` finds the token **and** Secret holds a non-empty `token`. | **Reuse** — no SonarQube write, no Secret rewrite. |
-| `user_tokens/search` misses (token revoked / never minted in this Secret's lifetime). | **Mint** — fresh token with `expirationDate = today UTC + tokenDuration`; SSA-rewrites the Secret. |
-| Tenant Secret deleted out-of-band. | **Mint** — same as above. |
-| `tokenDuration` or `tokenName` changed since last run. | **Revoke + mint** — identity-affecting inputs force re-issue. |
-| Permission template / user missing (deleted by operator). | **Recreate** — same as a fresh onboard. |
+| Resource state | Task behaviour |
+|---------------|----------------|
+| User, permission template, and grant exist. | **Reuse** these resources, then **revoke + mint** the token. |
+| Tenant Secret is missing or empty. | **Revoke + mint** and create the Secret. |
+| `tokenDuration` or `tokenName` changed. | **Revoke + mint** with the new token settings. |
+| Permission template or user is missing. | **Recreate** the missing resources, then **revoke + mint**. |
 
-The Task does **not** inspect `expirationDate`. SonarQube has no
-token-renew API; if a token is still in `user_tokens/search` but
-expired, the Task treats it as reused and the expiry surfaces at scan
-time as a `401`. The operator decides how to bridge this:
-
-- **Time-driven rotation (recommended).** Run the TaskRun on a
-  schedule shorter than `tokenDuration` (e.g. every 15 days for
-  `tokenDuration=30`), and before each run delete the tenant Secret.
-  The Task's next run sees the empty Secret, mints a fresh
-  `tokenDuration`-day token, and rewrites the Secret. The live token
-  always has `≥ tokenDuration/2` days left.
-- **Lazy rotation.** Schedule the TaskRun at `tokenDuration/2`
-  cadence with no other action. The Task reuses the token until
-  SonarQube revokes it on `expirationDate`; the next scan-time `401`
-  is followed by the next cron tick, which mints fresh. Simple, but
-  leaves a brief 401 window.
-- **No cron — manual on 401.** The Task only re-runs when an
-  operator triggers it after a scan-time 401. Suitable for
-  low-throughput tenants.
+Schedule the TaskRun at the desired rotation interval (for example, every
+15 days for `tokenDuration=30`). Do not delete the tenant Secret first; the
+Task revokes the old token and rewrites the Secret atomically from the new
+token. A scan that runs while the Secret is being updated can briefly fail,
+so coordinate rotation with the workload schedule where necessary.
 
 The exact cron wiring (Tekton-on-cron controller, `TriggerSchedule`,
 or a CronJob that `kubectl create`s the TaskRun) is operator-specific;
-the Task's contract is just "re-run me with the same params, after
-deleting the tenant Secret".
+the Task's contract is just "re-run me with the same params".
 
 ## Multi-tenant onboarding
 

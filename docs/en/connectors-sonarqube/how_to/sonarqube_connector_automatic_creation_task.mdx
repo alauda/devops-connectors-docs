@@ -12,7 +12,7 @@ a refreshable user token, and writes the tenant `sonarqube` Connector
 plus its token Secret to the target namespace.
 
 The Task is idempotent and safe to schedule on a recurring basis: the
-user token is refreshed on every run and auto-renewed before expiry.
+user token is revoked and re-minted on every successful run.
 
 For the operator walkthrough — prerequisites, onboarding, rotation, and
 offboarding — see
@@ -25,10 +25,7 @@ RBAC, ConnectorClass, ResourceInterface). The Task itself is
 user-applied per Tekton catalog convention.
 
 Pick a registry mirror reachable from the cluster and the namespace
-where you want the Task installed, then apply the manifest below. The
-generated block is kept in sync from
-`cmd/kodata/connectors-sonarqube-tektoncd/<version>/install.yaml` by
-`hack/sync_sonarqube_connector_automatic_creation_task_doc.sh`.
+where you want the Task installed, then apply the manifest below.
 
 - `REGISTRY`: the registry that hosts the
   `sonarqube-connector-automatic-creation` tool image (and any mirrored
@@ -74,7 +71,7 @@ metadata:
       - path: params.tokenDuration
         x-descriptors:
           - urn:alm:descriptor:label:en:Token Duration (days)
-          - 'urn:alm:descriptor:description:en:Validity of the SonarQube user token, in whole days (positive integer). The token is automatically renewed before it expires on each run, so the Task can be scheduled on a recurring basis'
+          - 'urn:alm:descriptor:description:en:Validity of the SonarQube user token, in whole days (positive integer). The Task revokes and re-mints the token on every run, so the Task can be scheduled on a recurring basis'
           - urn:alm:descriptor:com.tectonic.ui:text
           - urn:alm:descriptor:com.tectonic.ui:validation:required
     style.tekton.dev/displayParams: connector,tenant,projectPattern,templatePermissions,tokenDuration
@@ -89,7 +86,7 @@ metadata:
   name: sonarqube-connector-automatic-creation
   namespace: ${TARGET_NS}
 spec:
-  description: Automatically provisions and maintains a tenant-scoped SonarQube Connector in one TaskRun. For the given tenant, the Task creates or reuses a dedicated SonarQube user, a permission template scoped to the tenant's project key pattern, and a user token; then creates or updates the tenant SonarQube Connector together with its token Secret. SonarQube projects are not created upfront -- they are auto-created at scan time by the tenant user. The user token is refreshed on every run and auto-renewed before expiry, so the Task is safe to schedule on a recurring basis.
+  description: Automatically provisions and maintains a tenant-scoped SonarQube Connector in one TaskRun. For the given tenant, the Task creates or reuses a dedicated SonarQube user and a permission template scoped to the tenant's project key pattern; revokes any existing tenant user token and mints a fresh one on every run; then creates or updates the tenant SonarQube Connector together with its token Secret. SonarQube projects are not created upfront -- they are auto-created at scan time by the tenant user. Because the user token is rotated on every run, the Task is safe to schedule on a recurring basis.
   params:
     - description: Target tenant SonarQube Connector to create or update, in <namespace>/<name> format, for example connectors-management/acme-sonarqube. The token Secret is created in the same namespace as the Connector
       name: connector
@@ -120,16 +117,20 @@ spec:
       name: userName
       type: string
     - default: "30"
-      description: Validity of the SonarQube user token, in whole days (positive integer). The token is automatically renewed before it expires on each run, so the Task can be scheduled on a recurring basis
+      description: Validity of the SonarQube user token, in whole days (positive integer). The Task revokes and re-mints the token on every run, so the Task can be scheduled on a recurring basis
       name: tokenDuration
       type: string
-    - default: ${REGISTRY}/devops/sonarqube-connector-automatic-creation:v1.9.0-g8632398
+    - default: ${REGISTRY}/alauda-connectors/connectors-extensions/sonarqube-connector-automatic-creation:v1.12.0-rc.299.g74beee4
       description: Tool image used by every step. The default points at the release image published by this repository; override for air-gapped clusters or to pin a specific version
       name: sonarqubeAutomationImage
       type: string
     - default: Always
       description: Controls when Kubernetes pulls the tool image
       name: imagePullPolicy
+      type: string
+    - default: "false"
+      description: When 'true', curl skips TLS peer and hostname verification on every SonarQube call. Do not enable this in production; configure a trusted CA certificate in the cluster or network instead. Disabling verification exposes credentials and API traffic to man-in-the-middle attacks.
+      name: insecureSkipVerify
       type: string
     - default: "false"
       description: Enable verbose logging for debugging. Credentials and tokens are never logged regardless of this flag
@@ -142,7 +143,7 @@ spec:
       name: username
     - description: SonarQube permission template name created or reused by this run
       name: permission-template
-    - description: Name of the SonarQube user token created or reused by this run. NEVER exposes the token value as a result; the value is written only to the tenant Secret
+    - description: Name of the SonarQube user token revoked + minted by this run (the name is deterministic; the token value is rotated on every run). NEVER exposes the token value as a result; the value is written only to the tenant Secret
       name: token-name
     - description: Reference of the tenant Connector created or updated by this run, in <namespace>/<name> format
       name: connector-ref
@@ -187,6 +188,8 @@ spec:
           value: $(params.userName)
         - name: TOKEN_DURATION_DAYS
           value: $(params.tokenDuration)
+        - name: INSECURE_SKIP_VERIFY
+          value: $(params.insecureSkipVerify)
         - name: VERBOSE
           value: $(params.verbose)
         - name: SONAR_CONFIG_DIR
@@ -297,7 +300,7 @@ EOF
 Notes:
 
 - The default `sonarqubeAutomationImage` lives at
-  `${REGISTRY}/devops/sonarqube-connector-automatic-creation:v1.9.0-g8632398`. Override the
+  `${REGISTRY}/alauda-connectors/connectors-extensions/sonarqube-connector-automatic-creation:v1.12.0-rc.299.g74beee4`. Override the
   `sonarqubeAutomationImage` param at TaskRun time for air-gapped clusters or to
   pin a specific version.
 - The Task pod runs as non-root (`runAsUser: 65532`) with
@@ -316,14 +319,13 @@ Given a tenant identifier and a project key pattern, the Task:
    tenant's `projectKeyPattern`, with project-level permissions
    (`user`, `codeviewer`, `scan` by default) bound **directly to the
    tenant user** — not via any group.
-4. Mints (or reuses) a `USER_TOKEN` with a configurable validity window
+4. Revokes any existing `USER_TOKEN` and mints a fresh token with a configurable validity window
    (`tokenDuration` days; default 30).
 5. Writes a tenant `sonarqube` **Connector** with `tokenAuth` plus a
    matching **Secret** (`connectors.cpaas.io/bearer-token`) carrying
    the freshly-minted token.
 
-Steps 1–3 are write-once; step 4 is reused while the token is still
-valid and the tenant Secret still holds a non-empty token value.
+Steps 1–3 are write-once; step 4 rotates the token on every successful run.
 
 The Task does **not** pre-create any SonarQube projects. Projects are
 auto-created at scan time by the tenant user — the
@@ -352,8 +354,8 @@ local tenant user side-steps the group indirection. See
 | `permissionTemplate` | string | `""` | Name of the SonarQube permission template to create or reuse. Leave empty to use `<tenant>-template`. |
 | `templatePermissions` | array | `[user, codeviewer, scan]` | Project-level permissions granted to the tenant user via the template. Covers Browse, See Source Code, and Execute Analysis. **Do not include `admin`** — the tenant could otherwise change project visibility or delete projects. |
 | `userName` | string | `""` | SonarQube user login to create or reuse. Leave empty to use `<tenant>-bot`. |
-| `tokenDuration` | string | `"30"` | Validity of the SonarQube user token, in whole days (positive integer). The token is auto-renewed before it expires on each run, so the Task can be scheduled on a recurring basis. |
-| `sonarqubeAutomationImage` | string | `registry.alauda.cn:60070/devops/sonarqube-connector-automatic-creation:v1.9.0-g8632398` | Tool image used by every step. Override for air-gapped clusters or to pin a specific version. |
+| `tokenDuration` | string | `"30"` | Validity of the newly minted SonarQube user token, in whole days (positive integer). The existing token is revoked and replaced on every successful run. |
+| `sonarqubeAutomationImage` | string | `${REGISTRY}/alauda-connectors/connectors-extensions/sonarqube-connector-automatic-creation:v1.12.0-rc.299.g74beee4` | Tool image used by every step. Override for air-gapped clusters or to pin a specific version. |
 | `imagePullPolicy` | string | `Always` | Controls when Kubernetes pulls the tool image. |
 | `verbose` | string | `"false"` | Enable verbose logging for debugging. Credentials and tokens are never logged regardless of this flag. |
 

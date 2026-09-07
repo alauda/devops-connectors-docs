@@ -31,15 +31,24 @@ cat <<'EOF' | envsubst '${REGISTRY} ${TARGET_NS}' | kubectl apply -f -
 apiVersion: tekton.dev/v1
 kind: Task
 metadata:
+  name: gitlab-connector-automatic-creation
+  labels:
+    app.kubernetes.io/version: "0.1"
   annotations:
+    tekton.dev/pipelines.minVersion: "0.56.0"
+    tekton.dev/categories: CLI
+    tekton.dev/tags: gitlab, connector, kubernetes, secret, group-access-token
+    tekton.dev/displayName: GitLab Connector Automatic Creation
+    tekton.dev/platforms: "linux/amd64,linux/arm64"
+    style.tekton.dev/displayParams: connector,gitlabUrl,tenantGroup,accessLevel,scopes
     style.tekton.dev/descriptors: |
       - path: params.gitlabCliImage
         x-descriptors:
           - urn:alm:descriptor:label:en:GitLab CLI Image
-          - 'urn:alm:descriptor:description:en:Tool image used by every glab step (ensure-group, ensure-subgroups, ensure-gat). Defaults to the catalog tool-image-glab v1.82 image; override per TaskRun if you mirror the image into a private registry'
+          - 'urn:alm:descriptor:description:en:Tool image used by every glab step (ensure-group, ensure-subgroups, ensure-gat). Defaults to the connectors-provided glab CLI image; override per TaskRun if you mirror the image into a private registry'
           - 'urn:alm:descriptor:tooltip:en:Pick the catalog-provided glab image, or supply a registry-mirrored copy. The image must run as non-root (UID 65532) and contain the glab CLI'
           - urn:alm:descriptor:com.tectonic.ui:select:image
-          - urn:alm:descriptor:expression:props.default:${REGISTRY}/devops/tektoncd/hub/glab:v1.82
+          - urn:alm:descriptor:expression:props.default:${REGISTRY}/alauda-connectors/glab:v1.82
           - urn:alm:descriptor:expression:props.options:api:/kubernetes/${context.cluster}/api/v1/namespaces/kube-public/configmaps?labelSelector=catalog.tekton.dev%2Ftool-image-glab
           - urn:alm:descriptor:props:select:allowCreate
           - urn:alm:descriptor:expression:props.options:path:items
@@ -49,10 +58,10 @@ metadata:
       - path: params.kubectlImage
         x-descriptors:
           - urn:alm:descriptor:label:en:kubectl Image
-          - 'urn:alm:descriptor:description:en:Tool image used by the apply-kubernetes-resources step. Defaults to the catalog tool-image-kubectl v1.33 image; override per TaskRun if you mirror the image into a private registry'
+          - 'urn:alm:descriptor:description:en:Tool image used by the apply-kubernetes-resources step. Defaults to the connectors-provided kubectl image; override per TaskRun if you mirror the image into a private registry'
           - 'urn:alm:descriptor:tooltip:en:Pick the catalog-provided kubectl image, or supply a registry-mirrored copy. The image must run as non-root (UID 65532) and contain the kubectl binary'
           - urn:alm:descriptor:com.tectonic.ui:select:image
-          - urn:alm:descriptor:expression:props.default:${REGISTRY}/devops/tektoncd/hub/kubectl:v1.33
+          - urn:alm:descriptor:expression:props.default:${REGISTRY}/alauda-connectors/kubectl:v1.33
           - urn:alm:descriptor:expression:props.options:api:/kubernetes/${context.cluster}/api/v1/namespaces/kube-public/configmaps?labelSelector=catalog.tekton.dev%2Ftool-image-kubectl
           - urn:alm:descriptor:props:select:allowCreate
           - urn:alm:descriptor:expression:props.options:path:items
@@ -125,6 +134,19 @@ metadata:
           - 'urn:alm:descriptor:description:en:Name prefix used for the GitLab Group Access Token managed by this Task. The full GAT name is <accessTokenName>/<identity-suffix>; the suffix encodes access level + scopes + subgroup set so reruns can detect identity-affecting changes. Leave empty to derive connector-<connector-namespace>-<connector-name>'
           - 'urn:alm:descriptor:tooltip:en:Leave empty to let the Task derive connector-<connector-namespace>-<connector-name>. Mirrors Harbor robotAccount semantics'
           - urn:alm:descriptor:com.tectonic.ui:text
+      - path: params.gitlabUrl
+        x-descriptors:
+          - urn:alm:descriptor:label:en:GitLab URL
+          - 'urn:alm:descriptor:description:en:Base URL of the target GitLab instance. Used as the host for all admin glab API calls and recorded as the tenant address. Must be a fully-qualified http(s) URL; required'
+          - 'urn:alm:descriptor:tooltip:en:Example https://gitlab.example.com. The Task fails fast if this is empty or not an http(s) URL'
+          - urn:alm:descriptor:com.tectonic.ui:text
+          - urn:alm:descriptor:com.tectonic.ui:validation:required
+      - path: params.basicAuthSecrets
+        x-descriptors:
+          - urn:alm:descriptor:label:en:Basic-Auth Secret Targets
+          - 'urn:alm:descriptor:description:en:Optional list of kubernetes.io/basic-auth Secret references to create or update from the tenant GAT, one <namespace>/<name> per item. Each target Secret stores username=oauth2 and password=<tenant GAT>, suitable for any consumer that authenticates against GitLab via HTTP Basic. Sync is additive: removing an entry does not delete previously synced Secrets'
+          - 'urn:alm:descriptor:tooltip:en:Add one <namespace>/<name> per item. The Task uses SelfSubjectAccessReview to confirm write access to each namespace before applying'
+          - urn:alm:descriptor:com.tectonic.ui:tagsInput
       - path: params.verbose
         x-descriptors:
           - urn:alm:descriptor:label:en:Verbose Logs
@@ -132,99 +154,115 @@ metadata:
           - urn:alm:descriptor:com.tectonic.ui:booleanSwitch
           - urn:alm:descriptor:props:booleanSwitch:true:true
           - urn:alm:descriptor:props:booleanSwitch:false:false
-    style.tekton.dev/displayParams: connector,tenantGroup,accessLevel,scopes
-    tekton.dev/categories: CLI
-    tekton.dev/displayName: GitLab Connector Automatic Creation
-    tekton.dev/pipelines.minVersion: 0.56.0
-    tekton.dev/platforms: linux/amd64,linux/arm64
-    tekton.dev/tags: gitlab, connector, kubernetes, secret, group-access-token
-  labels:
-    app.kubernetes.io/version: "0.1"
-  name: gitlab-connector-automatic-creation
   namespace: ${TARGET_NS}
 spec:
-  description: 'Use glab and kubectl to create or reuse a tenant GitLab group + optional subgroups, mint a Group Access Token, and write the cluster-side tenant GitLab Connector + auth Secret in one TaskRun. Supports Pattern A (top-level group + can_create_group user PAT) and Pattern B (subgroup + umbrella GAT). Token refresh follows a three-path lifecycle: rotate / recreate / expired-fall-through.'
+  description: >-
+    Use glab and kubectl to create or reuse a tenant GitLab group + optional subgroups, mint a Group Access Token, and write the cluster-side tenant GitLab Connector + auth Secret in one TaskRun. Supports Pattern A (top-level group + can_create_group user PAT) and Pattern B (subgroup + umbrella GAT). Token refresh follows a three-path lifecycle: rotate / recreate / expired-fall-through.
   params:
-    - description: Target GitLab Connector resource to create or update, in <namespace>/<name> format, for example connectors-management/project-a-gitlab
-      name: connector
+    - name: connector
       type: string
-    - description: Tenant group path; top-level (Pattern A) or `umbrella/tenant` (Pattern B)
-      name: tenantGroup
+      description: Target GitLab Connector resource to create or update, in <namespace>/<name> format, for example connectors-management/project-a-gitlab
+    - name: tenantGroup
       type: string
-    - default: []
+      description: Tenant group path; top-level (Pattern A) or `umbrella/tenant` (Pattern B)
+    - name: subgroups
+      type: array
       description: Optional per-team subgroup names created idempotently under the tenant group
-      name: subgroups
-      type: array
-    - default: owner
+      default: []
+    - name: accessLevel
+      type: string
       description: GitLab access level for the GAT (guest|reporter|developer|maintainer|owner)
-      name: accessLevel
-      type: string
-    - default:
-        - api
-        - read_repository
+      default: owner
+    - name: scopes
+      type: array
       description: 'GitLab GAT scope set; defaults to ["api", "read_repository"]. api grants full GitLab REST access (project / group / token CRUD); read_repository grants git-clone-over-HTTPS for tenant CI workloads. Common additions: write_repository (git push), read_registry, write_registry, read_api'
-      name: scopes
-      type: array
-    - default: "30"
+      default: ["api", "read_repository"]
+    - name: tokenDuration
+      type: string
       description: Validity period of the GitLab Group Access Token in days; capped by the GitLab instance policy. Cron-friendly — every run computes expires_at as today + N days.
-      name: tokenDuration
+      default: "30"
+    - name: secret
       type: string
-    - default: ""
       description: Name of the Kubernetes Secret that stores the tenant GAT in the connector namespace; leave empty to let the Task create or update <connector-name>-secret automatically
-      name: secret
+      default: ""
+    - name: accessTokenName
       type: string
-    - default: ""
       description: Name prefix used for the GitLab Group Access Token managed by this Task. The full GAT name is `<accessTokenName>/<identity-suffix>`; the suffix encodes access level + scopes + subgroup set so reruns can detect identity-affecting changes. Leave empty to derive `connector-<connector-namespace>-<connector-name>`. Mirrors Harbor's `robotAccount` parameter.
-      name: accessTokenName
+      default: ""
+    - name: gitlabUrl
       type: string
-    - default: ${REGISTRY}/devops/tektoncd/hub/glab:v1.82
-      description: Tool image used by every glab step. Defaults to the catalog tool-image-glab v1.82 image.
-      name: gitlabCliImage
-      type: string
-    - default: ${REGISTRY}/devops/tektoncd/hub/kubectl:v1.33
-      description: Tool image used by the kubectl step. Defaults to the catalog tool-image-kubectl v1.33 image.
-      name: kubectlImage
-      type: string
-    - default: Always
-      description: Controls when Kubernetes pulls the tool images used by this Task
-      name: imagePullPolicy
-      type: string
-    - default: "false"
-      description: Enable shell tracing on non-secret steps; the admin PAT and tenant GAT are NEVER traced regardless of this flag
-      name: verbose
-      type: string
-  results:
-    - description: The materialised tenant group path
-      name: tenant-group
-    - description: JSON array of materialised subgroup paths
-      name: subgroups
+      description: 'Required base URL of the target GitLab instance. Used as the host for all admin glab API calls and recorded as the tenant address. Must be a fully-qualified http(s) URL; the Task fails fast if empty or non-http(s).'
+    - name: basicAuthSecrets
       type: array
-    - description: Identity-encoded GitLab GAT name minted/rotated by this run (`<prefix>/<identity-suffix>`). Useful for ops audit and `glab api` lookups; the numeric token id is recorded as a Secret annotation, not exposed as a result.
-      name: access-token-name
-    - description: Namespaced reference of the tenant Connector handled by the Task
-      name: connector-ref
+      description: 'Optional list of kubernetes.io/basic-auth Secret references to create or update from the tenant GAT; add one `<namespace>/<name>` per item. Each synced Secret stores `username=oauth2` + `password=<tenant GAT>` and is consumable by any GitLab HTTP-basic client. Sync is additive — removing an entry does not delete previously synced Secrets.'
+      default: []
+    - name: gitlabCliImage
+      type: string
+      description: Tool image used by every glab step. Defaults to the connectors-provided glab CLI image.
+      default: ${REGISTRY}/alauda-connectors/glab:v1.82
+    - name: kubectlImage
+      type: string
+      description: Tool image used by the kubectl step. Defaults to the connectors-provided kubectl image.
+      default: ${REGISTRY}/alauda-connectors/kubectl:v1.33
+    - name: imagePullPolicy
+      type: string
+      description: Controls when Kubernetes pulls the tool images used by this Task
+      default: Always
+    - name: verbose
+      type: string
+      description: Enable shell tracing on non-secret steps; the admin PAT and tenant GAT are NEVER traced regardless of this flag
+      default: "false"
+  workspaces:
+    - name: gitlabconfig
+      description: Mountable via connectors-csi from an admin GitLab Connector; supplies the `config.yml` that glab requires.
+    - name: kubeconfig
+      description: Optional kubeconfig CSI mount of a kubernetes-class Connector for cross-cluster apply; when bound the Task exports KUBECONFIG, otherwise kubectl falls back to the in-cluster service-account context. Mirrors Harbor's kube-config workspace.
+      optional: true
+  results:
+    - name: tenant-group
+      description: The materialised tenant group path
+    - name: subgroups
+      type: array
+      description: JSON array of materialised subgroup paths
+    - name: access-token-name
+      description: Identity-encoded GitLab GAT name minted/rotated by this run (`<prefix>/<identity-suffix>`). Useful for ops audit and `glab api` lookups; the numeric token id is recorded as a Secret annotation, not exposed as a result.
+    - name: connector-ref
+      description: Namespaced reference of the tenant Connector handled by the Task
+    - name: basic-auth-secret-refs
+      type: array
+      description: List of `<namespace>/<name>` references for the kubernetes.io/basic-auth Secrets actually synced from `params.basicAuthSecrets`, in the same order as the input
+  volumes:
+    - name: state
+      emptyDir:
+        medium: Memory
+    - name: secrets
+      emptyDir:
+        medium: Memory
   stepTemplate:
     securityContext:
+      runAsUser: 65532
+      runAsGroup: 65532
+      runAsNonRoot: true
       allowPrivilegeEscalation: false
       capabilities:
         drop:
           - ALL
-      runAsGroup: 65532
-      runAsNonRoot: true
-      runAsUser: 65532
     volumeMounts:
-      - mountPath: /workspace/state
-        name: state
-      - mountPath: /workspace/secrets
-        name: secrets
+      - name: state
+        mountPath: /workspace/state
+      - name: secrets
+        mountPath: /workspace/secrets
   steps:
-    - computeResources:
-        limits:
-          cpu: 500m
-          memory: 256Mi
+    - name: ensure-group
+      image: $(params.gitlabCliImage)
+      imagePullPolicy: $(params.imagePullPolicy)
+      computeResources:
         requests:
-          cpu: 100m
-          memory: 128Mi
+          cpu: "100m"
+          memory: "128Mi"
+        limits:
+          cpu: "500m"
+          memory: "256Mi"
       env:
         - name: TENANT_GROUP
           value: $(params.tenantGroup)
@@ -232,15 +270,21 @@ spec:
           value: $(params.verbose)
         - name: GLAB_CONFIG_DIR
           value: $(workspaces.gitlabconfig.path)
+        # No GITLAB_URL: the ensure-* steps read the glab host strictly
+        # from the gitlabconfig workspace's config.yml (DEVOPS-44155
+        # proxy-path contract). Wiring params.gitlabUrl here would invite
+        # the same regression that broke production -- so it's only on
+        # apply-kubernetes-resources, the one step that legitimately
+        # consumes it (for the tenant Connector's spec.address write).
+        # glab v1.82 prints its update-check banner and a telemetry-failure
+        # line to stdout, contaminating the JSON we pipe to jq downstream
+        # ("jq: parse error: Invalid numeric literal"). Disable both.
         - name: GLAB_CHECK_UPDATE
           value: "false"
         - name: GLAB_SEND_TELEMETRY
           value: "false"
         - name: STATE_DIR
           value: /workspace/state
-      image: $(params.gitlabCliImage)
-      imagePullPolicy: $(params.imagePullPolicy)
-      name: ensure-group
       script: |
         #!/usr/bin/env bash
         # ensure-group.sh -- step 1 of gitlab-connector-automatic-creation/0.1
@@ -300,12 +344,28 @@ spec:
           return ${rc}
         }
 
-        # Bootstrap glab credentials silently from the CSI mount. The mount is
-        # read-only with mode 0444 (CSI default); glab itself rejects any
-        # config.yml that isn't 0600 ("failed to read configuration"). Copy the
-        # config into a writable XDG home and re-point GLAB_CONFIG_DIR (which
-        # glab honours natively as the config-dir override) at that writable
-        # copy so glab no longer reaches into the read-only mount.
+        # Bootstrap glab credentials silently from the CSI mount + params.gitlabUrl.
+        # The CSI mount is read-only with mode 0444 (CSI default); glab itself
+        # rejects any config.yml that isn't 0600 ("failed to read configuration").
+        # Copy the config into a writable XDG home and re-point GLAB_CONFIG_DIR
+        # (which glab honours natively as the config-dir override) at that
+        # writable copy so glab no longer reaches into the read-only mount.
+        #
+        # GITLAB_HOST + GITLAB_TOKEN BOTH come from the `gitlabconfig` workspace's
+        # `config.yml`. The host is the **admin-Connector-rendered host** (the
+        # in-cluster proxy address when the workspace is a connectors-csi mount
+        # of an admin GitLab Connector; the public host when the workspace is a
+        # static Secret in BDD or operator-direct deployments). Critically, the
+        # host is NOT derived from `params.gitlabUrl` -- gitlabUrl is for the
+        # TENANT Connector's `spec.address` write only.
+        #
+        # Regression history: a prior DEVOPS-44155 revision attempted to use
+        # `params.gitlabUrl` as glab's host, which broke CSI mode in production:
+        # the CSI-issued token is a Kubernetes ServiceAccount JWT meaningful only
+        # to the connectors proxy; sending it directly to the public GitLab host
+        # returns 401 (GitLab doesn't recognise the JWT). The token MUST be paired
+        # with the host that knows how to validate it -- and config.yml already
+        # does that pairing for us.
         prepare_glab() {
           local glab_home="${HOME:-/tmp}/.config/glab-cli"
           mkdir -p "${glab_home}"
@@ -320,12 +380,26 @@ spec:
           # glab v1.82+ resolves the target host from --hostname / GITLAB_HOST
           # / the current git remote / config-default, in that order. Our config
           # has exactly one host entry, but glab does NOT auto-pick it -- it
-          # falls through to gitlab.com by default, then 401s because the
-          # gitlab.com PAT we don't have. Pull the host + token out of the
-          # mounted config and export them so glab's env-var fallback works.
-          GITLAB_HOST=$(grep -E '^\s{2}[A-Za-z0-9._-]+:\s*$' "${glab_home}/config.yml" \
-                         | head -1 | tr -d ': ' )
-          GITLAB_TOKEN=$(awk '/^\s{4}token:/ { print $2; exit }' "${glab_home}/config.yml")
+          # falls through to gitlab.com by default, then 401s. Pull the host +
+          # token out of the mounted config and export them so glab's env-var
+          # fallback always finds the right host.
+          #
+          # awk walks the `hosts:` block and yields the first sub-key (the
+          # admin host). This shape tolerates host:port (Ingress / NodePort
+          # proxies) -- a grep '[A-Za-z0-9._-]+:$' regex would silently miss
+          # `c-x.ns.svc:8443:` because ':' isn't in the char class, which is
+          # the same regression class this PR is repairing in a different guise.
+          GITLAB_HOST=$(awk '
+            /^hosts:[[:space:]]*$/ { in_hosts=1; next }
+            in_hosts && /^[^[:space:]]/ { exit }
+            in_hosts && /^  [^[:space:]].*:[[:space:]]*$/ {
+              sub(/^  /, "")
+              sub(/:[[:space:]]*$/, "")
+              print
+              exit
+            }
+          ' "${glab_home}/config.yml")
+          GITLAB_TOKEN=$(awk '/^    token:[[:space:]]/ { print $2; exit }' "${glab_home}/config.yml")
           if [[ -z "${GITLAB_HOST}" || -z "${GITLAB_TOKEN}" ]]; then
             echo "ERROR: could not parse host/token from ${glab_home}/config.yml" >&2
             exit 1
@@ -400,7 +474,10 @@ spec:
           is_bot="$(printf '%s' "${user_resp}" | jq -r '.bot // false')"
           username="$(printf '%s' "${user_resp}" | jq -r '.username // empty')"
           if [[ "${is_bot}" == "true" ]] && [[ "${username}" =~ ^group_[0-9]+_bot_ ]]; then
+            # These globals are intentional outputs of detect_admin_identity.
+            # shellcheck disable=SC2034
             ADMIN_IS_GAT_BOT=true
+            # shellcheck disable=SC2034
             ADMIN_BOT_USER_ID="${user_id}"
           fi
         }
@@ -533,29 +610,31 @@ spec:
         }
 
         main "$@"
-    - args:
-        - $(params.subgroups[*])
+    - name: ensure-subgroups
+      image: $(params.gitlabCliImage)
+      imagePullPolicy: $(params.imagePullPolicy)
       computeResources:
-        limits:
-          cpu: 500m
-          memory: 256Mi
         requests:
-          cpu: 100m
-          memory: 128Mi
+          cpu: "100m"
+          memory: "128Mi"
+        limits:
+          cpu: "500m"
+          memory: "256Mi"
+      args:
+        - $(params.subgroups[*])
       env:
         - name: VERBOSE
           value: $(params.verbose)
         - name: GLAB_CONFIG_DIR
           value: $(workspaces.gitlabconfig.path)
+        # See ensure-group step above for why GITLAB_URL is intentionally
+        # not wired here (DEVOPS-44155 proxy-path contract).
         - name: GLAB_CHECK_UPDATE
           value: "false"
         - name: GLAB_SEND_TELEMETRY
           value: "false"
         - name: STATE_DIR
           value: /workspace/state
-      image: $(params.gitlabCliImage)
-      imagePullPolicy: $(params.imagePullPolicy)
-      name: ensure-subgroups
       script: |
         #!/usr/bin/env bash
         # ensure-subgroups.sh -- step 2 of gitlab-connector-automatic-creation/0.1
@@ -606,9 +685,12 @@ spec:
         }
 
         prepare_glab() {
-          # See ensure-group.sh:prepare_glab — glab refuses 0444 configs and
-          # falls back to gitlab.com if it can't auto-detect the host, so we
-          # also export GITLAB_HOST + GITLAB_TOKEN explicitly.
+          # See ensure-group.sh:prepare_glab — host + token both come from the
+          # gitlabconfig workspace's config.yml so the token issuer matches the
+          # host (proxy URL + SAJWT in CSI mode; public URL + real PAT in
+          # static-Secret mode). DO NOT derive host from params.gitlabUrl --
+          # that was the DEVOPS-44155 regression that broke CSI mode (proxy-only
+          # SAJWT sent directly to public GitLab -> 401).
           local glab_home="${HOME:-/tmp}/.config/glab-cli"
           mkdir -p "${glab_home}"
           if [[ ! -f "${GLAB_CONFIG_DIR}/config.yml" ]]; then
@@ -619,9 +701,21 @@ spec:
           chmod 600 "${glab_home}/config.yml"
           export GLAB_CONFIG_DIR="${glab_home}"
 
-          GITLAB_HOST=$(grep -E '^\s{2}[A-Za-z0-9._-]+:\s*$' "${glab_home}/config.yml" \
-                         | head -1 | tr -d ': ' )
-          GITLAB_TOKEN=$(awk '/^\s{4}token:/ { print $2; exit }' "${glab_home}/config.yml")
+          # See ensure-group.sh:prepare_glab for the awk shape -- yields the
+          # first sub-key under `hosts:` (the admin host, port-tolerant) and the
+          # matching token. Replicated here verbatim to keep all three step
+          # scripts self-contained for `kubectl debug` workflows.
+          GITLAB_HOST=$(awk '
+            /^hosts:[[:space:]]*$/ { in_hosts=1; next }
+            in_hosts && /^[^[:space:]]/ { exit }
+            in_hosts && /^  [^[:space:]].*:[[:space:]]*$/ {
+              sub(/^  /, "")
+              sub(/:[[:space:]]*$/, "")
+              print
+              exit
+            }
+          ' "${glab_home}/config.yml")
+          GITLAB_TOKEN=$(awk '/^    token:[[:space:]]/ { print $2; exit }' "${glab_home}/config.yml")
           if [[ -z "${GITLAB_HOST}" || -z "${GITLAB_TOKEN}" ]]; then
             echo "ERROR: could not parse host/token from ${glab_home}/config.yml" >&2
             exit 1
@@ -707,15 +801,21 @@ spec:
         }
 
         main "$@"
-    - args:
-        - $(params.scopes[*])
+    - name: ensure-gat
+      image: $(params.gitlabCliImage)
+      imagePullPolicy: $(params.imagePullPolicy)
       computeResources:
-        limits:
-          cpu: 500m
-          memory: 256Mi
         requests:
-          cpu: 100m
-          memory: 128Mi
+          cpu: "100m"
+          memory: "128Mi"
+        limits:
+          cpu: "500m"
+          memory: "256Mi"
+      args:
+        # Pass scopes as positional args; Tekton's webhook rejects array
+        # expansion (`$(params.scopes[*])`) inside env values but allows
+        # it in args. The wrapper script joins them into SCOPES below.
+        - $(params.scopes[*])
       env:
         - name: CONNECTOR
           value: $(params.connector)
@@ -729,6 +829,8 @@ spec:
           value: $(params.verbose)
         - name: GLAB_CONFIG_DIR
           value: $(workspaces.gitlabconfig.path)
+        # See ensure-group step above for why GITLAB_URL is intentionally
+        # not wired here (DEVOPS-44155 proxy-path contract).
         - name: GLAB_CHECK_UPDATE
           value: "false"
         - name: GLAB_SEND_TELEMETRY
@@ -739,9 +841,7 @@ spec:
           value: /workspace/secrets
         - name: SUBGROUPS_JSON_FILE
           value: /workspace/state/subgroups.json
-      image: $(params.gitlabCliImage)
-      imagePullPolicy: $(params.imagePullPolicy)
-      name: ensure-gat
+      # Shebang on line 1 of script:; the preamble below would otherwise push the script-source shebang past line 1, where Tekton treats it as a comment and runs under sh.
       script: |
         #!/usr/bin/env bash
         # ensure-gat reads the tenant-group id written by step 1.
@@ -857,10 +957,12 @@ spec:
         }
 
         prepare_glab() {
-          # See ensure-group.sh:prepare_glab — glab refuses 0444 configs, and
-          # falls back to gitlab.com when it can't auto-detect the host (it does
-          # NOT auto-pick the single host in our config). Export GITLAB_HOST +
-          # GITLAB_TOKEN so glab's env-var fallback always finds the right host.
+          # See ensure-group.sh:prepare_glab — host + token both come from the
+          # gitlabconfig workspace's config.yml so the token issuer matches the
+          # host (proxy URL + SAJWT in CSI mode; public URL + real PAT in
+          # static-Secret mode). DO NOT derive host from params.gitlabUrl --
+          # that was the DEVOPS-44155 regression that broke CSI mode (proxy-only
+          # SAJWT sent directly to public GitLab -> 401).
           local glab_home="${HOME:-/tmp}/.config/glab-cli"
           mkdir -p "${glab_home}"
           if [[ ! -f "${GLAB_CONFIG_DIR}/config.yml" ]]; then
@@ -871,9 +973,21 @@ spec:
           chmod 600 "${glab_home}/config.yml"
           export GLAB_CONFIG_DIR="${glab_home}"
 
-          GITLAB_HOST=$(grep -E '^\s{2}[A-Za-z0-9._-]+:\s*$' "${glab_home}/config.yml" \
-                         | head -1 | tr -d ': ' )
-          GITLAB_TOKEN=$(awk '/^\s{4}token:/ { print $2; exit }' "${glab_home}/config.yml")
+          # See ensure-group.sh:prepare_glab for the awk shape -- yields the
+          # first sub-key under `hosts:` (the admin host, port-tolerant) and the
+          # matching token. Replicated here verbatim to keep all three step
+          # scripts self-contained for `kubectl debug` workflows.
+          GITLAB_HOST=$(awk '
+            /^hosts:[[:space:]]*$/ { in_hosts=1; next }
+            in_hosts && /^[^[:space:]]/ { exit }
+            in_hosts && /^  [^[:space:]].*:[[:space:]]*$/ {
+              sub(/^  /, "")
+              sub(/:[[:space:]]*$/, "")
+              print
+              exit
+            }
+          ' "${glab_home}/config.yml")
+          GITLAB_TOKEN=$(awk '/^    token:[[:space:]]/ { print $2; exit }' "${glab_home}/config.yml")
           if [[ -z "${GITLAB_HOST}" || -z "${GITLAB_TOKEN}" ]]; then
             echo "ERROR: could not parse host/token from ${glab_home}/config.yml" >&2
             exit 1
@@ -1161,13 +1275,22 @@ spec:
         }
 
         main "$@"
-    - computeResources:
-        limits:
-          cpu: 500m
-          memory: 256Mi
+    - name: apply-kubernetes-resources
+      image: $(params.kubectlImage)
+      imagePullPolicy: $(params.imagePullPolicy)
+      computeResources:
         requests:
-          cpu: 100m
-          memory: 128Mi
+          cpu: "100m"
+          memory: "128Mi"
+        limits:
+          cpu: "500m"
+          memory: "256Mi"
+      args:
+        # Pass basicAuthSecrets as positional args; Tekton's webhook rejects
+        # array expansion (`$(params.basicAuthSecrets[*])`) inside env values
+        # but allows it in args (same pattern as ensure-subgroups subgroups
+        # and ensure-gat scopes). The script reads them via "$@".
+        - $(params.basicAuthSecrets[*])
       env:
         - name: CONNECTOR
           value: $(params.connector)
@@ -1177,6 +1300,8 @@ spec:
           value: $(params.verbose)
         - name: GLAB_CONFIG_DIR
           value: $(workspaces.gitlabconfig.path)
+        - name: GITLAB_URL
+          value: $(params.gitlabUrl)
         - name: SECRETS_DIR
           value: /workspace/secrets
         - name: TOKEN_FILE
@@ -1195,17 +1320,18 @@ spec:
           value: $(results.access-token-name.path)
         - name: RESULT_CONNECTOR_REF_PATH
           value: $(results.connector-ref.path)
-      image: $(params.kubectlImage)
-      imagePullPolicy: $(params.imagePullPolicy)
-      name: apply-kubernetes-resources
+        - name: RESULT_BASIC_AUTH_SECRET_REFS_PATH
+          value: $(results.basic-auth-secret-refs.path)
+      # Shebang on line 1 of script:; the preamble below would otherwise push the script-source shebang past line 1, where Tekton treats it as a comment and runs under sh.
       script: |
         #!/usr/bin/env bash
         # apply-kubernetes-resources reads tenant-group path + GAT id from
         # the in-memory state volume and the GAT itself from the tmpfs
-        # secrets volume. The tenant Connector's spec.address is read from
-        # the gitlabconfig workspace (`connector_address` field added by
-        # the GitLab connectorclass), mirroring Harbor's `serveraddress`
-        # pattern. No `kubectl get connector` lookup, no admin PAT in env.
+        # secrets volume. The tenant Connector's spec.address is the
+        # required params.gitlabUrl (no fallback). The admin glab host
+        # is read from the gitlabconfig workspace's config.yml -- NOT
+        # from params.gitlabUrl (DEVOPS-44155 proxy-path regression).
+        # No `kubectl get connector` lookup, no admin PAT in env.
         TENANT_GROUP_PATH="$(cat /workspace/state/tenant-group-path)"
         export TENANT_GROUP_PATH
         ACCESS_TOKEN_ID="$(cat /workspace/state/access-token-id)"
@@ -1220,11 +1346,17 @@ spec:
         # apiVersion: connectors.alauda.io/v1alpha1) plus the auth Secret of
         # class `connectors.cpaas.io/connector-class: gitlab-pat-auth`.
         #
-        # Discovery model mirrors Harbor:
-        # - Admin endpoint comes from the `gitlabconfig` workspace's `config.yml`
-        #   (`connector_address:` field, populated by the GitLab connectorclass
-        #   from the admin Connector's `spec.address`). No `kubectl get connector`
-        #   lookup; no admin PAT/GAT in env.
+        # Discovery model:
+        # - The tenant Connector's spec.address is the required `params.gitlabUrl`
+        #   verbatim (the legacy `connector_address` fallback in the gitlabconfig
+        #   workspace was removed in DEVOPS-44155).
+        # - The admin glab host is read STRICTLY from the gitlabconfig workspace's
+        #   `config.yml` (CSI mounts in-cluster proxy; static-Secret mounts public
+        #   host); params.gitlabUrl MUST NOT be used as a glab API host -- a CSI
+        #   mount issues a K8s SAJWT that only the in-cluster proxy can validate,
+        #   so sending it to a public host returns 401 across every step (this was
+        #   the DEVOPS-44155 proxy-path regression).
+        # - No `kubectl get connector` lookup; no admin PAT/GAT in env.
         # - Cluster apply uses KUBECONFIG from the optional `kubeconfig`
         #   workspace if bound (kubernetes-class Connector mount); falls back to
         #   the in-cluster service-account context otherwise.
@@ -1252,10 +1384,13 @@ spec:
         #   VERBOSE                 -- "true" to log progress.
         #
         # Inputs (files):
-        #   ${GLAB_CONFIG_DIR}/config.yml -- glab config; the
-        #                              `connector_address` top-level field
-        #                              carries the admin Connector's
-        #                              spec.address.
+        #   ${GLAB_CONFIG_DIR}/config.yml -- glab config; carries the admin host
+        #                              (the `hosts.<host>:` key) and PAT/SAJWT
+        #                              (under `hosts.<host>.token`). Read by the
+        #                              earlier ensure-*.sh steps; this script
+        #                              does not touch it directly. params.gitlabUrl
+        #                              is intentionally NOT used as a glab API
+        #                              host -- see Discovery model above.
         #   /workspace/secrets/token  -- tmpfs file (medium=Memory) holding the
         #                              GAT secret. Removed in trap-on-EXIT.
         #
@@ -1274,6 +1409,7 @@ spec:
         : "${TOKEN_FILE:=${SECRETS_DIR}/token}"
         : "${WORKSPACE_KUBECONFIG_BOUND:=false}"
         : "${WORKSPACE_KUBECONFIG_PATH:=}"
+        : "${GITLAB_URL:=}"
 
         # Always rm -f the tmpfs token file on exit -- success or fail.
         cleanup() {
@@ -1306,27 +1442,191 @@ spec:
           export KUBECONFIG="${WORKSPACE_KUBECONFIG_PATH}/kubeconfig"
         }
 
-        # Read the admin Connector's spec.address from gitlabconfig. The GitLab
-        # connectorclass writes a top-level `connector_address:` field for this
-        # purpose. Glab itself ignores unknown top-level keys.
+        # Determine the tenant Connector's spec.address from the required
+        # params.gitlabUrl (DEVOPS-44155 dropped the gitlabconfig-workspace
+        # fallback). Empty, non-http(s), or missing-host is fail-fast -- a
+        # scheme-only "https://" must NOT slip through to spec.address.
         load_admin_endpoint() {
-          local cfg="${GLAB_CONFIG_DIR}/config.yml"
-          if [[ ! -f "${cfg}" ]]; then
-            echo "ERROR: glab config not found at ${cfg} -- is the gitlabconfig workspace bound?" >&2
+          if [[ -z "${GITLAB_URL}" ]]; then
+            echo "ERROR: params.gitlabUrl is required and must be a fully-qualified http(s) URL" >&2
             exit 1
           fi
-          ADMIN_CONNECTOR_ENDPOINT="$(awk '/^connector_address:/{print $2; exit}' "${cfg}")"
-          ADMIN_CONNECTOR_ENDPOINT="${ADMIN_CONNECTOR_ENDPOINT%\"}"
-          ADMIN_CONNECTOR_ENDPOINT="${ADMIN_CONNECTOR_ENDPOINT#\"}"
-          if [[ -z "${ADMIN_CONNECTOR_ENDPOINT}" ]]; then
-            echo "ERROR: connector_address missing from ${cfg} -- the GitLab connectorclass must expose the admin Connector's spec.address" >&2
+          if [[ ! "${GITLAB_URL}" =~ ^https?://[A-Za-z0-9._-]+(:[0-9]+)?(/.*)?$ ]]; then
+            echo "ERROR: params.gitlabUrl is not a valid URL: '${GITLAB_URL}'" >&2
             exit 1
           fi
-          if [[ ! "${ADMIN_CONNECTOR_ENDPOINT}" =~ ^https?:// ]]; then
-            echo "ERROR: connector_address in ${cfg} is not a valid URL: '${ADMIN_CONNECTOR_ENDPOINT}'" >&2
-            exit 1
-          fi
+          ADMIN_CONNECTOR_ENDPOINT="${GITLAB_URL}"
           export ADMIN_CONNECTOR_ENDPOINT
+        }
+
+        # ssar_assert -- run `kubectl auth can-i VERB RESOURCE -n NS` and exit 1
+        # if the answer is anything other than an unambiguous "yes". The
+        # important property: a kubectl/apiserver failure (unreachable, TLS
+        # handshake, bad KUBECONFIG) is NOT silently bucketed into "no RBAC" --
+        # we surface the raw stderr so the operator sees the real cause
+        # instead of a misleading "ensure the namespace exists and the Task
+        # ServiceAccount has RBAC" message. RBAC denial (the case the caller
+        # is gating on) is reported as the caller's `ctx` message.
+        #
+        # args: VERB RESOURCE NAMESPACE CTX
+        ssar_assert() {
+          local verb="$1" resource="$2" ns="$3" ctx="$4"
+          local out rc=0
+          out=$(kubectl auth can-i "${verb}" "${resource}" -n "${ns}" 2>&1) || rc=$?
+          # kubectl returns rc=0 + stdout="yes" when allowed.
+          if [[ ${rc} -eq 0 && "${out}" == "yes" ]]; then
+            return 0
+          fi
+          # rc!=0 and stdout starts with "no" -- the documented RBAC-denied shape.
+          # Also accept "no - ..." (kubectl appends a reason on some builds).
+          if [[ "${out}" == "no" || "${out}" == no\ * ]]; then
+            echo "ERROR: ${ctx} (SSAR: cannot ${verb} ${resource} in namespace '${ns}')" >&2
+            exit 1
+          fi
+          # Anything else is a kubectl / apiserver problem, not RBAC -- bubble it up
+          # verbatim so the operator can diagnose without confusing it with a missing
+          # binding.
+          echo "ERROR: ${ctx} -- kubectl auth can-i ${verb} ${resource} -n ${ns} failed: ${out}" >&2
+          exit 1
+        }
+
+        # Sync the tenant GAT into one or more <ns>/<name> Secret targets as
+        # kubernetes.io/basic-auth (username=oauth2, password=<gat>).
+        #
+        # Two-phase design (closes the partial-write window):
+        #
+        #   Phase 1 -- pre-flight: format-validate every entry AND run SSAR for
+        #   `create + patch on secrets` against every target namespace BEFORE
+        #   any kubectl apply. If ANY entry fails the pre-flight, we fail-fast
+        #   before mutating the cluster -- the resulting state is "no Secrets
+        #   written" for the whole list. Server-side apply uses HTTP PATCH for
+        #   both create and update cycles, so the verbs that actually gate
+        #   `kubectl apply --server-side` are `create` (first-time POST when
+        #   the object does not exist yet) and `patch` (subsequent idempotent
+        #   applies). The `update` verb is NOT exercised by SSA -- gating on
+        #   it would let an SSA-capable principal pass the SSAR and then
+        #   surface a Forbidden at apply time, exactly the regression caught
+        #   in DEVOPS-44155 round-2 manual testing case M11.
+        #
+        #   Phase 2 -- apply: write Secrets in order. Once phase 1 has
+        #   green-lit every entry, the only remaining failure modes are
+        #   apiserver transients or admission-webhook rejections; those still
+        #   short-circuit the loop and we record what was already synced in
+        #   the result file so downstream consumers can see the partial state.
+        #
+        # Additive semantics: removing an entry from a later TaskRun does NOT
+        # delete the previously synced Secret -- this Task only writes;
+        # deletion is the consumer's responsibility.
+        sync_basic_auth_secrets() {
+          local token="$1"
+          shift
+          local refs=("$@")
+          local synced=()
+
+          # Always materialise the result file so downstream Pipeline steps
+          # have a deterministic artefact to inspect -- empty input yields []
+          # rather than a missing file.
+          _write_secret_refs_result() {
+            if [[ -z "${RESULT_BASIC_AUTH_SECRET_REFS_PATH:-}" ]]; then
+              return 0
+            fi
+            if [[ ${#synced[@]} -eq 0 ]]; then
+              printf '[]' > "${RESULT_BASIC_AUTH_SECRET_REFS_PATH}"
+            else
+              printf '%s\n' "${synced[@]}" \
+                | jq -R -s -c 'split("\n") | map(select(length > 0))' \
+                > "${RESULT_BASIC_AUTH_SECRET_REFS_PATH}"
+            fi
+          }
+
+          # Empty / unset basicAuthSecrets -- nothing to do beyond writing [].
+          if [[ ${#refs[@]} -eq 0 ]]; then
+            _write_secret_refs_result
+            return 0
+          fi
+
+          # --- Phase 1: pre-flight validation -----------------------------------
+          local i ref target_ns target_name
+          local -a parsed_refs=() parsed_ns=() parsed_name=()
+          for ref in "${refs[@]}"; do
+            if [[ -z "${ref}" ]]; then
+              continue
+            fi
+            if [[ ! "${ref}" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?/[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]]; then
+              echo "ERROR: basicAuthSecrets entry '${ref}' must be <namespace>/<name> with DNS-1123 names" >&2
+              exit 1
+            fi
+            target_ns="${ref%%/*}"
+            target_name="${ref#*/}"
+            parsed_refs+=("${ref}")
+            parsed_ns+=("${target_ns}")
+            parsed_name+=("${target_name}")
+          done
+          if [[ ${#parsed_refs[@]} -eq 0 ]]; then
+            _write_secret_refs_result
+            return 0
+          fi
+
+          # SSAR every (ns, verb) pair before applying ANY Secret. This is the
+          # gate that closes the partial-write window -- a downstream RBAC
+          # denial on entry N must not leave entries 1..N-1 already on the
+          # cluster.
+          for i in "${!parsed_refs[@]}"; do
+            ssar_assert create secrets "${parsed_ns[$i]}" \
+              "cannot create Secrets in namespace '${parsed_ns[$i]}' for basicAuthSecrets entry '${parsed_refs[$i]}'"
+            ssar_assert patch  secrets "${parsed_ns[$i]}" \
+              "cannot patch Secrets in namespace '${parsed_ns[$i]}' for basicAuthSecrets entry '${parsed_refs[$i]}' (server-side apply requires patch RBAC)"
+          done
+
+          # --- Phase 2: apply ---------------------------------------------------
+          local secret_yaml
+          for i in "${!parsed_refs[@]}"; do
+            set +x
+            # The GAT-id annotation is set whenever ensure-gat.sh populated
+            # ACCESS_TOKEN_ID earlier in the same TaskRun -- which is the
+            # production path. The conditional only drops the annotation when
+            # the helper is being sourced from a unit-test fixture that did
+            # not exercise the GAT mint step (script.feature). Keeping the
+            # annotation on the cross-NS Secrets is critical for the
+            # revocation flow: an operator chasing a leaked credential needs
+            # to be able to grep all Secrets labelled `managed-by:
+            # gitlab-connector-automatic-creation` and recover the source GAT
+            # id from the annotation.
+            secret_yaml="$(jq -n \
+              --arg ns "${parsed_ns[$i]}" \
+              --arg name "${parsed_name[$i]}" \
+              --arg user "oauth2" \
+              --arg pass "${token}" \
+              --arg gat_id "${ACCESS_TOKEN_ID}" \
+              --arg connector "${CONNECTOR}" \
+              '{
+                apiVersion: "v1",
+                kind: "Secret",
+                metadata: {
+                  name: $name,
+                  namespace: $ns,
+                  labels: {
+                    "connectors.cpaas.io/managed-by": "gitlab-connector-automatic-creation",
+                    "connectors.cpaas.io/source-connector-namespace": ($connector | split("/")[0]),
+                    "connectors.cpaas.io/source-connector-name": ($connector | split("/")[1])
+                  },
+                  annotations: (if $gat_id == "" then {} else {"connectors.cpaas.io/gitlab-access-token-id": $gat_id} end)
+                },
+                type: "kubernetes.io/basic-auth",
+                stringData: { username: $user, password: $pass }
+              }')"
+            if ! printf '%s\n' "${secret_yaml}" \
+              | kubectl apply --server-side --field-manager=connectors-operator -f -; then
+              # Apply failed mid-loop. Record what was already synced before
+              # bailing so consumers can audit the partial state.
+              _write_secret_refs_result
+              echo "ERROR: kubectl apply for basic-auth Secret ${parsed_refs[$i]} failed" >&2
+              exit 1
+            fi
+            echo "Synced basic-auth Secret ${parsed_refs[$i]}"
+            synced+=("${parsed_refs[$i]}")
+          done
+          _write_secret_refs_result
         }
 
         main() {
@@ -1358,13 +1658,14 @@ spec:
           load_admin_endpoint
 
           # T4 mitigation: confirm we have permission to write into the connector
-          # namespace before we apply anything. SelfSubjectAccessReview is callable
-          # by every authenticated user, so this avoids a hard cluster-RBAC
-          # requirement.
-          if ! kubectl auth can-i create secrets -n "${conn_ns}" >/dev/null 2>&1; then
-            echo "ERROR: cannot create secrets in namespace '${conn_ns}' -- check that the namespace exists and that the Task's ServiceAccount has RBAC to write Secret + Connector there" >&2
-            exit 1
-          fi
+          # namespace before we apply anything. SelfSubjectAccessReview itself is
+          # callable by every authenticated user (no extra RBAC needed to RUN the
+          # check) -- what it surfaces is whether THIS Task's ServiceAccount has
+          # `secrets:create` granted in `conn_ns`. ssar_assert distinguishes
+          # genuine RBAC denial from kubectl/apiserver failures so a misconfigured
+          # KUBECONFIG does not masquerade as a missing RoleBinding.
+          ssar_assert create secrets "${conn_ns}" \
+            "cannot create secrets in namespace '${conn_ns}' (check that the namespace exists and that the Task's ServiceAccount has RBAC to write Secret + Connector there)"
 
           # Read the token without leaking via set -x. Don't echo it.
           set +x
@@ -1431,6 +1732,10 @@ spec:
           printf '%s\n' "${connector_yaml}" \
             | kubectl apply --server-side --field-manager=connectors-operator -f -
 
+          # Sync the tenant GAT to additional <ns>/<name> basic-auth Secret
+          # targets if params.basicAuthSecrets was set (forwarded here via "$@").
+          sync_basic_auth_secrets "${token}" "$@"
+
           # Emit Task results so downstream Pipeline steps can consume them.
           if [[ -n "${RESULT_TENANT_GROUP_PATH:-}" ]]; then
             printf '%s' "${TENANT_GROUP_PATH}" > "${RESULT_TENANT_GROUP_PATH}"
@@ -1448,20 +1753,14 @@ spec:
           echo "✅ Kubernetes apply completed"
         }
 
-        main "$@"
-  volumes:
-    - emptyDir:
-        medium: Memory
-      name: state
-    - emptyDir:
-        medium: Memory
-      name: secrets
-  workspaces:
-    - description: connectors-csi mount of the admin GitLab Connector. Provides `config.yml` (consumed by glab for authentication and host) and `connector_address` (the admin Connector's `spec.address`, used as the tenant Connector's `spec.address`). Mirrors Harbor's harbor-config workspace.
-      name: gitlabconfig
-    - description: Optional kubeconfig CSI mount of a kubernetes-class Connector for cross-cluster apply; when bound the Task exports KUBECONFIG, otherwise kubectl falls back to the in-cluster service-account context. Mirrors Harbor's kube-config workspace.
-      name: kubeconfig
-      optional: true
+        # Standard "main module" guard: only run main() when this script is the
+        # entrypoint (e.g. `bash apply-kubernetes-resources.sh ...` in the Task
+        # pod). When the file is `source`d -- as the script.feature pod fixtures
+        # do to exercise individual helpers like sync_basic_auth_secrets() in
+        # isolation -- main() is intentionally NOT auto-invoked.
+        if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+          main "$@"
+        fi
 EOF
 ```
 {/* END GENERATED TASK YAML */}

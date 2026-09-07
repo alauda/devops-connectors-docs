@@ -18,8 +18,8 @@ export TARGET_NS=<target-namespace>
 cat <<'EOF' | envsubst '${REGISTRY} ${TARGET_NS}' | kubectl apply -f -
 apiVersion: v1
 data:
-  image: ${REGISTRY}/devops/harbor-connector-automatic-creation:v0.0.18
-  name: Harbor CLI v0.0.18
+  image: ${REGISTRY}/alauda-connectors/connectors-extensions/harbor-connector-automatic-creation:v1.12.0-rc.299.g74beee4
+  name: Harbor Connector Automatic Creation v1.12.0-beta.268.g0103c67
 kind: ConfigMap
 metadata:
   annotations:
@@ -35,8 +35,8 @@ metadata:
 ---
 apiVersion: v1
 data:
-  image: ${REGISTRY}/devops/harbor-connector-automatic-creation:latest
-  name: Harbor CLI latest (v0.0.18)
+  image: ${REGISTRY}/alauda-connectors/connectors-extensions/harbor-connector-automatic-creation:latest
+  name: Harbor Connector Automatic Creation latest
 kind: ConfigMap
 metadata:
   annotations:
@@ -121,6 +121,18 @@ metadata:
           - 'urn:alm:descriptor:description:en:List of Kubernetes image pull Secret references to create from the generated Harbor robot credentials. Add one Kubernetes Secret reference in <namespace>/<name> format per item'
           - 'urn:alm:descriptor:tooltip:en:Add one Kubernetes Secret reference in <namespace>/<name> format per item. Each Secret is created or updated in that namespace'
           - urn:alm:descriptor:com.tectonic.ui:tagsInput
+      - path: params.bindImagePullSecretToSA
+        x-descriptors:
+          - urn:alm:descriptor:label:en:Bind Image Pull Secret to ServiceAccount
+          - 'urn:alm:descriptor:description:en:When enabled, add each generated image pull Secret to the ServiceAccount selected by serviceAccountName in the Secret namespace'
+          - urn:alm:descriptor:com.tectonic.ui:booleanSwitch
+          - urn:alm:descriptor:props:booleanSwitch:true:true
+          - urn:alm:descriptor:props:booleanSwitch:false:false
+      - path: params.serviceAccountName
+        x-descriptors:
+          - urn:alm:descriptor:label:en:ServiceAccount Name
+          - 'urn:alm:descriptor:description:en:Name of the existing ServiceAccount that receives generated image pull Secrets when bindImagePullSecretToSA is true'
+          - urn:alm:descriptor:com.tectonic.ui:text
       - path: params.verbose
         x-descriptors:
           - urn:alm:descriptor:label:en:Verbose Logs
@@ -128,7 +140,7 @@ metadata:
           - urn:alm:descriptor:com.tectonic.ui:booleanSwitch
           - urn:alm:descriptor:props:booleanSwitch:true:true
           - urn:alm:descriptor:props:booleanSwitch:false:false
-    style.tekton.dev/displayParams: harborCliImage,harborProjects,permissions,robotAccountDuration,connector,imagePullSecrets
+    style.tekton.dev/displayParams: harborCliImage,harborProjects,permissions,robotAccountDuration,connector,imagePullSecrets,bindImagePullSecretToSA,serviceAccountName
     tekton.dev/categories: CLI
     tekton.dev/displayName: Harbor Connector Automatic Creation
     tekton.dev/icon: data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB3aWR0aD0iODBweCIgaGVpZ2h0PSI2MHB4IiB2aWV3Qm94PSIwIDAgODAgNjAiIHZlcnNpb249IjEuMSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIiB4bWxuczp4bGluaz0iaHR0cDovL3d3dy53My5vcmcvMTk5OS94bGluayI+CiAgICA8dGl0bGU+SGFyYm9yPC90aXRsZT4KICAgIDxnIGlkPSLljp/nlJ/lupTnlKgt6KGo5Y2V5Yib5bu6IiBzdHJva2U9Im5vbmUiIHN0cm9rZS13aWR0aD0iMSIgZmlsbD0ibm9uZSIgZmlsbC1ydWxlPSJldmVub2RkIj4KICAgICAgICA8ZyBpZD0iSGFyYm9yIj4KICAgICAgICAgICAgPHJlY3QgaWQ9IuefqeW9oiIgZmlsbD0iI0Q4RDhEOCIgb3BhY2l0eT0iMCIgeD0iMCIgeT0iMCIgd2lkdGg9IjgwIiBoZWlnaHQ9IjYwIj48L3JlY3Q+CiAgICAgICAgICAgIDxwYXRoIGQ9Ik00MCw2LjM5NDg4NDYyZS0xNCBDNTYuNTY4NTQyNSw2LjM5NDg4NDYyZS0xNCA3MCwxMy40Mjk3MTE2IDcwLDI5Ljk5NjEwMDUgQzcwLDQ2LjU2MjQ4OTQgNTYuNTY4NTQyNSw1OS45OTIyMDEgNDAsNTkuOTkyMjAxIEMyMy40MzE0NTc1LDU5Ljk5MjIwMSAxMCw0Ni41NjI0ODk0IDEwLDI5Ljk5NjEwMDUgQzEwLDEzLjQyOTcxMTYgMjMuNDMxNDU3NSw2LjM5NDg4NDYyZS0xNCA0MCw2LjM5NDg4NDYyZS0xNCBaIE00MCw1Ljk5OTIyMDEyIEMyNi43NDUxNjYsNS45OTkyMjAxMiAxNiwxNi43NDI5ODk0IDE2LDI5Ljk5NjEwMDUgQzE2LDM4LjU2OTM2MDMgMjAuNTc0Mzc0LDQ2LjQ5MTM3OSAyOCw1MC43NzgwMDg5IEMzNS40MjU2MjU4LDU1LjA2NDYzODkgNDQuNTc0Mzc0Miw1NS4wNjQ2Mzg5IDUyLDUwLjc3ODAwODkgQzU5LjQyNTYyNiw0Ni40OTEzNzkgNjQsMzguNTY5MzYwMyA2NCwyOS45OTYxMDA1IEM2NCwxNi43NDI5ODk0IDUzLjI1NDgzNCw1Ljk5OTIyMDEyIDQwLDUuOTk5MjIwMTIgWiIgaWQ9IuW9oueKtiIgZmlsbD0iIzY5NjU2NiIgZmlsbC1ydWxlPSJub256ZXJvIj48L3BhdGg+CiAgICAgICAgICAgIDxwYXRoIGQ9Ik0zOC45ODYsMjMuODY0Mjk3NyBMNTYuOTc3LDUuMjkxOTEyMDYgQzU4LjMzNzgsNi4yMTYzOTE4OCA1OS41MjI4LDcuMTQ1NjcxMDggNjAuNTMyLDguMDc3OTQ5ODkgQzYxLjU0MTIsOS4wMTA4Mjg2NCA2Mi41MzI0LDEwLjA5MzY4NzkgNjMuNTA1NiwxMS4zMjY1Mjc2IEwzOC45ODYsMjMuODY0ODk3NSBMMzguOTg2LDIzLjg2NDI5NzcgWiBNNDAsMjUuMDk1OTM3NSBMNjYuODk4NiwxNi43NTcwMjE2IEM2Ny42MTIsMTguMTU1NDM5OCA2OC4xNjgyLDE5LjQ0OTQ3MTUgNjguNTY2NiwyMC42Mzg1MTcgQzY4Ljk2Njg4MjksMjEuODMyMDgxMyA2OS4yNTY2OTk4LDIzLjA1OTg3NzcgNjkuNDMyNCwyNC4zMDY0NDAyIEw0MCwyNS4wOTU5Mzc1IFogTTM5LjUwOTgsMjYuNTU4NTQ3NCBMNjkuOTc0OCwyOC45MDcyNDIxIEM3MC4wMzEyLDI5LjkzMTMwODkgNjkuOTgzMiwzMS4yMTA5NDI2IDY5LjgzMjYsMzIuNzQ3MzQyOCBDNjkuNjgxNCwzNC4yODM3NDMxIDY5LjQ2NjYsMzUuNjcyNTYyNSA2OS4xODc2LDM2LjkxMzgwMTIgTDM5LjUwOTgsMjYuNTU5MTQ3MyBMMzkuNTA5OCwyNi41NTg1NDc0IFoiIGlkPSLlvaLnirYiIGZpbGw9IiM4M0I4RTIiIGZpbGwtcnVsZT0ibm9uemVybyI+PC9wYXRoPgogICAgICAgICAgICA8cGF0aCBkPSJNMjcuMDcsMjIuMzg0ODkgTDI3LjA3LDIwLjc1NjEwMTcgTDMyLjI0OCwxNS41Nzk5NzQ2IEwzMi4yNDgsMTUuMTA5NjM1OCBDMzIuMjQ3OTMyOSwxNC44OTY3NTk5IDMyLjM2MTQ3NzEsMTQuNzAwMDI1NyAzMi41NDU4NDU4LDE0LjU5MzU2ODQgQzMyLjczMDIxNDUsMTQuNDg3MTExMSAzMi45NTczODU1LDE0LjQ4NzExMTEgMzMuMTQxNzU0MiwxNC41OTM1Njg0IEMzMy4zMjYxMjI5LDE0LjcwMDAyNTcgMzMuNDM5NjY3MSwxNC44OTY3NTk5IDMzLjQzOTYsMTUuMTA5NjM1OCBMMzMuNDM5NiwxNS41Nzk5NzQ2IEwzOC42MTcsMjAuNzU2MTAxNyBMMzguNjE3LDIyLjM4NDg5IEwzNy43ODksMjIuMzg0ODkgTDM3Ljc4OSwyOC4xNDQ3NDEyIEwzOC42MTcsMjguMTQ0NzQxMiBMMzguNjE3LDMwLjk2MDc3NTEgTDM3Ljc4OSwzMC45NjA3NzUxIEwzOS41MzUsNjAgQzM2Ljg0MTYsNTkuODU5MDE4MyAzNC40OTMyLDU5LjU0MTY1OTYgMzIuNDg5OCw1OS4wNDc5MjM4IEMzMC40ODcsNTguNTU0Nzg3OSAyOC40ODksNTcuODAxMjg1OCAyNi40OTcsNTYuNzg4MDE3NiBMMjguNDM1LDMwLjk2MTM3NSBMMjcuMDcsMzAuOTYxMzc1IEwyNy4wNywyOC4xNDQ3NDEyIEwyOC4wMTY4LDI4LjE0NDc0MTIgTDI4LjAxNjgsMjIuMzg0ODkgTDI3LjA3LDIyLjM4NDg5IFoiIGlkPSLot6/lvoQiIGZpbGw9IiM0RkE0MzQiIGZpbGwtcnVsZT0ibm9uemVybyI+PC9wYXRoPgogICAgICAgICAgICA8cGF0aCBkPSJNMjguMTUxMiwzNC43MDI0ODg3IEwzOC4yODcsMzkuMjQzODk4MyBMMzguMzgsNDAuODAwNjk1OSBMMjguMDQ4LDM2LjExNjUwNDkgTDI4LjE1MTIsMzQuNzAyNDg4NyBaIE0yNy44ODk2LDM4LjE4MDIzNjYgTDM4LjUxOTgsNDIuOTU1NjE1OCBMMzguNjA2OCw0NC41NTkyMDczIEwyNy43ODI4LDM5LjY2ODY0MzEgTDI3Ljg4OTYsMzguMTgwMjM2NiBaIE0yNy41OTI2LDQyLjIwMjExMzcgTDM4Ljc3MzYsNDcuMjk1NDUxNiBMMzguODg3Niw0OC45MzA4MzkgTDI3LjQ1MSw0My43OTkxMDYxIEwyNy41OTI2LDQyLjIwMjExMzcgWiBNMjcuMjc5NCw0Ni4yODA5ODM1IEwzOS4wMjU2LDUxLjYwODI5MDkgTDM5LjEyNTIsNTMuMjQ0Mjc4MiBMMjcuMTU4OCw0Ny45NDk5NjY1IEwyNy4yNzk0LDQ2LjI4MDk4MzUgWiBNMjkuNTMsMjIuMzkzMjg4OSBMMzYuMzQxMiwyMi4zOTMyODg5IEwzNi4zNDEyLDI4LjE2MDMzOTIgTDM0LjYxNzQsMjguMTYwMzM5MiBMMzQuNjE3NCwyNS41OTk4NzIgQzM0LjYxNzQsMjQuNjQxMzQwOCAzMy44NDAyNTU5LDIzLjg2NDI5NzcgMzIuODgxNiwyMy44NjQyOTc3IEMzMS45MjI5NDQxLDIzLjg2NDI5NzcgMzEuMTQ1OCwyNC42NDEzNDA4IDMxLjE0NTgsMjUuNTk5ODcyIEwzMS4xNDU4LDI4LjE2MDMzOTIgTDI5LjUzLDI4LjE2MDMzOTIgTDI5LjUzLDIyLjM5MzI4ODkgWiIgaWQ9IuW9oueKtiIgZmlsbD0iI0ZGRkZGRiIgZmlsbC1ydWxlPSJub256ZXJvIj48L3BhdGg+CiAgICAgICAgPC9nPgogICAgPC9nPgo8L3N2Zz4=
@@ -142,7 +154,7 @@ metadata:
 spec:
   description: Use harbor-cli to create or update Harbor projects and robot accounts, then create Kubernetes Secret, Harbor Connector, and optional imagePullSecrets in target namespaces. It is suitable for quickly initializing Harbor connectors for cluster tenants and refreshing connector credentials when needed.
   params:
-    - default: registry.alauda.cn:60070/devops/harbor-connector-automatic-creation:v0.0.18
+    - default: ${REGISTRY}/alauda-connectors/connectors-extensions/harbor-connector-automatic-creation:v1.12.0-rc.299.g74beee4
       description: Tool image used by every step of this Task to run harbor-cli, kubectl, and the helper scripts that create Harbor projects, robot accounts, connector Secrets, and Harbor Connector resources; defaults to the pinned versioned image, override per TaskRun when mirroring to a private registry
       name: harborCliImage
       type: string
@@ -171,10 +183,22 @@ spec:
       description: Validity period of the Harbor robot account in days; use "-1" for no expiration
       name: robotAccountDuration
       type: string
+    - default: refresh
+      description: Behavior when the robot account already exists and its project set is unchanged. "refresh" (default) rotates the robot secret on every run. "reuse" keeps the existing token by reading it back from the Connector Secret so credentials already distributed to other namespaces stay valid; permissions are still updated in place, and it falls back to refresh when no valid stored token is found. A project-set change always recreates the robot (new token) regardless of this setting
+      name: robotTokenPolicy
+      type: string
     - default: []
       description: List of Kubernetes image pull Secret references to create from the generated Harbor robot credentials; add one <namespace>/<name> reference per item
       name: imagePullSecrets
       type: array
+    - default: "false"
+      description: When "true", add each generated image pull Secret to the ServiceAccount selected by serviceAccountName in the Secret namespace; direct Task users must opt in explicitly
+      name: bindImagePullSecretToSA
+      type: string
+    - default: default
+      description: Name of the existing ServiceAccount that receives generated image pull Secrets when bindImagePullSecretToSA is "true"; the same name is resolved independently in every imagePullSecrets namespace
+      name: serviceAccountName
+      type: string
     - default: "false"
       description: Show detailed logs for Harbor and Kubernetes reconciliation steps; use "true" to troubleshoot and "false" for normal runs
       name: verbose
@@ -185,11 +209,24 @@ spec:
       type: array
     - description: Name of the Harbor robot account actually used by the Task, including the generated default when robotAccount is left empty
       name: robot-account-name
+    - description: '"true" when a new robot token was minted this run (created / refreshed / recreated), "false" when an existing token was reused. Callers use it to decide whether previously distributed token copies must be re-synced to the project namespaces'
+      name: robot-token-rotated
     - description: Namespaced reference of the Harbor Connector handled by the Task, in <namespace>/<name> format
       name: connector-ref
     - description: List of Kubernetes image pull Secret references requested through imagePullSecrets, returned as <namespace>/<name> values
       name: image-pull-secret-refs
       type: array
+  stepTemplate:
+    securityContext:
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop:
+          - ALL
+      runAsGroup: 65532
+      runAsNonRoot: true
+      runAsUser: 65532
+      seccompProfile:
+        type: RuntimeDefault
   steps:
     - args:
         - --harbor-projects
@@ -212,10 +249,18 @@ spec:
           value: $(params.robotAccount)
         - name: ROBOT_ACCOUNT_DURATION
           value: $(params.robotAccountDuration)
+        - name: ROBOT_TOKEN_POLICY
+          value: $(params.robotTokenPolicy)
+        - name: SECRET
+          value: $(params.secret)
         - name: WORKSPACE_HARBOR_CONFIG_BOUND
           value: $(workspaces.harbor-config.bound)
         - name: WORKSPACE_HARBOR_CONFIG_PATH
           value: $(workspaces.harbor-config.path)
+        - name: WORKSPACE_KUBE_CONFIG_BOUND
+          value: $(workspaces.kube-config.bound)
+        - name: WORKSPACE_KUBE_CONFIG_PATH
+          value: $(workspaces.kube-config.path)
       image: $(params.harborCliImage)
       imagePullPolicy: $(params.imagePullPolicy)
       name: ensure-harbor
@@ -227,6 +272,7 @@ spec:
         project_args=()
         permission_args=()
         robot_account_args=()
+        secret_args=()
 
         parse_step_args() {
           for arg in "$@"; do
@@ -266,12 +312,27 @@ spec:
           export HARBOR_ENCRYPTION_KEY="$(cat "${WORKSPACE_HARBOR_CONFIG_PATH}/HARBOR_ENCRYPTION_KEY")"
         }
 
+        prepare_kubeconfig_environment() {
+          # reuse mode reads the stored token from the Connector Secret via kubectl.
+          if [[ "${WORKSPACE_KUBE_CONFIG_BOUND}" != "true" ]]; then
+            unset KUBECONFIG || true
+            return
+          fi
+
+          export KUBECONFIG="${WORKSPACE_KUBE_CONFIG_PATH}/kubeconfig"
+        }
+
         mkdir -p /shared
         prepare_harbor_cli_environment
+        prepare_kubeconfig_environment
         parse_step_args "$@"
 
         if [[ -n "${ROBOT_ACCOUNT}" ]]; then
           robot_account_args=(--robot-account "${ROBOT_ACCOUNT}")
+        fi
+
+        if [[ -n "${SECRET}" ]]; then
+          secret_args=(--secret "${SECRET}")
         fi
 
         ensure-projects.sh \
@@ -281,13 +342,22 @@ spec:
         ensure-robot-account.sh \
           --connector "${CONNECTOR}" \
           --output-token-file /shared/robot-token \
+          --output-status-file /shared/robot-token-rotated \
           --robot-account-duration "${ROBOT_ACCOUNT_DURATION}" \
+          --robot-token-policy "${ROBOT_TOKEN_POLICY}" \
           --verbose "${VERBOSE}" \
           "${robot_account_args[@]}" \
+          "${secret_args[@]}" \
           "${project_args[@]}" \
           "${permission_args[@]}"
-      securityContext:
-        runAsNonRoot: true
+
+        # Surface whether the token was (re)minted ("true") or reused ("false") so callers
+        # can decide whether previously distributed token copies must be re-synced.
+        if [[ -f /shared/robot-token-rotated ]]; then
+          cp /shared/robot-token-rotated "$(results.robot-token-rotated.path)"
+        else
+          printf 'true' > "$(results.robot-token-rotated.path)"
+        fi
       volumeMounts:
         - mountPath: /shared
           name: shared-data
@@ -302,6 +372,10 @@ spec:
           cpu: 100m
           memory: 128Mi
       env:
+        - name: BIND_IMAGE_PULL_SECRET_TO_SA
+          value: $(params.bindImagePullSecretToSA)
+        - name: SERVICE_ACCOUNT_NAME
+          value: $(params.serviceAccountName)
         - name: VERBOSE
           value: $(params.verbose)
         - name: CONNECTOR
@@ -383,11 +457,11 @@ spec:
           --connector "${CONNECTOR}" \
           --secret "${SECRET}" \
           --robot-token-file /shared/robot-token \
+          --bind-image-pull-secret-to-sa "${BIND_IMAGE_PULL_SECRET_TO_SA}" \
+          --service-account-name "${SERVICE_ACCOUNT_NAME}" \
           --verbose "${VERBOSE}" \
           "${robot_account_args[@]}" \
           "${image_pull_secret_args[@]}"
-      securityContext:
-        runAsNonRoot: true
       volumeMounts:
         - mountPath: /shared
           name: shared-data
@@ -469,8 +543,6 @@ spec:
           printf '"%s"' "${image_pull_secrets[${i}]}" >> "${output_path}"
         done
         printf ']' >> "${output_path}"
-      securityContext:
-        runAsNonRoot: true
   volumes:
     - emptyDir:
         medium: Memory

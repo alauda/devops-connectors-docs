@@ -1,0 +1,169 @@
+---
+weight: 30
+---
+
+# Using JFrog Connector Forward Proxy in Tekton Pipeline
+
+Using the JFrog Connector Forward Proxy in Tekton Tasks enables centralized management of JFrog Artifactory credentials and secure image pull and push operations during Tekton Task execution, without embedding credentials in TaskRun specifications.
+
+## Requirements for Tekton Task \{#requirements-for-tekton-task}
+
+The JFrog Connector injects proxy configuration through the Connectors CSI Driver. When a CSI volume is mounted **without** a `configuration.names` attribute, the driver provides the following built-in files:
+
+- `.env`: Environment variables file containing `http_proxy`, `https_proxy`, and `no_proxy` in `key=value` format
+- `http.proxy`: Forward proxy URL with embedded authentication for HTTP
+- `https.proxy`: Forward proxy URL with embedded authentication for HTTPS
+- `ca.crt`: CA certificate for verifying the connector proxy
+
+Tekton Tasks must meet the following requirements to use the JFrog Connector Forward Proxy:
+
+1. **CLI tools must support `HTTP_PROXY` / `HTTPS_PROXY` environment variables.**
+
+2. **The Task must expose a workspace for mounting proxy configuration files.**
+   The workspace can be sourced as a `.env` file, or individual files such as `http.proxy` can be read explicitly.
+
+3. **The Task must trust the connector proxy CA certificate or disable TLS verification.**
+   The connector proxy performs TLS interception (MITM). The proxy CA (`ca.crt`) must be trusted so that Go-based tools (buildah, skopeo) accept the intercepted certificate. Preferred approaches: install `ca.crt` into the system trust store with `update-ca-trust`, or set `SSL_CERT_FILE=/path/to/ca.crt` before invoking the tool. As a fallback for testing, pass `--tls-verify=false` (buildah) or `--src-tls-verify=false --dest-tls-verify=false` (skopeo) to disable verification entirely.
+
+   Note: `--cert-dir` (buildah) and `--src-cert-dir`/`--dest-cert-dir` (skopeo) apply to direct registry TLS connections only and do not cover the proxy MITM certificate.
+
+## Using Forward Proxy with the .env Workspace
+
+If the Tekton Task natively sources a workspace containing a `.env` file, mount the JFrog Connector's built-in proxy configuration directly:
+
+```yaml
+apiVersion: tekton.dev/v1
+kind: TaskRun
+metadata:
+  name: buildah-jfrog-build
+spec:
+  taskRef:
+    name: buildah-cli
+  workspaces:
+  - name: source
+    persistentVolumeClaim:
+      claimName: my-source
+  - name: registryconfig
+    csi:
+      readOnly: true
+      driver: connectors-csi
+      volumeAttributes:
+        connectors: "jfrog-connector"
+  params:
+  - name: IMAGE
+    value: "jfrog.example.com/docker-local/team/app:v1"
+```
+
+The Task's `registryconfig` workspace receives `.env`, `http.proxy`, `https.proxy`, and `ca.crt`. A Task that sources `.env` automatically picks up `http_proxy`, `https_proxy`, and `no_proxy`.
+
+## Using Forward Proxy with Custom Commands
+
+If the Task does not natively source a `.env` file but accepts custom commands, read the proxy file explicitly in the step script.
+
+The following example uses a `buildah` task with a custom command parameter. The Task mounts the `registryconfig` workspace at `/workspace/registryconfig`:
+
+```yaml
+apiVersion: tekton.dev/v1
+kind: TaskRun
+metadata:
+  name: buildah-jfrog-build
+spec:
+  taskRef:
+    name: buildah-cli
+  workspaces:
+  - name: source
+    persistentVolumeClaim:
+      claimName: my-source
+  - name: registryconfig
+    csi:
+      readOnly: true
+      driver: connectors-csi
+      volumeAttributes:
+        connectors: "jfrog-connector"
+  params:
+  - name: cmd
+    value: |
+      set -ex
+
+      # Source proxy environment variables
+      set -a; . /workspace/registryconfig/.env; set +a
+
+      # Trust the connector proxy CA (Go net/http reads SSL_CERT_FILE)
+      export SSL_CERT_FILE=/workspace/registryconfig/ca.crt
+
+      buildah build \
+        --tag jfrog.example.com/docker-local/team/app:v1 \
+        .
+
+      buildah push \
+        jfrog.example.com/docker-local/team/app:v1
+```
+
+## Mounting Multiple JFrog Connectors in One TaskRun
+
+:::info Feature flag required
+
+Before using multiple Connectors in one CSI volume, enable the `enable-multi-connector` feature flag on `ConnectorsConfig`. For details, see [Feature Flags](../../overview/feature_flags.mdx#enable-multi-connector).
+
+:::
+
+When all selected Connectors belong to the same ConnectorClass (e.g., all are JFrog Connectors pointing to **the same Artifactory instance** with different access levels), you can list them in the `connectors` attribute and the CSI Driver merges their identities into a single proxy credential:
+
+```yaml
+apiVersion: tekton.dev/v1
+kind: TaskRun
+metadata:
+  name: buildah-multi-jfrog
+spec:
+  taskRef:
+    name: buildah-cli
+  workspaces:
+  - name: registryconfig
+    csi:
+      readOnly: true
+      driver: connectors-csi
+      volumeAttributes:
+        connectors: "jfrog-connector-read,jfrog-connector-write"
+  params:
+  - name: cmd
+    value: |
+      set -a; . /workspace/registryconfig/.env; set +a
+      export SSL_CERT_FILE=/workspace/registryconfig/ca.crt
+
+      buildah pull \
+        jfrog.example.com/docker-local/base/scratch:v1
+
+      buildah tag \
+        jfrog.example.com/docker-local/base/scratch:v1 \
+        jfrog.example.com/docker-local/team/app:v1
+
+      buildah push \
+        jfrog.example.com/docker-local/team/app:v1
+```
+
+:::warning Single proxy endpoint limitation
+
+When multiple Connectors are mounted together, the CSI Driver uses the proxy endpoint from the **last ConnectorClass**. This means the merged `.env` / `http.proxy` points to one proxy service. Mounting Connectors that target **different Artifactory instances** does not produce a separate proxy URL per host; traffic to a different instance would not be routed through its own connector proxy.
+
+If you need to access two distinct Artifactory instances in one TaskRun, mount them as **separate workspaces** and apply each proxy URL only to traffic bound for its corresponding host.
+
+:::
+
+For details on how multiple Connectors are merged, see [Connectors CSI Multiple Connectors](../../connectors/concepts/connectors_csi.mdx#multiple-connectors).
+
+## Operational Results
+
+Check whether the TaskRun completed successfully:
+
+```bash
+kubectl get taskrun buildah-jfrog-build
+kubectl logs --selector=tekton.dev/taskRun=buildah-jfrog-build --all-containers
+```
+
+## Further Reading
+
+- [Building Images Using JFrog Connector Forward Proxy in Kubernetes](./using_jfrog_connector_forward_proxy_for_image_build.mdx)
+- [JFrog ConnectorClass Proxy Configuration](../concepts/jfrog_connectorclass.mdx#jfrog-connector-proxy-and-configuration-files)
+- [Connectors CSI Driver Built-in Configurations](../../connectors/concepts/connectors_csi.mdx#built-in-configurations)
+- [Connectors CSI Multiple Connectors](../../connectors/concepts/connectors_csi.mdx#multiple-connectors)
+- [Using CSI Volumes in Tekton](https://tekton.dev/docs/pipelines/workspaces/#csi)

@@ -156,6 +156,64 @@ The two referenced ConfigMaps are built-in templates provided by the Connectors 
 - `connectors-approvals-in-pipeline` defines the default check rule that matches an `ApprovalTask` in the same `PipelineRun`
 - `connectors-use-connectors-proxy-in-pod` defines the temporary proxy permission granted to the Pod after approval
 
+## Restricting Who Can Approve
+
+By default, the `connectors-approvals-in-pipeline` check treats any approved
+`ApprovalTask` in the `PipelineRun` as sufficient. To centralize the approval
+rule and require that specific people or groups approve — instead of encoding
+approvers only in each pipeline's `ApprovalTask` — add `params` to the check
+rule:
+
+```yaml
+checkGrantedPermission:
+  spec:
+    checks:
+      - name: manual-approval
+        ref:
+          configMap:
+            name: connectors-approvals-in-pipeline
+        params:
+          - name: approvers
+            value: ["alice", "group:ops-leads"]
+          - name: numberOfApprovalsRequired
+            value: 2
+    roleTemplate:
+      ref:
+        configMap:
+          name: connectors-use-connectors-proxy-in-pod
+```
+
+Supported params:
+
+- `approvers` — the identities whose approval this policy accepts. A plain
+  entry (for example `alice`) matches an approving user; an entry prefixed with
+  `group:` (for example `group:ops-leads`) matches an approving group, and each
+  approving group member is counted individually. When `approvers` is omitted,
+  the legacy behavior is preserved: any approved `ApprovalTask` passes.
+- `numberOfApprovalsRequired` — the minimum number of distinct approved
+  identities among `approvers` (default `1`). It is only meaningful together
+  with `approvers`.
+
+The approval decision is validated against the `ApprovalTask`'s recorded
+approver responses (`status.approversResponse`), not against the approver list
+declared in the pipeline. This means the approver constraint is enforced even
+if a pipeline author sets a different approver list on the `ApprovalTask` — the
+approver identity is decided by the `AccessPolicy`, not by whoever triggers the
+pipeline.
+
+### What the requester sees
+
+- **Approved by a designated approver** — the check passes, temporary proxy
+  permission is granted, and the matched check records the approving identities
+  under `status.policies[].matchedChecks[].approvedBy`.
+- **Approved by someone not in `approvers`** — the check fails with reason
+  `ApproverMismatch` and no permission is granted, even though the
+  `ApprovalTask` itself shows `approved`. Because an `ApprovalTask` reaching
+  `approved` is final, the wrong-approver case cannot be recovered by a later
+  approval; the workload must be re-run so a new `AccessRequest` is created and
+  the designated approver can approve it. The matched check message states which
+  identities approved versus which the policy requires, to make this explicit.
+
 ## Typical Use Cases
 
 - Production artifact promotion that must wait for human approval
