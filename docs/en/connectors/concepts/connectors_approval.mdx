@@ -156,7 +156,7 @@ The two referenced ConfigMaps are built-in templates provided by the Connectors 
 - `connectors-approvals-in-pipeline` defines the default check rule that matches an `ApprovalTask` in the same `PipelineRun`
 - `connectors-use-connectors-proxy-in-pod` defines the temporary proxy permission granted to the Pod after approval
 
-## Restricting Who Can Approve
+## Restricting Who Can Approve \{#restricting-who-can-approve}
 
 By default, the `connectors-approvals-in-pipeline` check treats any approved
 `ApprovalTask` in the `PipelineRun` as sufficient. To centralize the approval
