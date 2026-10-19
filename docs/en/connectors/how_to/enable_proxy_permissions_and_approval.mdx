@@ -1,0 +1,202 @@
+---
+created: '2026-10-08'
+title: How to Enable Proxy Permission Checks and Approval Gating
+weight: 30
+---
+
+# Enable Proxy Permission Checks and Approval Gating
+
+The recommended settings in [Connectors Proxy](../concepts/connectors_proxy.mdx) keep the tools' long-lived credentials out of pipelines with the default feature flag settings: workloads reach the tools through `Connectors Proxy` with a short-lived token, and read (`get`) permission on a Connector is enough to use it. This guide adds two optional controls on top of that setup:
+
+- **Proxy permission checks** (`enable-connector-proxy-permissions`): using a Connector through `Connectors Proxy` requires the `connectors/proxy` permission, not only read permission on the Connector.
+- **Approval gating** (`enable-connectors-approval`): a sensitive Connector is released to a workload only after the checks of an `AccessPolicy` pass, for example an approved Tekton `ApprovalTask` in the same `PipelineRun`.
+
+For the concepts, see [Connectors Permission Model](../concepts/permission_model.mdx) and [Connectors Approval & Permission Gating](../concepts/connectors_approval.mdx).
+
+## When to Use
+
+Use this guide when the use of Connectors through `Connectors Proxy` must be governed by platform permissions, or when sensitive Connectors, such as a production registry, may be used only after approval.
+
+Consider the impact before you start:
+
+- Both flags default to `"false"`. They live in one shared ConfigMap and apply to the whole Connectors installation, not to a single Connector or project (see [Feature Flags](../../overview/feature_flags.mdx)). Enable the two flags together.
+- With `enable-connectors-approval` enabled, read permission on a Connector is no longer enough to mount it. The CSI Driver checks the `connectors/proxy` permission with verb `*`; a grant of only `get` on `connectors/proxy` does not satisfy it. A mount without that permission contains only a `.error.json` file, so the workload fails instead of receiving configuration.
+- With `enable-connector-proxy-permissions` also enabled, the proxy applies the same check to every request.
+- Every workload that mounts Connectors is affected, so prepare the grants first and follow the order in [Steps](#steps).
+
+## Prerequisites
+
+- The `ConnectorsCore` component is installed. It creates the `connectors-config` ConfigMap that stores the flags.
+- You can edit the `ConnectorsConfig` resource. `ConnectorsConfig` is a [cluster singleton](../../install/install.mdx#cluster-singleton), so do not create a second one. Find the existing resource and its namespace:
+
+  ```bash
+  kubectl get connectorsconfig -A
+  ```
+
+- Pipelines run under named ServiceAccounts, so that grants and `AccessPolicy` resources can bind them.
+- Workloads mount Connectors through the [Connectors CSI Driver](../concepts/connectors_csi.mdx).
+- For approval with the built-in `connectors-approvals-in-pipeline` check, each pipeline that uses an approval-gated Connector has a Tekton `ApprovalTask` in the same `PipelineRun`, before the task that mounts the Connector.
+
+## Steps \{#steps}
+
+Follow this order. Mounts change behavior as soon as `enable-connectors-approval` is enabled, and the `AccessPolicy` admission webhook rejects new `AccessPolicy` resources while that flag is disabled. So the grants that do not depend on `AccessPolicy` come first, and the `AccessPolicy` resources follow the flag immediately.
+
+Change the flags only in `ConnectorsConfig`, as described in [Update a Feature Flag](../../overview/feature_flags.mdx#update-a-feature-flag). Do not edit the `connectors-config` ConfigMap or the managed `ConnectorsCore` resource directly. In the commands below, replace `<name>` and `<namespace>` with the values from `kubectl get connectorsconfig -A`.
+
+### Step 1: Prepare Grants for Connectors Not Behind Approval
+
+List the ServiceAccounts that mount Connectors which will not be behind approval. Grant each of them the `connectors/proxy` permission with verb `*` on those Connectors, in addition to the read permission they already have. A grant of only `get` on `connectors/proxy` does not satisfy the CSI check.
+
+Kubernetes RBAC grants can be created at any time. For example, the following Role and RoleBinding, created in the namespace of the Connector, let the `builder` ServiceAccount of `<workload-namespace>` use the `<connector-name>` Connector:
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: use-connectors-proxy
+  namespace: <connector-namespace>
+rules:
+  - apiGroups:
+      - connectors.alauda.io
+    resources:
+      - connectors/proxy
+    resourceNames:
+      - <connector-name>
+    verbs:
+      - "*"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: use-connectors-proxy
+  namespace: <connector-namespace>
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: use-connectors-proxy
+subjects:
+  - kind: ServiceAccount
+    name: builder
+    namespace: <workload-namespace>
+```
+
+Do not grant `connectors/proxy` on Connectors that will be behind approval. A workload that already has the `connectors/proxy` permission for a Connector needs no `AccessRequest` (see [AccessRequest](../concepts/access_request.mdx)), so approval would not gate it. Workloads that mount approval-gated Connectors are authorized through the approval check of the `AccessPolicy` you create in Step 3, so their mounts fail until that `AccessPolicy` exists.
+
+### Step 2: Enable Approval Gating
+
+Set `enable-connectors-approval` to `"true"`:
+
+```bash
+kubectl patch connectorsconfig <name> -n <namespace> --type merge \
+  -p '{"spec":{"components":{"core":{"spec":{"featureFlags":{"enable-connectors-approval":"true"}}}}}}'
+```
+
+From now on, a mount without the `connectors/proxy` permission contains only `.error.json`. Continue with Step 3 right away, and do not start runs that mount approval-gated Connectors until it is done.
+
+### Step 3: Create the AccessPolicy Resources
+
+Create the `AccessPolicy` resources in the namespaces of the Connectors they protect.
+
+For each sensitive Connector:
+
+1. Find and remove the default and direct `connectors/proxy` grants that cover it: RBAC grants such as the ones in Step 1, and `spec.defaultPermission` of any `AccessPolicy` that matches it. `spec.defaultPermission` grants proxy access immediately, without any approval check (see [AccessPolicy](../concepts/access_policy.mdx)). Approval gates a Connector only when nothing else grants proxy access to it.
+2. Create an `AccessPolicy` whose approval check sets `approvers`, maintained by administrators. Without `approvers`, any approved `ApprovalTask` in the `PipelineRun` is sufficient, so a user who can create or modify the pipeline can set the `ApprovalTask` approvers and approve the run. See [Restricting Who Can Approve](../concepts/connectors_approval.mdx#restricting-who-can-approve).
+
+   For example, the following policy releases the `prod-harbor` Connector only after a member of the `release-managers` group approves:
+
+   ```yaml
+   apiVersion: connectors.alauda.io/v1alpha1
+   kind: AccessPolicy
+   metadata:
+     name: prod-harbor-approval
+     namespace: <connector-namespace>
+   spec:
+     connector:
+       names:
+         - prod-harbor
+     checkGrantedPermission:
+       spec:
+         checks:
+           - name: manual-approval
+             ref:
+               configMap:
+                 name: connectors-approvals-in-pipeline
+             params:
+               - name: approvers
+                 value:
+                   - group:release-managers
+         roleTemplate:
+           ref:
+             configMap:
+               name: connectors-use-connectors-proxy-in-pod
+   ```
+
+For project-level Connectors that the pipelines of a project use without approval, you can now grant proxy use per project with an `AccessPolicy` in the namespace of the Connectors, instead of the RBAC grants from Step 1. Bind the pipeline ServiceAccounts through a `cpaas.io/project` namespace selector (see [AccessPolicy](../concepts/access_policy.mdx#common-configuration-patterns)). That selector matches only the member namespaces of the project; the project's own namespace carries the `cpaas.io/inner-namespace` label instead (see [Connector Resource Levels and Permissions](../concepts/connector_scope_permissions.mdx)). If workloads also run in the project namespace, bind them explicitly with a second `serviceAccounts` entry whose `namespaceSelector.names` lists that namespace:
+
+```yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: AccessPolicy
+metadata:
+  name: project-default-access
+  namespace: <project-namespace>
+spec:
+  connector:
+    names:
+      - <connector-name>
+  defaultPermission:
+    roleTemplate:
+      ref:
+        configMap:
+          name: connectors-use-connectors-proxy
+    bindingTemplate:
+      serviceAccounts:
+        - names:
+            - builder
+          namespaceSelector:
+            matchLabels:
+              cpaas.io/project: <project-name>
+        - names:
+            - builder
+          namespaceSelector:
+            names:
+              - <project-namespace>
+```
+
+Do not match an approval-gated Connector with such a policy.
+
+:::note
+Before you rely on `spec.defaultPermission`, make sure that each ServiceAccount it binds already has `get` permission on Connectors in the namespace of the Connector; a grant limited to specific Connector names is not enough. ServiceAccounts without it are left out of the generated RoleBinding while the `AccessPolicy` still reports `Ready`, and only the controller log records the skipped subject.
+:::
+
+### Step 4: Enable Proxy Permission Checks
+
+Set `enable-connector-proxy-permissions` to `"true"`:
+
+```bash
+kubectl patch connectorsconfig <name> -n <namespace> --type merge \
+  -p '{"spec":{"components":{"core":{"spec":{"featureFlags":{"enable-connector-proxy-permissions":"true"}}}}}}'
+```
+
+The proxy then applies the same `connectors/proxy` check to every request.
+
+## Verify
+
+- Run a pipeline that mounts a Connector which is not behind approval. The mount contains the configuration files.
+- Run a pipeline that uses an approval-gated Connector. While its `ApprovalTask` is pending, the task that mounts the Connector waits. After a designated approver approves, the mount contains the configuration files.
+
+An unauthorized mount contains only `.error.json`, and the workload fails later because it has no configuration. When an `ApprovalTask` is rejected, the tasks that run after it in the `PipelineRun` do not run. To find the cause of an unauthorized mount:
+
+1. List the mount path with `ls -A` and read `.error.json`.
+2. Check the events of the Pod with `kubectl describe pod <pod-name> -n <workload-namespace>`.
+3. Check the conditions of the `AccessRequest` for the Pod. Reason `NoAccessPolicyMatched` on the `AccessPolicyMatched` condition means that no `AccessPolicy` matched the request, so the workload has no grant for the Connector. For the other conditions and reasons, see [AccessRequest](../concepts/access_request.mdx) and [Connectors Approval & Permission Gating](../concepts/connectors_approval.mdx).
+
+## Roll Back
+
+Set both flags back to `"false"` in `ConnectorsConfig`:
+
+```bash
+kubectl patch connectorsconfig <name> -n <namespace> --type merge \
+  -p '{"spec":{"components":{"core":{"spec":{"featureFlags":{"enable-connector-proxy-permissions":"false","enable-connectors-approval":"false"}}}}}}'
+```
+
+With both flags disabled, the approval flow is not active and read permission on a Connector is again enough to use it through `Connectors Proxy`. Approval-gated Connectors are then usable by any workload with read permission on them, so review who has read permission on sensitive Connectors before you roll back.

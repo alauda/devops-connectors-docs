@@ -1,10 +1,10 @@
 # Documentation Sync Information
 
-- **Last synced**: 2026-09-09 03:09:44 UTC
+- **Last synced**: 2026-10-19 10:47:06 UTC
 - **Source repository**: alaudadevops/connectors-operator
-- **Source commit**: [785505ca463235450e1d0a9baf9882aedbfd7339](https://github.com/alaudadevops/connectors-operator/commit/785505ca463235450e1d0a9baf9882aedbfd7339)
-- **Triggered by**: kycheng
-- **Workflow run**: [#204](https://github.com/alaudadevops/connectors-operator/actions/runs/34306026145)
+- **Source commit**: [fcb303675a047ec22a22669fea754a87c849de9e](https://github.com/alaudadevops/connectors-operator/commit/fcb303675a047ec22a22669fea754a87c849de9e)
+- **Triggered by**: alaudabot
+- **Workflow run**: [#205](https://github.com/alaudadevops/connectors-operator/actions/runs/39239901553)
 
 ## Files synced:
 - docs/

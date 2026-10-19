@@ -157,7 +157,7 @@ export SERVER=$(cat /{mount-path}/connector.status.proxyAddress)
 {cli} --server $SERVER --token $TOKEN
 ```
 
-## CSI Volume Parameters
+## CSI Volume Parameters \{#csi-volume-parameters}
 
 **Volume Parameters**
 
@@ -176,6 +176,12 @@ export SERVER=$(cat /{mount-path}/connector.status.proxyAddress)
 | configuration.params   | No       | JSON string of runtime parameters for named configurations (see [configuration.params](#configuration-params)) |
 | token.expiration       | No       | Token expiration time (default: `30m`)                   |
 | connectors             | Yes      | Comma-separated list of connectors in the format `namespace/name` or `name`; if namespace is omitted, the Pod's namespace is used. Used to specify multiple connectors. |
+
+**Token expiration**
+
+- `token.expiration` uses the Go duration format, for example `30m`, `90m`, or `2h`. A value without a unit (other than `0`) or with a day unit such as `1d` is rejected, and the volume fails to mount. An empty value or `0` falls back to `30m`.
+- The token is requested when kubelet mounts the volume for the Pod, before its containers start, and is bound to that Pod. The CSIDriver sets `requiresRepublish: false`, so kubelet does not ask the driver to republish the volume and the driver does not renew the token while the Pod runs. Set `token.expiration` longer than the longest expected run time of the Pod or Task that uses the volume; after the token expires, requests made with it through the Connector proxy fail authentication.
+- The driver does not enforce a minimum or maximum. The value is passed as `expirationSeconds` in a Kubernetes TokenRequest, so the accepted range and the lifetime of the issued token are decided by the TokenRequest policy of the cluster's kube-apiserver.
 
 **Examples**
 
@@ -516,6 +522,28 @@ The following ConnectorClass provides a file named `.gitconfig`, which automatic
   ```
 
 Inside the `range` block, `.` refers to the current connector, so the volume-level token is referenced through the root context as `$.context.token`. The `[http "<proxyAddress>"]` section scopes the Authorization header to the proxy address only — requests to any other host carry no connector-injected header.
+
+## Recommended Settings
+
+**When to enable.** Use these settings whenever pipeline Tasks or other workloads mount Connector configuration instead of holding tool credentials, so that the Pod holds no long-lived tool credential and uses the short-lived proxy token to reach the tools through `Connectors Proxy`. The Pod can still carry its own ServiceAccount token, which is mounted by default unless `automountServiceAccountToken` is set to `false`.
+
+**Recommended values.** Keep `token.expiration` at its default of `30m`, and raise it only for mounts whose proxy access must stay valid longer; the built-in `ResourceInterface` resources, including OCIArtifact, use `30m`. Identify Connectors with the `connectors` attribute rather than the deprecated `connector.name` and `connector.namespace` attributes. In `configuration.names`, list only the configurations the workload needs, and exclude the `ca.cert` file, which duplicates `ca.crt` and will be deprecated, with `!ca.cert` unless a tool still reads that file name:
+
+```yaml
+volumes:
+- name: config
+  csi:
+    driver: connectors-csi
+    readOnly: true
+    volumeAttributes:
+      connectors: "<project-namespace>/<connector-name>"
+      configuration.names: "config1,!ca.cert"
+      token.expiration: 30m
+```
+
+Replace `<project-namespace>/<connector-name>` with the namespace and name of the Connector. The namespace part is required whenever the Connector is not in the Pod's own namespace, for example a project-level Connector, which lives in the namespace named after the project, used from a member namespace of that project: without a namespace, the Pod's namespace is used (see [CSI Volume Parameters](#csi-volume-parameters)). `config1` is a placeholder: replace it with the name of a configuration that the Connector's ConnectorClass defines, because a mount whose included configuration names are all unknown fails even when exclusions are given.
+
+**Prerequisites.** The Connectors CSI Driver must be installed, and the Pod must be allowed to use the Connector at its resource level, as described in [Connector Resource Levels and Permissions](./connector_scope_permissions.mdx). Mounting several Connectors in one volume requires the `enable-multi-connector` feature flag, as noted in [Multiple Connectors](#multiple-connectors). If optional approval gating is enabled, a mount that is not authorized contains only `.error.json`; see [Enable Proxy Permission Checks and Approval Gating](../how_to/enable_proxy_permissions_and_approval.mdx). The workload holds no long-lived tool credential only if the users who run it cannot create Pods or run pipelines in the namespace that holds the Secrets referenced by the Connectors and have no read permission on those Secrets, because Kubernetes does not check Secret read permission when a Pod mounts a Secret from its own namespace.
 
 ## Next Steps
 

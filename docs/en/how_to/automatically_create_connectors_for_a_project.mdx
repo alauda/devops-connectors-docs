@@ -1589,6 +1589,64 @@ For the full list of parameters available on each task, see:
 - [GitLab Connector Automatic Creation Task](../connectors-gitlab/how_to/using_gitlab_connector_automatic_creation_task.mdx)
 - [SonarQube Connector Automatic Creation Task](../connectors-sonarqube/how_to/using_sonarqube_connector_automatic_creation_task.mdx)
 
+### Credential rotation \{#credential-rotation}
+
+The `connector-auto-create` Pipeline creates project credentials; it does
+not rotate them on a schedule. The Nexus, GitLab, and SonarQube tasks run
+only when the project Connector is missing, not Ready, or does not match
+the expected address and Secret. The Harbor task runs on every
+PipelineRun when `enableHarbor` is `"true"`, but the Pipeline sets
+`robotTokenPolicy: reuse`, so the existing robot token is kept while the
+Harbor project set is unchanged and a valid token can be read from the
+Connector Secret; otherwise the run mints a new token (see the note below
+the table).
+
+Each tool's automatic creation Task rotates the credential when a run
+succeeds (for Harbor, see the note below the table), so the rotation
+interval is the interval at which you run that Task yourself, for example
+from a CronJob. Rotation therefore depends on runs that succeed and do
+not overlap: the [SonarQube Connector Automatic Creation Task](../connectors-sonarqube/how_to/using_sonarqube_connector_automatic_creation_task.mdx)
+guide rotates the token on every successful run (the Task's own
+`tokenDuration` parameter description also says that it revokes and re-mints
+the token on every run) and warns that overlapping runs for the same tenant
+invalidate the token written by the earlier run, and the [GitLab Connector Automatic Creation Task](../connectors-gitlab/how_to/using_gitlab_connector_automatic_creation_task.mdx)
+guide alerts on failed rotation TaskRuns. Do not run the Task for the
+same tenant concurrently, monitor failed TaskRuns, and retry a failed
+run before the current credential expires. Choose the interval with
+these rules:
+
+- **Credentials with a validity period**: space consecutive runs shorter
+  than the validity period minus a safety margin, so a new credential is
+  in place before the old one expires. For example, for a 30-day token,
+  run the Task weekly.
+- **Credentials that never expire**: rotate them periodically, at the
+  interval required by your security policy.
+
+| Tool | Credential | Default validity | Parameter |
+|---|---|---|---|
+| GitLab | Group access token | 30 days, capped by the GitLab instance policy | `tokenDurationDays` in this Pipeline; `tokenDuration` on the Task |
+| SonarQube | User token | 30 days | `tokenDurationDays` in this Pipeline; `tokenDuration` on the Task |
+| Harbor | Robot account | Never expires (`"-1"`) | `robotAccountDuration` on the Task; this Pipeline does not set it |
+| Nexus | Scoped user password | None set by the Task; each successful run replaces the password | None |
+
+For Harbor, a run rotates the token with `robotTokenPolicy: refresh`,
+which is the Task default. With `reuse`, a run still mints a new token when
+no valid stored token can be read from the Connector Secret, because the
+Task then falls back to `refresh`; and a change to the Harbor project set
+always recreates the robot account and mints a new token, regardless of
+`robotTokenPolicy`. After a new token, update any copies of the old token
+that you distributed yourself; the Task result `robot-token-rotated` is
+`true` when the run minted a new token. Rotating the token does not extend
+the robot account expiration. To give the robot account a bounded
+validity, set a positive `robotAccountDuration` where the recurring run
+passes it, that is, add the parameter to the `harbor-connector-automatic-creation`
+task of this Pipeline. A duration set only on a separate run of the Task
+lasts until the next run of this Pipeline, which calls the Task without
+the parameter, so the Task default `"-1"` applies and the robot account is
+updated in place to never expire again.
+
+For how to run each Task on its own, see the Task guides listed above.
+
 ### Checking pipeline run results
 
 To see the PipelineRuns triggered for a project:
