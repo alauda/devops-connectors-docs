@@ -41,10 +41,19 @@ page focuses on the operator workflow.
   the `subgroups[]` set on a re-run triggers a controlled
   delete-and-recreate of the GAT.
 
-## Before You Begin
+## Before You Begin \{#before-you-begin}
 
 Make sure the environment meets these requirements:
 
+- The target GitLab instance runs **GitLab 16.6 or later**. Earlier
+  versions are not supported:
+  - GitLab 16.0 to 16.5 ignore `expires_at` when the Task rotates a
+    token, so a rotated token is valid for one week instead of
+    `tokenDuration` days. The `ensure-gat` step logs a `WARN:` line when
+    this happens.
+  - GitLab before 16.0 has no rotate endpoint, so a re-run before the
+    token expires fails.
+  - GitLab before 14.7 has no Group Access Token API, so no run works.
 - Tekton Pipelines is installed.
 - The Connectors system and the GitLab Connector ConnectorClass are
   installed.
@@ -173,7 +182,7 @@ for the full comparison.
      token: glpat-xxxxxxxxxxxxxxxxxxxx
    ```
 
-4. **Create the admin Connector** pointing at the umbrella Secret:
+5. **Create the admin Connector** pointing at the umbrella Secret:
 
    ```yaml
    apiVersion: connectors.alauda.io/v1alpha1
@@ -373,6 +382,8 @@ spec:
   params:
     - name: connector
       value: connectors-management/acme-corp
+    - name: gitlabUrl
+      value: https://gitlab.example.com
     - name: tenantGroup
       value: acme-corp
     - name: subgroups
@@ -386,6 +397,9 @@ spec:
         - api
     - name: tokenDuration
       value: "30"
+    - name: basicAuthSecrets
+      value:
+        - connectors-management/acme-corp-basic-auth
   workspaces:
     - name: gitlabconfig
       csi:
@@ -440,6 +454,8 @@ spec:
   params:
     - name: connector
       value: connectors-management/acme-corp
+    - name: gitlabUrl
+      value: https://gitlab.example.com
     - name: tenantGroup
       value: umbrella/acme-corp
     - name: subgroups
@@ -451,6 +467,8 @@ spec:
         - api
     - name: tokenDuration
       value: "30"
+    - name: basicAuthSecrets
+      value: []
   workspaces:
     - name: gitlabconfig
       csi:
@@ -479,9 +497,13 @@ Rerunning the TaskRun with **all params unchanged** rotates the existing
 GAT in place. The Task locates the existing GAT by its name prefix
 (`connector-<connector-namespace>-<connector-name>`), confirms the
 identity matches, and calls
-`POST /groups/:id/access_tokens/:token_id/rotate`. GitLab atomically
-invalidates the old token and returns a fresh one with `expires_at`
-advanced by `tokenDuration` days; the tenant Secret is updated in place.
+`POST /groups/:id/access_tokens/:token_id/rotate` with `expires_at` set
+to today + `tokenDuration` days. GitLab atomically invalidates the old
+token and returns a fresh one that expires on that date; the tenant
+Secret is updated in place. The GitLab instance policy limits how far
+ahead `expires_at` may be (at most one year from the rotation date, or
+less if the instance administrator set a shorter maximum lifetime); GitLab
+rejects a longer `tokenDuration` with HTTP 400.
 
 The TaskRun is intentionally identical in shape to the Pattern A creation
 TaskRun. Cron-friendly: `tokenDuration` is a number of days, so every
@@ -556,6 +578,8 @@ spec:
   params:
     - name: connector
       value: connectors-management/acme-corp
+    - name: gitlabUrl
+      value: https://gitlab.example.com
     - name: tenantGroup
       value: acme-corp
     - name: subgroups
@@ -570,6 +594,9 @@ spec:
         - read_registry
     - name: tokenDuration
       value: "30"
+    - name: basicAuthSecrets
+      value:
+        - connectors-management/acme-corp-basic-auth
   workspaces:
     - name: gitlabconfig
       csi:

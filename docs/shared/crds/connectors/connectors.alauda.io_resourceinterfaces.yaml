@@ -130,6 +130,18 @@ spec:
                         MultipleMergeConnectors defines the configuration for enabling multiple connectors merge in PipelineIntegration.
                         When this configuration is enabled, multiple connectors will be merged when creating PipelineIntegration.
                       properties:
+                        allowCrossTypeConnectors:
+                          default: false
+                          description: |-
+                            AllowCrossTypeConnectors indicates whether additional connectors that are not
+                            compatible with the current ResourceInterface may be selected.
+                            Only takes effect when Enabled is true. Configuration names required by the
+                            selected cross-type connectors are resolved by the selectedConfigurationNames
+                            workspace expression, so this should only be enabled on ResourceInterfaces
+                            labeled with schema-version 3 whose connector workspaces use that expression.
+                            It is not validated here; consumers (e.g. the pipeline UI) decide whether to
+                            honor it based on the ResourceInterface schema-version.
+                          type: boolean
                         description:
                           description: Description provides a human-readable description of this configuration entry.
                           type: string

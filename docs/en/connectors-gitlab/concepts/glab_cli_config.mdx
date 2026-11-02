@@ -131,7 +131,8 @@ state and the input parameters:
 
 1. **Rotate in place.** Inputs unchanged and an existing healthy GAT was
    found at `tenantGroup` whose name matches `connector-<connector-namespace>-<connector-name>`.
-   The Task calls `POST /groups/:id/access_tokens/:token_id/rotate`,
+   The Task calls `POST /groups/:id/access_tokens/:token_id/rotate` with
+   `expires_at` = today + `tokenDuration` days (GitLab 16.6 or later),
    GitLab atomically invalidates the old token value and returns a fresh
    one, and the tenant Secret is updated in place. The Connector resource
    is unchanged. Annotation `connectors.cpaas.io/gat-rotated-at` records

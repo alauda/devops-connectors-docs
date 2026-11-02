@@ -1,0 +1,235 @@
+---
+weight: 20
+---
+
+# Building Images Using JFrog Connector Forward Proxy in Kubernetes
+
+Before reading, you may want to review [JFrog ConnectorClass Proxy Configuration](../concepts/jfrog_connectorclass.mdx#jfrog-connector-proxy-and-configuration-files) to understand the proxy capabilities available.
+
+## Feature Overview
+
+This article explains how to use the JFrog Connector forward proxy to pull and push Docker images inside Kubernetes workloads without embedding JFrog credentials in the Pod specification.
+
+With the JFrog Connector forward proxy, clients route traffic to the original JFrog registry hostname through an HTTP proxy. The proxy transparently injects the stored JFrog Basic Auth credentials before forwarding each request to Artifactory. No image address rewriting is required.
+
+Key points when using the JFrog Connector forward proxy for image builds:
+
+- Mount the built-in proxy configuration from the Connectors CSI Driver and set `HTTP_PROXY` / `HTTPS_PROXY` in the container.
+- The connector proxy intercepts TLS traffic (MITM). Trust its CA certificate via the system trust store or `SSL_CERT_FILE` so TLS verification stays enabled end-to-end.
+
+The following sections use `buildah` and `skopeo` as examples.
+
+## Prerequisites
+
+- Connectors system installed (Operator, ConnectorsCore, and ConnectorsJFrog components).
+- A JFrog Artifactory instance with a Docker Local repository accessible from the cluster.
+- A Connector and the corresponding Secret created in the workload's namespace.
+- A Containerfile for building the image (for the buildah example).
+
+### Create the Connector
+
+```bash
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: jfrog-secret
+type: kubernetes.io/basic-auth
+stringData:
+  username: your-jfrog-username
+  password: your-jfrog-password
+---
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: jfrog-connector
+spec:
+  connectorClassName: jfrog
+  address: https://jfrog.example.com
+  auth:
+    name: basicAuth
+    secretRef:
+      name: jfrog-secret
+EOF
+```
+
+### Prepare a Containerfile
+
+To keep the example self-contained, store the Containerfile in a ConfigMap:
+
+```bash
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: containerfile
+data:
+  Containerfile: |
+    FROM scratch
+    LABEL maintainer="example@example.com"
+    WORKDIR /app
+    ENV APP_VERSION="1.0.0"
+EOF
+```
+
+## Mounting the Proxy Configuration
+
+Mount the JFrog Connector **without** specifying `configuration.names`. The Connectors CSI Driver then provides the following built-in proxy files at the mount path:
+
+| File | Contents |
+|------|----------|
+| `.env` | Shell-sourceable proxy variables: `http_proxy`, `https_proxy`, `no_proxy` |
+| `http.proxy` | Forward proxy URL (plain text) for HTTP |
+| `https.proxy` | Forward proxy URL (plain text) for HTTPS |
+| `ca.crt` | CA certificate of the connector proxy |
+
+```yaml
+volumes:
+- name: jfrog-proxy
+  csi:
+    readOnly: true
+    driver: connectors-csi
+    volumeAttributes:
+      connectors: "jfrog-connector"
+```
+
+## Building and Pushing with buildah
+
+The connector proxy performs TLS interception (MITM) to inject credentials. The proxy CA must be trusted at the system level so that Go-based tools like buildah accept the intercepted certificate. The example below installs `ca.crt` into the system trust store before running buildah:
+
+```bash
+kubectl create -f - <<'EOF'
+apiVersion: v1
+kind: Pod
+metadata:
+  generateName: buildah-jfrog-build-
+  labels:
+    app: buildah-jfrog-build
+spec:
+  restartPolicy: Never
+  volumes:
+  - name: containerfile
+    configMap:
+      name: containerfile
+  - name: jfrog-proxy
+    csi:
+      readOnly: true
+      driver: connectors-csi
+      volumeAttributes:
+        connectors: "jfrog-connector"
+  containers:
+  - name: buildah
+    image: quay.io/buildah/stable:v1.35.4
+    securityContext:
+      privileged: true
+    volumeMounts:
+    - name: containerfile
+      mountPath: /workspace
+    - name: jfrog-proxy
+      mountPath: /tmp/jfrog-proxy
+      readOnly: true
+    command:
+    - /bin/sh
+    - -c
+    - |
+      set -ex
+
+      # Source proxy environment variables from the CSI-mounted .env file
+      set -a; . /tmp/jfrog-proxy/.env; set +a
+
+      # Trust the connector proxy CA at the system level so Go's net/http
+      # accepts the intercepted TLS certificate
+      cp /tmp/jfrog-proxy/ca.crt /etc/pki/ca-trust/source/anchors/jfrog-proxy-ca.crt
+      update-ca-trust
+
+      buildah build \
+        --file /workspace/Containerfile \
+        --tag jfrog.example.com/docker-local/demo/app:v1 \
+        /workspace
+
+      buildah push \
+        jfrog.example.com/docker-local/demo/app:v1
+EOF
+```
+
+> If your container image does not include `update-ca-trust`, set `SSL_CERT_FILE=/tmp/jfrog-proxy/ca.crt` as an environment variable before calling buildah. Go's TLS stack reads this variable and trusts the additional CA without modifying the system store.
+>
+> Note: buildah's `--cert-dir` flag applies to direct registry connections only and does **not** cover the proxy MITM certificate — use `update-ca-trust` or `SSL_CERT_FILE` instead.
+
+## Copying Images with skopeo
+
+skopeo is also a Go-based tool and uses the same system trust store or `SSL_CERT_FILE` for the proxy MITM certificate. The example below sets `SSL_CERT_FILE` to avoid modifying the system trust store:
+
+```bash
+kubectl create -f - <<'EOF'
+apiVersion: v1
+kind: Pod
+metadata:
+  generateName: skopeo-jfrog-copy-
+  labels:
+    app: skopeo-jfrog-copy
+spec:
+  restartPolicy: Never
+  volumes:
+  - name: jfrog-proxy
+    csi:
+      readOnly: true
+      driver: connectors-csi
+      volumeAttributes:
+        connectors: "jfrog-connector"
+  containers:
+  - name: skopeo
+    image: quay.io/skopeo/stable:latest
+    volumeMounts:
+    - name: jfrog-proxy
+      mountPath: /tmp/jfrog-proxy
+      readOnly: true
+    command:
+    - /bin/sh
+    - -c
+    - |
+      set -ex
+
+      set -a; . /tmp/jfrog-proxy/.env; set +a
+
+      # Trust the proxy CA via SSL_CERT_FILE (Go net/http reads this)
+      export SSL_CERT_FILE=/tmp/jfrog-proxy/ca.crt
+
+      skopeo copy \
+        docker://jfrog.example.com/docker-local/base/scratch:v1 \
+        docker://jfrog.example.com/docker-local/team/app:copied
+EOF
+```
+
+## Operational Results
+
+Check whether the Pod completed successfully:
+
+```bash
+kubectl get pod -l app=buildah-jfrog-build
+kubectl logs -l app=buildah-jfrog-build
+```
+
+A successful run exits with code `0`. You can verify the pushed image exists in JFrog Artifactory under the configured repository.
+
+## Notes on TLS
+
+The connector proxy performs TLS interception (MITM) between the client and Artifactory and re-signs the connection with its own CA. The CSI Driver mounts this CA as `ca.crt`.
+
+**Recommended:** Trust the mounted CA so the client can verify TLS normally:
+
+- Install into system trust store: `cp ca.crt /etc/pki/ca-trust/source/anchors/ && update-ca-trust`
+- Or set `SSL_CERT_FILE=/tmp/jfrog-proxy/ca.crt` before invoking any Go-based tool (buildah, skopeo)
+
+> **Note:** `--cert-dir` (buildah) and `--src-cert-dir`/`--dest-cert-dir` (skopeo) apply to direct registry TLS connections only. They do **not** cover the proxy MITM certificate and should not be used as a substitute for `update-ca-trust` or `SSL_CERT_FILE` in forward proxy scenarios.
+
+**Fallback (development/testing only):** If adding the CA is not practical, you can disable TLS verification — but this removes protection against man-in-the-middle attacks on the upstream connection:
+
+- buildah: add `--tls-verify=false` to `buildah build` and `buildah push`, and mark the registry host as `insecure = true` in `/etc/containers/registries.conf`
+- skopeo: add `--src-tls-verify=false --dest-tls-verify=false` to `skopeo copy`
+
+## Further Reading
+
+- [Using JFrog Connector Forward Proxy in Tekton Pipeline](./using_jfrog_connector_forward_proxy_in_tekton_pipeline.mdx)
+- [JFrog ConnectorClass Proxy Configuration](../concepts/jfrog_connectorclass.mdx#jfrog-connector-proxy-and-configuration-files)
+- [Connectors CSI Driver Built-in Configurations](../../connectors/concepts/connectors_csi.mdx#built-in-configurations)

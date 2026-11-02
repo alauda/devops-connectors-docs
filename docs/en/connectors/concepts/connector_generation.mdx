@@ -1,0 +1,278 @@
+---
+created: '2026-07-07'
+title: Connector Generation
+weight: 25
+---
+
+# Connector Generation
+
+## Overview
+
+Some backends expose several package ecosystems behind a single service. A
+Nexus or JFrog Artifactory instance, for example, serves npm, Maven and PyPI
+repositories from one host. Instead of asking users to hand-create one
+Connector per ecosystem, an **aggregator** Connector can declare its children
+in `spec.generators`, and the controller materializes one child Connector per
+entry — each bound to the appropriate per-ecosystem `ConnectorClass`.
+
+The feature has two halves:
+
+- On the `ConnectorClass`, `spec.generation.supportedClasses` is an allowlist
+  of the ConnectorClass names an aggregator of this class may generate children
+  for. It is the class author's assertion that those child classes can serve
+  the path-scoped addresses this aggregator produces.
+- On the `Connector`, `spec.generators` declares the child Connectors to
+  materialize. Each entry carries a child ConnectorClass name, an address, and
+  optional auth/params.
+
+The following example declares a Nexus aggregator that generates an npm, a
+Maven and a PyPI child Connector:
+
+```yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: nexus-aggregator
+  namespace: my-namespace
+spec:
+  connectorClassName: nexus
+  address: "https://nexus.example.com"
+  auth:
+    name: basicAuth
+    secretRef:
+      name: nexus-credentials
+  generators:
+  - name: nexus-npm
+    connectorClassName: npm
+    address: "{{.connector.spec.address}}/repository/npm-proxy/"
+  - name: nexus-maven
+    connectorClassName: maven
+    address: "{{.connector.spec.address}}/repository/maven-public/"
+  - name: nexus-pypi
+    connectorClassName: pypi
+    address: "{{.connector.spec.address}}/repository/pypi-proxy/"
+```
+
+The controller reconciles this into three child Connectors — `nexus-npm`,
+`nexus-maven` and `nexus-pypi` — in the same namespace, each owned by the
+aggregator and carrying identity labels, and sets the aggregator's
+`GenerationReady` condition to `True`.
+
+## Problem It Solves
+
+**One backend, many ecosystems.** A single Nexus/JFrog host serves npm, Maven
+and PyPI. Modelling each as an independent Connector means users repeat the
+same host, credentials and proxy wiring three times and keep them in sync by
+hand.
+
+**Path-scoped addressing.** Each ecosystem lives under a different path of the
+same host (`/repository/<name>/` on Nexus, `/artifactory/api/<type>/<repo>/`
+on JFrog). Generators let the aggregator own the host and credentials once,
+while each child carries the ecosystem-specific path-scoped address.
+
+**Lifecycle as one unit.** Children are owned by the aggregator, so deleting
+the aggregator cascades to its children, and removing an entry from
+`spec.generators` prunes exactly that child — no orphaned Connectors.
+
+## Data Structure
+
+### ConnectorClass — `spec.generation` \{#connectorclass-generation}
+
+A `ConnectorClass` opts into being an aggregator by declaring the child classes
+it supports:
+
+```yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: ConnectorClass
+metadata:
+  name: nexus
+spec:
+  generation:
+    supportedClasses:
+    - npm
+    - maven
+    - pypi
+```
+
+| Field | Description |
+| ----- | ----------- |
+| `spec.generation.supportedClasses` | A set of ConnectorClass names. A generator entry may only reference a class in this list; an entry referencing any other class is rejected by the admission webhook with reason `ClassNotSupported`. The list is the class author's contract that these child classes can serve the aggregator's path-scoped addresses. |
+
+An aggregator class itself typically ships no per-ecosystem `ResourceInterface`
+— those are provided by the generated child Connectors, each of which carries
+its own ConnectorClass and ResourceInterface.
+
+### Connector — `spec.generators` \{#connector-generators}
+
+Each entry in `spec.generators` describes one child Connector. The entry embeds
+the same fields as a Connector's own `spec` (address, auth, params, …) inline,
+plus a `name`:
+
+| Field | Description |
+| ----- | ----------- |
+| `name` | Entry identity. Used **verbatim** as the child Connector's `metadata.name` and stamped on the child's `connectors.cpaas.io/generator-entry` label. Must be a valid DNS-1123 label (≤ 63 characters) and unique within the parent's namespace. |
+| `connectorClassName` | The child ConnectorClass. Must be present in the parent class's `spec.generation.supportedClasses`. |
+| `address` | The child's address. Supports brace-path templating against the parent (see [Address templating](#address-templating)). Must resolve to an absolute URL. |
+| `auth` | Optional. When omitted, the child inherits the parent's auth if the child class declares a compatible auth `secretType`. |
+| `params` | Optional. Validated against the child class's declared params; unknown params are rejected. |
+
+### Generated child Connectors \{#generated-children}
+
+For every valid entry, the controller creates (and thereafter maintains) one
+child Connector in the parent's namespace with:
+
+- an **ownerReference** to the parent (`controller: true`,
+  `blockOwnerDeletion: true`), so children cascade-delete with the parent;
+- identity **labels**:
+
+  | Label | Value |
+  | ----- | ----- |
+  | `connectors.cpaas.io/generated-by` | the parent Connector's name |
+  | `connectors.cpaas.io/generator-entry` | the entry's `name` |
+
+- an annotation `connectors.cpaas.io/managed-by-generator` naming the parent.
+
+The controller treats the entry as the source of truth: if a child's `spec`
+(for example its `address`) is changed out-of-band, the next reconcile restores
+it to the declared value.
+
+### Address templating \{#address-templating}
+
+The `address` of a generator entry is a Go text/template evaluated against the
+**parent** Connector. Available context:
+
+```javascript
+{
+  "connector": {
+    "metadata": { "name": "...", "namespace": "..." },
+    "spec":     { "address": "..." }   // trailing "/" trimmed
+  },
+  "entry": { "name": "..." }
+}
+```
+
+The parent's `spec.address` is exposed with any trailing `/` trimmed, so the
+idiom `{{.connector.spec.address}}/repository/npm-proxy/` yields a clean URL.
+Templating uses `missingkey=error`: referencing a field that does not exist
+fails the entry with reason `InvalidAddress` rather than rendering an empty
+segment.
+
+```yaml
+generators:
+- name: nexus-npm
+  connectorClassName: npm
+  address: "{{.connector.spec.address}}/repository/npm-proxy/"
+```
+
+## Status and Conditions \{#status}
+
+The aggregator's generation outcome is summarized on the `GenerationReady`
+condition. This condition is **informational** — it reports the state of child
+generation but does **not** gate the aggregator's own `Ready` condition (the
+aggregator can be `Ready` while a generator entry is failing, and vice versa).
+
+| Reason | Meaning |
+| ------ | ------- |
+| `Materialized` | All entries validated and their child Connectors are in place. `GenerationReady = True`. |
+| `ClassNotSupported` | An entry references a `connectorClassName` not in the parent class's `supportedClasses`. Rejected by the admission webhook at create/update time. |
+| `ClassNotFound` | An entry references a supported class name, but no such `ConnectorClass` exists on the cluster. |
+| `InvalidParams` | An entry supplies a param the child class does not declare (or an invalid enum value). |
+| `AuthIncompatible` | The entry inherits the parent auth, but the child class declares no auth `secretType` compatible with it. |
+| `InvalidAddress` | The entry's `address` is not a valid absolute URL, or its template references an unknown field. |
+| `InvalidName` | The entry's `name` is not a valid DNS-1123 label. |
+| `NameConflict` | The desired child name is already occupied by a Connector that is not owned by this aggregator. The controller never adopts or overwrites a foreign Connector. |
+| `ChildRejected` | The API server rejected creation of a child Connector (for example, a child-class webhook denied it). |
+
+### Recovery \{#recovery}
+
+- **Validation failures** (`ClassNotFound`, `InvalidParams`,
+  `AuthIncompatible`, `InvalidAddress`, `InvalidName`) recover when the
+  underlying cause is fixed — edit `spec.generators`, or create the missing
+  child `ConnectorClass` — which triggers a fresh reconcile.
+- **`NameConflict`** is requeued automatically about every **1 minute**, so the
+  aggregator recovers once the conflicting Connector is removed or renamed.
+- **`ChildRejected`** is requeued automatically about every **5 minutes**, so
+  the aggregator recovers once the child-class admission issue is resolved.
+
+## Lifecycle \{#lifecycle}
+
+| Action | Result |
+| ------ | ------ |
+| Add an entry to `spec.generators` | A new child Connector is materialized for that entry. |
+| Remove an entry from `spec.generators` | The corresponding child (matched by the `generator-entry` label) is pruned; other children are untouched. |
+| Edit a child out-of-band | The controller restores the child's `spec` to the value declared by its entry. |
+| Delete the aggregator Connector | All children cascade-delete via their ownerReference. |
+
+## Examples \{#examples}
+
+**Nexus aggregator generating npm / Maven / PyPI children**
+
+```yaml
+apiVersion: connectors.alauda.io/v1alpha1
+kind: ConnectorClass
+metadata:
+  name: nexus
+spec:
+  # ... address / auth / proxy omitted ...
+  generation:
+    supportedClasses:
+    - npm
+    - maven
+    - pypi
+---
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: nexus-aggregator
+  namespace: my-namespace
+spec:
+  connectorClassName: nexus
+  address: "https://nexus.example.com"
+  auth:
+    name: basicAuth
+    secretRef:
+      name: nexus-credentials
+  generators:
+  - name: nexus-npm
+    connectorClassName: npm
+    address: "{{.connector.spec.address}}/repository/npm-proxy/"
+  - name: nexus-maven
+    connectorClassName: maven
+    address: "{{.connector.spec.address}}/repository/maven-public/"
+  - name: nexus-pypi
+    connectorClassName: pypi
+    address: "{{.connector.spec.address}}/repository/pypi-proxy/"
+```
+
+The three generated children carry the aggregator's ownerReference and the
+`generated-by: nexus-aggregator` / `generator-entry: <name>` labels:
+
+```console
+$ kubectl -n my-namespace get connector \
+    -l connectors.cpaas.io/generated-by=nexus-aggregator
+NAME          CLASS   ADDRESS
+nexus-maven   maven   https://nexus.example.com/repository/maven-public/
+nexus-npm     npm     https://nexus.example.com/repository/npm-proxy/
+nexus-pypi    pypi    https://nexus.example.com/repository/pypi-proxy/
+```
+
+**JFrog aggregator** works the same way, with JFrog's per-ecosystem API paths:
+
+```yaml
+  generators:
+  - name: jfrog-npm
+    connectorClassName: npm
+    address: "{{.connector.spec.address}}/artifactory/api/npm/npm-local/"
+  - name: jfrog-maven
+    connectorClassName: maven
+    address: "{{.connector.spec.address}}/artifactory/maven-local/"
+  - name: jfrog-pypi
+    connectorClassName: pypi
+    address: "{{.connector.spec.address}}/artifactory/api/pypi/pypi-local/"
+```
+
+## References
+
+- [Concept of Connector](./connector.mdx)
+- [Concept of ConnectorClass](./connectorclass.mdx)
+- [Concept of ResourceInterface](./resource_interface.mdx)

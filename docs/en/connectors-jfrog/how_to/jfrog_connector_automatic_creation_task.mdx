@@ -1,0 +1,636 @@
+---
+weight: 45
+title: JFrog Connector Automatic Creation Tekton Task
+---
+
+# JFrog Connector Automatic Creation Tekton Task
+
+> Run the install command on this page **once per cluster** (admin only) to install the Task and the tool-image ConfigMaps. Day-to-day users only create TaskRuns — see the [how-to guide](./using_jfrog_connector_automatic_creation_task.mdx) for end-to-end examples, and [Automatically Provision JFrog Resources When a Project Is Created](./automatically_provision_jfrog_for_a_project.mdx) for running it from a namespace event.
+
+Set the variables, then run the command below:
+
+- `REGISTRY`: the registry host that stores the `alauda-connectors/connectors-extensions/jfrog-connector-automatic-creation` image.
+- `TARGET_NS`: the namespace where you want to install the Task. The tool-image ConfigMaps are installed in `kube-public`.
+
+{/* BEGIN GENERATED TASK YAML */}
+```bash
+export REGISTRY=<your-registry>
+export TARGET_NS=<target-namespace>
+
+cat <<'EOF' | envsubst '${REGISTRY} ${TARGET_NS}' | kubectl apply -f -
+apiVersion: v1
+data:
+  image: ${REGISTRY}/alauda-connectors/connectors-extensions/jfrog-connector-automatic-creation:v1.12.0-rc.359.g2f1d81e
+  name: JFrog Connector Automatic Creation v0.1
+kind: ConfigMap
+metadata:
+  annotations:
+    operator.tekton.dev/preserve-namespace: "true"
+    operator.tekton.dev/resource-policy: keep
+  labels:
+    catalog.tekton.dev/source: system
+    catalog.tekton.dev/tool-image-jfrog-connector-automatic-creation: "0.1"
+    catalog.tekton.dev/tool-image-run-script: jfrog-connector-automatic-creation-0.1
+    operator.tekton.dev/tool-image: jfrog-connector-automatic-creation
+  name: catalog-tool-image-jfrog-connector-automatic-creation-0.1
+  namespace: kube-public
+---
+apiVersion: v1
+data:
+  image: ${REGISTRY}/alauda-connectors/connectors-extensions/jfrog-connector-automatic-creation:latest
+  name: JFrog Connector Automatic Creation latest
+kind: ConfigMap
+metadata:
+  annotations:
+    operator.tekton.dev/preserve-namespace: "true"
+  labels:
+    catalog.tekton.dev/source: system
+    catalog.tekton.dev/tool-image-jfrog-connector-automatic-creation: latest
+    catalog.tekton.dev/tool-image-run-script: jfrog-connector-automatic-creation-latest
+    operator.tekton.dev/tool-image: jfrog-connector-automatic-creation
+  name: catalog-tool-image-jfrog-connector-automatic-creation-latest
+  namespace: kube-public
+---
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  annotations:
+    style.tekton.dev/descriptors: |
+      - path: params.connector
+        x-descriptors:
+          - urn:alm:descriptor:label:en:Connector
+          - 'urn:alm:descriptor:description:en:Target JFrog Connector resource to create or update, in [ns]/[name] format, for example project-a/jfrog. The auth Secret is written to the same namespace'
+          - urn:alm:descriptor:com.tectonic.ui:text
+          - urn:alm:descriptor:com.tectonic.ui:validation:required
+      - path: params.jfrogUrl
+        x-descriptors:
+          - urn:alm:descriptor:label:en:Artifactory URL
+          - 'urn:alm:descriptor:description:en:Artifactory origin, for example https://jfrog.example.com — do NOT include the /artifactory context path. Used as the Connector address, the admin API base, and the auths key authority of generated image pull Secrets'
+          - urn:alm:descriptor:com.tectonic.ui:text
+          - urn:alm:descriptor:com.tectonic.ui:validation:required
+      - path: params.jfrogRepositories
+        x-descriptors:
+          - urn:alm:descriptor:label:en:Repositories
+          - 'urn:alm:descriptor:description:en:YAML with two optional top-level keys. provision: entries are created when absent and left untouched when they already exist. reference: entries must already exist and are only linked into the permission target — a missing one fails the run rather than being created. At least one entry across both lists is required. A provision entry takes name + packageType (docker | maven | npm | pypi | generic | ...) plus an optional rclass (default local); a reference entry takes name only. Example — provision: [{name: project-a-docker, packageType: docker}, {name: project-a-maven, packageType: maven}], reference: [{name: shared-maven-virtual}]'
+          - 'urn:alm:descriptor:tooltip:en:Block style and flow style both parse, so the one-line example in the description can be pasted as-is. Full schema and worked examples in the Task README.'
+          - urn:alm:descriptor:com.tectonic.ui:textarea
+          - urn:alm:descriptor:com.tectonic.ui:validation:required
+      - path: params.permissions
+        x-descriptors:
+          - urn:alm:descriptor:label:en:Permissions
+          - 'urn:alm:descriptor:description:en:Actions granted over every listed repository. Artifactory defines read (pull / resolve), write (deploy a new artifact), annotate (set properties and metadata), delete (remove an artifact — and also overwrite one that already exists) and manage (edit the repository permissions themselves). Defaults to read alone. Note the delete semantics: a write-only grant can create artifacts but not replace them.'
+          - 'urn:alm:descriptor:tooltip:en:One action per entry. Passed through to Artifactory verbatim — an action it does not recognise is rejected by Artifactory, not by this Task.'
+          - urn:alm:descriptor:com.tectonic.ui:tagsInput
+      - path: params.secret
+        x-descriptors:
+          - urn:alm:descriptor:label:en:Secret Name
+          - 'urn:alm:descriptor:description:en:Optional override for the Connector auth Secret name. Default = [connector-name]-secret'
+          - urn:alm:descriptor:com.tectonic.ui:text
+      - path: params.jfrogUser
+        x-descriptors:
+          - urn:alm:descriptor:label:en:Artifactory Username
+          - 'urn:alm:descriptor:description:en:Optional override for the generated Artifactory user. Default = connector-[ns]-[connector], folded to Artifactory 58-character limit when needed. A value given here must already fit'
+          - urn:alm:descriptor:com.tectonic.ui:text
+      - path: params.jfrogGroup
+        x-descriptors:
+          - urn:alm:descriptor:label:en:Artifactory Group Prefix
+          - 'urn:alm:descriptor:description:en:Optional override for the group PREFIX. The real group carries a generation suffix, [prefix]-[n]; advancing it is what makes a rotated credential stop working'
+          - urn:alm:descriptor:com.tectonic.ui:text
+      - path: params.tokenExpiry
+        x-descriptors:
+          - urn:alm:descriptor:label:en:Token Expiry
+          - 'urn:alm:descriptor:description:en:How long the access token stays valid. Write a duration — 30d, 12h, 1h30m — with units s, m, h, d; a bare number is read as seconds, and 0 means the token never expires. Default 30d. Nothing re-runs this Task on a schedule, so a credential lapses if the Task is never rerun within its lifetime.'
+          - 'urn:alm:descriptor:tooltip:en:Same units as a Go duration plus d for days, which Go itself does not accept.'
+          - urn:alm:descriptor:com.tectonic.ui:text
+      - path: params.tokenPolicy
+        x-descriptors:
+          - urn:alm:descriptor:label:en:Token Policy
+          - 'urn:alm:descriptor:description:en:reuse keeps a stored token that is not near expiry; refresh performs a real rotation that also invalidates the previous token'
+          - urn:alm:descriptor:com.tectonic.ui:select
+          - urn:alm:descriptor:com.tectonic.default:reuse
+          - urn:alm:descriptor:props:select:options:reuse
+          - urn:alm:descriptor:props:select:options:refresh
+      - path: params.tokenRenewBeforeDays
+        x-descriptors:
+          - urn:alm:descriptor:label:en:Renew Before (days)
+          - 'urn:alm:descriptor:description:en:Under tokenPolicy reuse, re-mint when the stored token expires within this many days'
+          - urn:alm:descriptor:com.tectonic.ui:text
+      - path: params.imagePullSecrets
+        x-descriptors:
+          - urn:alm:descriptor:label:en:Image Pull Secrets
+          - 'urn:alm:descriptor:description:en:dockerconfigjson Secrets to create, one [ns]/[name] per entry — several namespaces can receive the credential in a single run. For docker repositories. Additive: dropping an entry later does not delete the Secret.'
+          - urn:alm:descriptor:com.tectonic.ui:tagsInput
+      - path: params.bindImagePullSecretToSA
+        x-descriptors:
+          - urn:alm:descriptor:label:en:Bind Pull Secrets to ServiceAccount
+          - 'urn:alm:descriptor:description:en:Append each generated image pull Secret to the ServiceAccount in every target namespace. The append preserves entries this Task did not create and does not duplicate on rerun'
+          - urn:alm:descriptor:com.tectonic.ui:select
+          - urn:alm:descriptor:com.tectonic.default:true
+          - urn:alm:descriptor:props:select:options:true
+          - urn:alm:descriptor:props:select:options:false
+      - path: params.serviceAccountName
+        x-descriptors:
+          - urn:alm:descriptor:label:en:ServiceAccount Name
+          - 'urn:alm:descriptor:description:en:Existing ServiceAccount that receives the generated image pull Secrets when the binding above is enabled'
+          - urn:alm:descriptor:com.tectonic.ui:text
+      - path: params.jfrogCliImage
+        x-descriptors:
+          - urn:alm:descriptor:label:en:Task Tool Image
+          - 'urn:alm:descriptor:description:en:Runtime image providing curl + jq + yq + kubectl + bash and the helper scripts that drive Artifactory. Must be the jfrog-connector-automatic-creation image or a derivative bundling the helper scripts at /usr/local/bin/ — a generic kubectl image will not work'
+          - urn:alm:descriptor:com.tectonic.ui:select:image
+          - urn:alm:descriptor:expression:props.options:api:/kubernetes/${context.cluster}/api/v1/namespaces/kube-public/configmaps?labelSelector=catalog.tekton.dev%2Ftool-image-jfrog-connector-automatic-creation
+          - urn:alm:descriptor:props:select:allowCreate
+          - urn:alm:descriptor:expression:props.options:path:items
+          - urn:alm:descriptor:expression:props.options:label:path:data.name
+          - urn:alm:descriptor:expression:props.options:value:path:data.image
+      - path: params.imagePullPolicy
+        x-descriptors:
+          - urn:alm:descriptor:label:en:Image Pull Policy
+          - 'urn:alm:descriptor:description:en:Controls when Kubernetes pulls the tool image used by this Task'
+          - urn:alm:descriptor:com.tectonic.ui:select
+          - urn:alm:descriptor:com.tectonic.default:Always
+          - urn:alm:descriptor:props:select:options:Always
+          - urn:alm:descriptor:props:select:options:IfNotPresent
+          - urn:alm:descriptor:props:select:options:Never
+      - path: params.verbose
+        x-descriptors:
+          - urn:alm:descriptor:label:en:Verbose
+          - 'urn:alm:descriptor:description:en:Emit extra progress detail — the resolved plan, plus one line per Artifactory request with method, path and status code, which is what you would normally reach for set -x to get. Shell tracing is never enabled: bash xtrace prints expanded assignments, so it would log the access token itself. Response bodies are not logged either, because the token request body IS the token.'
+          - urn:alm:descriptor:com.tectonic.ui:select
+          - urn:alm:descriptor:com.tectonic.default:false
+          - urn:alm:descriptor:props:select:options:true
+          - urn:alm:descriptor:props:select:options:false
+    style.tekton.dev/displayParams: connector,jfrogUrl,jfrogRepositories,permissions,tokenExpiry,imagePullSecrets,bindImagePullSecretToSA,serviceAccountName,jfrogCliImage
+    tekton.dev/categories: Developer Tools
+    tekton.dev/displayName: JFrog Connector Automatic Creation
+    tekton.dev/pipelines.minVersion: 0.60.0
+    tekton.dev/platforms: linux/amd64,linux/arm64
+    tekton.dev/tags: jfrog, artifactory, connectors
+  labels:
+    app.kubernetes.io/version: "0.1"
+  name: jfrog-connector-automatic-creation
+  namespace: ${TARGET_NS}
+spec:
+  description: |
+    Reconciles a JFrog Artifactory group, user and permission target scoped to a
+    caller-supplied set of repositories (provisioned or referenced), mints a scoped access
+    token, then materialises the tenant `jfrog` Connector plus its auth Secret, syncs
+    per-namespace credential copies, and optionally binds image pull Secrets to a
+    ServiceAccount.
+
+    Artifactory has no robot accounts. The equivalent is
+    repository -> permission target -> group -> user, with a token whose
+    `member-of-groups` claim is evaluated at request time. Ordering is therefore
+    mandatory: a permission target cannot reference a repository or group that does not
+    yet exist.
+
+    Requires Artifactory **Pro** or higher. On OSS — and on an `artifactory-pro` image
+    with no licence — the repository, group, user and permission-target APIs all return
+    `400 This REST API is available only in Artifactory Pro`.
+
+    Works against Artifactory 6.20.4 and 7.x from a single code path; it deliberately
+    avoids `/access/api/v1/*`, which is absent on 6.x and rejects Basic auth on 7.x.
+
+    The `jfrog-secret` workspace binds either to a basic-auth Secret or to a mounted
+    JFrog Connector; the Task auto-detects which.
+  params:
+    - description: |
+        Artifactory origin URL, for example `https://jfrog.example.com`. Do not include
+        the `/artifactory` context path. Used as the Connector `spec.address`, as the
+        admin API base, and as the `auths` key authority of generated image pull Secrets.
+      name: jfrogUrl
+      type: string
+    - description: Connector resource to create, in `<namespace>/<name>` format. The auth Secret is written to the same namespace.
+      name: connector
+      type: string
+    - default: ""
+      description: Connector auth Secret name. Defaults to `<connector-name>-secret`.
+      name: secret
+      type: string
+    - default: ""
+      description: |
+        YAML document with two optional top-level keys:
+
+          provision:   # created when absent, left untouched when present
+            - name: project-a-docker
+              packageType: docker     # docker | maven | npm | pypi | generic | ...
+              rclass: local           # default: local
+          reference:   # must already exist; linked into the permission target only
+            - name: shared-maven-virtual
+
+        A `provision:` entry that already exists is NOT modified — only a `packageType`
+        mismatch is warned about. A missing `reference:` entry fails the Task; it is never
+        created, because a typo in a shared repository name would otherwise produce an
+        empty stand-in and a green run.
+
+        At least one entry across both lists is required.
+      name: jfrogRepositories
+      type: string
+    - default:
+        - read
+      description: |
+        Actions granted to the group over every listed repository. Artifactory defines:
+
+          read      pull / resolve
+          write     deploy a new artifact
+          annotate  set properties and metadata
+          delete    remove an artifact — and also overwrite one that already exists
+          manage    edit the repository's own permissions
+
+        Defaults to `read` alone. Mind the `delete` semantics: a write-only grant can
+        create artifacts but cannot replace them, because Artifactory treats deploying
+        over an existing path as a delete.
+
+        Values are passed through verbatim; an action Artifactory does not recognise is
+        rejected by Artifactory, not by this Task.
+      name: permissions
+      type: array
+    - default: ""
+      description: |
+        Artifactory user to reconcile. Defaults to
+        `connector-<connector-namespace>-<connector-name>`.
+
+        Artifactory rejects a username longer than 58 characters, which the default
+        derivation exceeds for ordinary namespace and connector names. A derived name that
+        does not fit is folded to `<truncated>-<8 hex of its sha256>`; the fold is
+        deterministic, so both steps arrive at the same identity without sharing state. A
+        name supplied here is never rewritten — it is refused if it does not fit.
+      name: jfrogUser
+      type: string
+    - default: ""
+      description: |
+        Prefix for the Artifactory group this Task reconciles. Defaults to
+        `connector-<connector-namespace>-<connector-name>`.
+
+        The actual group carries a generation suffix, `<prefix>-<n>`, because rotation has
+        to make the previous credential stop working and repointing the permission target
+        at a different group is the only thing on Artifactory that does. Token revocation
+        does not: on Artifactory 6.20.4 and 7.161.26, `POST /token/revoke` reports success
+        while the token keeps working, and deleting the user has no effect either.
+
+        The current generation is read back from the permission target, so no state is
+        stored anywhere and reruns are safe. Superseded generations are deleted.
+
+        A derived prefix longer than 48 characters is folded the same way `jfrogUser` is,
+        leaving room for the generation suffix. A prefix supplied here must already fit.
+      name: jfrogGroup
+      type: string
+    - default: 30d
+      description: |
+        How long the access token stays valid, as a duration: `30d`, `12h`, `1h30m`.
+        Units are `s`, `m`, `h`, `d` and may be combined. A bare number is read as
+        seconds, so values written before durations were accepted keep working, and `0`
+        still means the token never expires.
+
+        The unit set is Go's plus `d` for days. Go's own `time.ParseDuration` rejects
+        `d`, but a token lifetime is the one place where days are the natural unit —
+        having to write 2592000 for a month is how this parameter gets set wrong.
+
+        Artifactory's API takes seconds; the Task converts.
+
+        Note that token revocation does NOT work on either Artifactory major — a
+        non-expiring token is not even persisted, so `POST /token/revoke` reports success
+        and changes nothing. Expiry is the only lifecycle lever that functions; to revoke
+        access immediately, delete the permission target or the group.
+      name: tokenExpiry
+      type: string
+    - default: reuse
+      description: |
+        `reuse` (default) reads the stored token back from the Connector auth Secret and
+        keeps it while its expiry is further away than `tokenRenewBeforeDays`, so routine
+        reruns do not disturb already-distributed credential copies.
+
+        `refresh` performs a real rotation: it advances the group generation, repoints the
+        permission target at the new group, mints a token scoped to it, and deletes the
+        superseded generations — which makes the PREVIOUS token stop working immediately.
+        Use it when a credential is suspected compromised.
+
+        Either way the `token-rotated` result says what happened.
+      name: tokenPolicy
+      type: string
+    - default: "7"
+      description: 'Under `tokenPolicy: reuse`, re-mint when the stored token expires within this many days. Rerunning the Task is therefore how a credential gets renewed.'
+      name: tokenRenewBeforeDays
+      type: string
+    - default: []
+      description: 'Target `kubernetes.io/dockerconfigjson` Secrets to create, in `<namespace>/<name>` format. For docker repositories. Additive: dropping an entry later does not delete the Secret.'
+      name: imagePullSecrets
+      type: array
+    - default: "true"
+      description: |
+        Append each generated image pull Secret to the ServiceAccount named by
+        `serviceAccountName` in every target namespace. Defaults to `"true"`: a pull
+        Secret nobody is bound to does not make images pullable, so the binding is what
+        the caller almost always wants.
+
+        The append preserves entries this Task did not create and does not duplicate on
+        rerun. Because `imagePullSecrets` is an atomic list, the binding is a
+        read-modify-write guarded by the ServiceAccount's resourceVersion and retried on
+        conflict, so two TaskRuns binding into the same ServiceAccount cannot drop each
+        other's entry.
+
+        Requires `get` and `update` on serviceaccounts in each target namespace.
+      name: bindImagePullSecretToSA
+      type: string
+    - default: default
+      description: Existing ServiceAccount that receives generated image pull Secrets when `bindImagePullSecretToSA` is `"true"`.
+      name: serviceAccountName
+      type: string
+    - default: ${REGISTRY}/alauda-connectors/connectors-extensions/jfrog-connector-automatic-creation:v1.12.0-rc.359.g2f1d81e
+      description: |
+        Runtime image providing `curl`, `jq`, `kubectl`, `bash` and the helper scripts that
+        drive Artifactory. Must be the `jfrog-connector-automatic-creation` image (or a
+        derivative bundling the helper scripts at `/usr/local/bin/`) — a generic kubectl
+        image will not work. This image deliberately contains no JFrog CLI.
+      name: jfrogCliImage
+      type: string
+    - default: Always
+      description: Image pull policy for all Task steps.
+      name: imagePullPolicy
+      type: string
+    - default: "false"
+      description: |
+        Emit extra progress detail: the resolved plan, and one line per Artifactory
+        request giving method, path and status code — enough to tell which call failed
+        and with what, which is what you normally reach for `set -x` to get.
+
+        Shell tracing is deliberately NOT offered, not even behind this flag. Bash's
+        xtrace prints expanded assignments, not just command names, so it would log
+        `TOKEN=eyJ...` and `jq --arg pass eyJ...` regardless of credentials being kept
+        off command lines. Response bodies are not logged either: the body of the token
+        request IS the token.
+      name: verbose
+      type: string
+  results:
+    - description: Repository names reconciled by this run.
+      name: jfrog-repositories
+      type: array
+    - description: Artifactory user reconciled by this run.
+      name: jfrog-user
+      type: string
+    - description: Artifactory group reconciled by this run, including its generation suffix (`<prefix>-<n>`).
+      name: jfrog-group
+      type: string
+    - description: Permission target reconciled by this run.
+      name: permission-target
+      type: string
+    - description: '`<namespace>/<name>` of the written Connector.'
+      name: connector-ref
+      type: string
+    - description: Image pull Secrets written by this run.
+      name: image-pull-secret-refs
+      type: array
+    - description: '`"true"` when a new token was minted and every derived Secret rewritten; `"false"` when the stored token was reused. Callers holding their own copies must re-sync when this is `"true"`.'
+      name: token-rotated
+      type: string
+  stepTemplate:
+    env:
+      - name: STATE_DIR
+        value: /state
+      - name: VERBOSE
+        value: $(params.verbose)
+      - name: CONNECTOR
+        value: $(params.connector)
+      - name: WORKSPACE_JFROG_SECRET_BOUND
+        value: $(workspaces.jfrog-secret.bound)
+      - name: WORKSPACE_JFROG_SECRET_PATH
+        value: $(workspaces.jfrog-secret.path)
+      - name: WORKSPACE_KUBE_CONFIG_BOUND
+        value: $(workspaces.kube-config.bound)
+      - name: WORKSPACE_KUBE_CONFIG_PATH
+        value: $(workspaces.kube-config.path)
+    securityContext:
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop:
+          - ALL
+      runAsGroup: 65532
+      runAsNonRoot: true
+      runAsUser: 65532
+      seccompProfile:
+        type: RuntimeDefault
+    volumeMounts:
+      - mountPath: /state
+        name: state
+  steps:
+    - args:
+        - --permissions
+        - $(params.permissions[*])
+      computeResources:
+        limits:
+          cpu: 500m
+          memory: 512Mi
+        requests:
+          cpu: 100m
+          memory: 128Mi
+      env:
+        - name: JFROG_URL
+          value: $(params.jfrogUrl)
+        - name: REPOSITORIES_YAML
+          value: $(params.jfrogRepositories)
+        - name: SECRET
+          value: $(params.secret)
+        - name: JFROG_USER
+          value: $(params.jfrogUser)
+        - name: JFROG_GROUP
+          value: $(params.jfrogGroup)
+        - name: TOKEN_EXPIRY
+          value: $(params.tokenExpiry)
+        - name: TOKEN_POLICY
+          value: $(params.tokenPolicy)
+        - name: TOKEN_RENEW_BEFORE_DAYS
+          value: $(params.tokenRenewBeforeDays)
+      image: $(params.jfrogCliImage)
+      imagePullPolicy: $(params.imagePullPolicy)
+      name: ensure-jfrog-resources
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+
+        # The `permissions` array arrives as positional args after a `--permissions`
+        # marker; fold it into the comma-separated form the helper script takes.
+        perms=()
+        collecting="false"
+        for arg in "$@"; do
+          if [[ "${arg}" == "--permissions" ]]; then collecting="true"; continue; fi
+          [[ "${collecting}" == "true" && -n "${arg}" ]] && perms+=("${arg}")
+        done
+        (( ${#perms[@]} > 0 )) || perms=(read)
+        permissions_csv="$(IFS=,; printf '%s' "${perms[*]}")"
+
+        # jfrogRepositories is authored as YAML; the helper script takes JSON. JSON input
+        # is also accepted as-is, since valid JSON is valid YAML.
+        repos_json='{}'
+        if [[ -n "${REPOSITORIES_YAML// }" ]]; then
+          repos_json="$(printf '%s' "${REPOSITORIES_YAML}" | yq -o=json -I=0 '.' )" \
+            || { echo "ERROR: jfrogRepositories is not valid YAML or JSON" >&2; exit 1; }
+        fi
+
+        args=(
+          --jfrog-url "${JFROG_URL}"
+          --connector "${CONNECTOR}"
+          --repositories "${repos_json}"
+          --permissions "${permissions_csv}"
+          --token-expiry "${TOKEN_EXPIRY}"
+          --token-policy "${TOKEN_POLICY}"
+          --token-renew-before-days "${TOKEN_RENEW_BEFORE_DAYS}"
+          --output-token-file "${STATE_DIR}/token"
+          --output-rotated-file "${STATE_DIR}/token-rotated"
+          --output-repos-file "${STATE_DIR}/repos"
+          --output-identity-file "${STATE_DIR}/identity"
+          --verbose "${VERBOSE}"
+        )
+        [[ -n "${SECRET}" ]] && args+=(--secret "${SECRET}")
+        [[ -n "${JFROG_USER}" ]] && args+=(--user "${JFROG_USER}")
+        [[ -n "${JFROG_GROUP}" ]] && args+=(--group-prefix "${JFROG_GROUP}")
+
+        exec ensure-jfrog-resources.sh "${args[@]}"
+    - args:
+        - --image-pull-secrets
+        - $(params.imagePullSecrets[*])
+      computeResources:
+        limits:
+          cpu: 500m
+          memory: 512Mi
+        requests:
+          cpu: 100m
+          memory: 128Mi
+      env:
+        - name: JFROG_URL
+          value: $(params.jfrogUrl)
+        - name: SECRET
+          value: $(params.secret)
+        - name: JFROG_USER
+          value: $(params.jfrogUser)
+        - name: BIND_IMAGE_PULL_SECRET_TO_SA
+          value: $(params.bindImagePullSecretToSA)
+        - name: SERVICE_ACCOUNT_NAME
+          value: $(params.serviceAccountName)
+      image: $(params.jfrogCliImage)
+      imagePullPolicy: $(params.imagePullPolicy)
+      name: apply-kubernetes-resources
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+
+        # imagePullSecrets arrives as positional args behind its own marker. `if`, not
+        # `[[ ... ]] && continue`: bash exempts that from `set -e` today, but the same
+        # shape with a different right-hand side would not, and this file already says
+        # elsewhere not to write it.
+        args=()
+        for arg in "$@"; do
+          if [[ "${arg}" == "--image-pull-secrets" || -z "${arg}" ]]; then
+            continue
+          fi
+          args+=(--image-pull-secrets "${arg}")
+        done
+
+        args+=(
+          --jfrog-url "${JFROG_URL}"
+          --connector "${CONNECTOR}"
+          --token-file "${STATE_DIR}/token"
+          --bind-image-pull-secret-to-sa "${BIND_IMAGE_PULL_SECRET_TO_SA}"
+          --service-account-name "${SERVICE_ACCOUNT_NAME}"
+          --output-image-pull-refs "${STATE_DIR}/image-pull-refs"
+          --verbose "${VERBOSE}"
+        )
+        [[ -n "${SECRET}" ]] && args+=(--secret "${SECRET}")
+        [[ -n "${JFROG_USER}" ]] && args+=(--user "${JFROG_USER}")
+
+        exec apply-kubernetes-resources.sh "${args[@]}"
+    - computeResources:
+        limits:
+          cpu: 200m
+          memory: 128Mi
+        requests:
+          cpu: 50m
+          memory: 64Mi
+      env:
+        - name: RESULTS_PATH_REPOS
+          value: $(results.jfrog-repositories.path)
+        - name: RESULTS_PATH_USER
+          value: $(results.jfrog-user.path)
+        - name: RESULTS_PATH_GROUP
+          value: $(results.jfrog-group.path)
+        - name: RESULTS_PATH_PERMISSION_TARGET
+          value: $(results.permission-target.path)
+        - name: RESULTS_PATH_CONNECTOR
+          value: $(results.connector-ref.path)
+        - name: RESULTS_PATH_IMAGE_PULL_REFS
+          value: $(results.image-pull-secret-refs.path)
+        - name: RESULTS_PATH_TOKEN_ROTATED
+          value: $(results.token-rotated.path)
+      image: $(params.jfrogCliImage)
+      imagePullPolicy: $(params.imagePullPolicy)
+      name: write-results
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+        exec write-results.sh
+  volumes:
+    - emptyDir:
+        medium: Memory
+      name: state
+  workspaces:
+    - description: |
+        Bind either to a basic-auth Secret (`username` + `password` files) or to a mounted
+        JFrog Connector. The Task detects the binding shape and selects the auth strategy.
+        A connector-backed mount also ships `.env` (with `HTTP(S)_PROXY`) and `ca.crt`,
+        which the Task sources so the admin credential never enters the Pod.
+      name: jfrog-secret
+    - description: |
+        Optional kubeconfig for an out-of-cluster target. When unbound, the Task uses the
+        Pod's in-cluster ServiceAccount.
+      name: kube-config
+      optional: true
+EOF
+```
+{/* END GENERATED TASK YAML */}
+
+## Parameters
+
+Rendered from the Task above, so it cannot drift from what you just installed. A `_required_` default means the parameter has none and every TaskRun must set it.
+
+{/* BEGIN GENERATED TASK PARAMS */}
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `jfrogUrl` | string | _required_ | Artifactory origin URL, for example `https://jfrog.example.com`. Do not include the `/artifactory` context path. Used as the Connector `spec.address`, as the admin API base, and as the `auths` key authority of generated image pull Secrets. |
+| `connector` | string | _required_ | Connector resource to create, in `<namespace>/<name>` format. The auth Secret is written to the same namespace. |
+| `secret` | string | `""` | Connector auth Secret name. Defaults to `<connector-name>-secret`. |
+| `jfrogRepositories` | string | `""` | YAML document with two optional top-level keys: provision: # created when absent, left untouched when present - name: project-a-docker packageType: docker # docker \| maven \| npm \| pypi \| generic \| ... rclass: local # default: local reference: # must already exist; linked into the permission target only - name: shared-maven-virtual A `provision:` entry that already exists is NOT modified — only a `packageType` mismatch is warned about. A missing `reference:` entry fails the Task; it is never created, because a typo in a shared repository name would otherwise produce an empty stand-in and a green run. At least one entry across both lists is required. |
+| `permissions` | array | `read` | Actions granted to the group over every listed repository. Artifactory defines: read pull / resolve write deploy a new artifact annotate set properties and metadata delete remove an artifact — and also overwrite one that already exists manage edit the repository's own permissions Defaults to `read` alone. Mind the `delete` semantics: a write-only grant can create artifacts but cannot replace them, because Artifactory treats deploying over an existing path as a delete. Values are passed through verbatim; an action Artifactory does not recognise is rejected by Artifactory, not by this Task. |
+| `jfrogUser` | string | `""` | Artifactory user to reconcile. Defaults to `connector-<connector-namespace>-<connector-name>`. Artifactory rejects a username longer than 58 characters, which the default derivation exceeds for ordinary namespace and connector names. A derived name that does not fit is folded to `<truncated>-<8 hex of its sha256>`; the fold is deterministic, so both steps arrive at the same identity without sharing state. A name supplied here is never rewritten — it is refused if it does not fit. |
+| `jfrogGroup` | string | `""` | Prefix for the Artifactory group this Task reconciles. Defaults to `connector-<connector-namespace>-<connector-name>`. The actual group carries a generation suffix, `<prefix>-<n>`, because rotation has to make the previous credential stop working and repointing the permission target at a different group is the only thing on Artifactory that does. Token revocation does not: on Artifactory 6.20.4 and 7.161.26, `POST /token/revoke` reports success while the token keeps working, and deleting the user has no effect either. The current generation is read back from the permission target, so no state is stored anywhere and reruns are safe. Superseded generations are deleted. A derived prefix longer than 48 characters is folded the same way `jfrogUser` is, leaving room for the generation suffix. A prefix supplied here must already fit. |
+| `tokenExpiry` | string | `30d` | How long the access token stays valid, as a duration: `30d`, `12h`, `1h30m`. Units are `s`, `m`, `h`, `d` and may be combined. A bare number is read as seconds, so values written before durations were accepted keep working, and `0` still means the token never expires. The unit set is Go's plus `d` for days. Go's own `time.ParseDuration` rejects `d`, but a token lifetime is the one place where days are the natural unit — having to write 2592000 for a month is how this parameter gets set wrong. Artifactory's API takes seconds; the Task converts. Note that token revocation does NOT work on either Artifactory major — a non-expiring token is not even persisted, so `POST /token/revoke` reports success and changes nothing. Expiry is the only lifecycle lever that functions; to revoke access immediately, delete the permission target or the group. |
+| `tokenPolicy` | string | `reuse` | `reuse` (default) reads the stored token back from the Connector auth Secret and keeps it while its expiry is further away than `tokenRenewBeforeDays`, so routine reruns do not disturb already-distributed credential copies. `refresh` performs a real rotation: it advances the group generation, repoints the permission target at the new group, mints a token scoped to it, and deletes the superseded generations — which makes the PREVIOUS token stop working immediately. Use it when a credential is suspected compromised. Either way the `token-rotated` result says what happened. |
+| `tokenRenewBeforeDays` | string | `7` | Under `tokenPolicy: reuse`, re-mint when the stored token expires within this many days. Rerunning the Task is therefore how a credential gets renewed. |
+| `imagePullSecrets` | array | `[]` | Target `kubernetes.io/dockerconfigjson` Secrets to create, in `<namespace>/<name>` format. For docker repositories. Additive: dropping an entry later does not delete the Secret. |
+| `bindImagePullSecretToSA` | string | `true` | "Append each generated image pull Secret to the ServiceAccount named by `serviceAccountName` in every target namespace. Defaults to `""true""`: a pull Secret nobody is bound to does not make images pullable, so the binding is what the caller almost always wants. The append preserves entries this Task did not create and does not duplicate on rerun. Because `imagePullSecrets` is an atomic list, the binding is a read-modify-write guarded by the ServiceAccount's resourceVersion and retried on conflict, so two TaskRuns binding into the same ServiceAccount cannot drop each other's entry. Requires `get` and `update` on serviceaccounts in each target namespace. " |
+| `serviceAccountName` | string | `default` | "Existing ServiceAccount that receives generated image pull Secrets when `bindImagePullSecretToSA` is `""true""`." |
+| `jfrogCliImage` | string | `${REGISTRY}/alauda-connectors/connectors-extensions/jfrog-connector-automatic-creation:v1.12.0-rc.359.g2f1d81e` | Runtime image providing `curl`, `jq`, `kubectl`, `bash` and the helper scripts that drive Artifactory. Must be the `jfrog-connector-automatic-creation` image (or a derivative bundling the helper scripts at `/usr/local/bin/`) — a generic kubectl image will not work. This image deliberately contains no JFrog CLI. |
+| `imagePullPolicy` | string | `Always` | Image pull policy for all Task steps. |
+| `verbose` | string | `false` | Emit extra progress detail: the resolved plan, and one line per Artifactory request giving method, path and status code — enough to tell which call failed and with what, which is what you normally reach for `set -x` to get. Shell tracing is deliberately NOT offered, not even behind this flag. Bash's xtrace prints expanded assignments, not just command names, so it would log `TOKEN=eyJ...` and `jq --arg pass eyJ...` regardless of credentials being kept off command lines. Response bodies are not logged either: the body of the token request IS the token. |
+{/* END GENERATED TASK PARAMS */}
+
+## Workspaces
+
+| Workspace | Required | Purpose |
+| --- | --- | --- |
+| `jfrog-secret` | Yes | The Artifactory credential. Either a JFrog Connector mounted through the Connectors CSI driver (recommended — the credential stays behind the proxy) or a `kubernetes.io/basic-auth` Secret. The Task detects which. |
+| `kube-config` | No | A kubeconfig for writing the Connector and Secrets to another cluster. Unbound, the Task uses the TaskRun Pod's in-cluster ServiceAccount. |
+
+## Results
+
+| Result | Purpose |
+| --- | --- |
+| `jfrog-repositories` | The repository names reconciled by this run. |
+| `jfrog-user` | The Artifactory user the run reconciled. |
+| `jfrog-group` | The group, including its generation suffix. |
+| `permission-target` | The permission target name. |
+| `connector-ref` | `<namespace>/<name>` of the Connector written. |
+| `image-pull-secret-refs` | Each image pull Secret written, one entry per namespace. |
+| `token-rotated` | `"true"` when this run minted a new token — holders of their own copies must re-sync; `"false"` when the stored token was reused. |
+
+For the `jfrogRepositories` schema, the `permissions` reference, worked TaskRun examples, what a re-run changes, and troubleshooting, see [Automatically Create and Reconcile JFrog Connector Resources with Tekton](./using_jfrog_connector_automatic_creation_task.mdx).
+
+> **Artifactory Pro (or higher) is required.** The repository, group, user, and permission-target REST APIs this Task drives are Pro features; on OSS they answer `400 This REST API is available only in Artifactory Pro`.

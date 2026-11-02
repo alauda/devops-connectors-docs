@@ -203,6 +203,8 @@ Expressions use JavaScript syntax and support:
 - **Array operations**: `params.tags.map(tag => connector.spec.address + ':' + tag)`
 - **Built-in functions**:
     -  `url(connector.spec.address).host`: get the host of the address
+    -  `selectedConnectors()`: the primary Connector plus any extra Connectors selected in the Integration, for the CSI `connectors` volume attribute. See [Multiple Connectors](#multiple-connectors).
+    -  `selectedConfigurationNames('<baseNames>')`: the workspace's base `configuration.names` plus the configurations required by cross-type extra Connectors. Requires schema-version 3, which is supported by Tekton operator v4.14.0 and later. See [Multiple Connectors](#multiple-connectors).
 
 and other JavaScript syntaxes are supported.
 
@@ -278,6 +280,83 @@ spec:
 ```
 
 Workspace values support expressions to dynamically reference parameter and connector values using the same syntax as attributes.
+
+### Configurations \{#configurations}
+
+`spec.configurations` holds optional, ResourceInterface-wide settings that the Pipeline Integration UI reads when users create an Integration. Today it carries one entry, `multipleMergeConnectors`.
+
+#### Multiple Connectors \{#multiple-connectors}
+
+`spec.configurations.multipleMergeConnectors` lets one Pipeline Integration use more than one Connector: a primary Connector plus extra Connectors. In every workspace that lists the selected Connectors with `selectedConnectors()`, the [Connectors CSI Driver](./connectors_csi.mdx#multiple-connectors) merges their credentials and configuration files into that workspace. Workspaces that only reference the primary Connector (`connector.name` / `connector.namespace` without `connectors`) keep using the primary Connector alone. For example, the deprecated `docker-credentials` workspace of the OCI artifact ResourceInterfaces works this way.
+
+| Field | Default | Description |
+| ----- | ------- | ----------- |
+| `enabled` | `false` | Allows selecting extra Connectors in addition to the primary Connector. Without `allowCrossTypeConnectors`, extra Connectors must be of the same type, that is, compatible with this ResourceInterface. |
+| `allowCrossTypeConnectors` | `false` | Only takes effect when `enabled` is `true`. Also allows extra Connectors whose ConnectorClass is not compatible with this ResourceInterface (other types). For example, an OCI artifact Integration can also use a Maven Connector. |
+| `description` | — | Help text shown for the extra Connectors selector. |
+
+```yaml
+spec:
+  configurations:
+    multipleMergeConnectors:
+      enabled: true
+      allowCrossTypeConnectors: true
+      description: Multiple connectors can be selected, including connectors of other types (e.g. Maven).
+```
+
+Mounting several Connectors in one CSI volume requires the [`enable-multi-connector`](../../overview/feature_flags.mdx#enable-multi-connector) feature flag. In the UI, the extra Connectors selector is shown only when both the flag and `enabled` are on.
+
+Workspaces that should receive the extra Connectors list them with `selectedConnectors()` in the CSI `connectors` volume attribute:
+
+```yaml
+spec:
+  workspaces:
+  - name: registry-config
+    value:
+      csi:
+        driver: connectors-csi
+        readOnly: true
+        volumeAttributes:
+          connector.name: "{connector.metadata.name}"
+          connector.namespace: "{connector.metadata.namespace}"
+          connectors: "{selectedConnectors()}"
+          configuration.names: "{selectedConfigurationNames('registry-config,!ca.cert')}"
+          token.expiration: 30m
+```
+
+**Cross-type configuration names.** An extra Connector of another type needs its own configuration files, for example a Maven Connector needs `settings`. A fixed `configuration.names` list cannot know about them in advance. So when `allowCrossTypeConnectors` is `true`, every workspace that uses `selectedConnectors()` should build `configuration.names` with `selectedConfigurationNames(baseNames)`:
+
+- `baseNames` is the workspace's own rule for the primary type, using the same syntax as `configuration.names`: configuration names plus optional `!<fileName>` exclusions.
+- For each extra Connector of another type, the function adds every configuration name declared by that Connector's ConnectorClass (`spec.configurations[].name`). Each ConnectorClass is expanded once.
+- Extra Connectors of the same type add nothing. Only the configurations named in `baseNames` are mounted for them.
+- The result is ordered as base names, then cross-type names, then the `!` exclusions from `baseNames`, with duplicates removed.
+- Exclusions come **only** from the primary ResourceInterface's `baseNames`. For example, `!ca.cert` in an OCI or Harbor workspace also applies when a Maven Connector is added. A Maven ResourceInterface that does not exclude `ca.cert` keeps the file when an OCI Connector is added.
+- If an extra Connector or its ConnectorClass cannot be read while the UI evaluates the expression, that Connector adds no configuration names and the expression itself does not fail. This tolerance applies only to computing `configuration.names`. When the Pod starts, the CSI Driver must read every Connector listed in `connectors`, and the volume mount fails if any of them cannot be read.
+
+For example, with the base `registry-config,!ca.cert` and an extra Maven Connector whose ConnectorClass declares `settings`, the workspace mounts `registry-config,settings,!ca.cert`.
+
+`selectedConfigurationNames` is a schema-version 3 expression, so cross-type ResourceInterfaces must carry `resourceinterface.connectors.cpaas.io/schema-version: "3"` (see [Schema Version and Tekton Compatibility](#schema-version)). The operator keeps the earlier same-type ResourceInterfaces installed next to them for older frontends.
+
+Version requirements for cross-type Multiple Connectors:
+
+| Component | Minimum version | Why |
+| --------- | --------------- | --- |
+| Alauda Container Platform Connectors operator | v1.15.0 | Ships the `allowCrossTypeConnectors` field and the schema-version 3 ResourceInterfaces listed below. |
+| Tekton operator | v4.14.0 | Its Pipeline UI is the first to support schema-version 3: `selectedConfigurationNames`, the extra Connectors grouping, and the cross-type hint. |
+
+On older Tekton releases, behavior depends on whether the release understands `schema-version`:
+
+- **Recognizes `schema-version` but supports a version below 3:** the UI skips the version 3 ResourceInterfaces and picks the earlier ResourceInterface of the category, so extra Connectors stay limited to the same type. No action is needed.
+- **Predates `schema-version` support:** the UI treats the version 3 ResourceInterfaces as renderable, and their Integration forms break. Cap the installed schema-versions with the [`pipeline-integration`](../../install/install.mdx#install-flags) install flag (`"<=2"`), or upgrade Tekton. See [Upgrade the Tekton operator](#upgrade-tekton) and [Cap the installed schema-version range](#disable-higher-schema).
+
+The following ResourceInterfaces ship with cross-type Multiple Connectors enabled:
+
+| ResourceInterface | ConnectorClass | Category | schema-version |
+| ----------------- | -------------- | -------- | -------------- |
+| `ociartifact-v2` | `oci` | `OCIArtifact` | 3 |
+| `harborociartifact-v3` | `harbor` | `OCIArtifact` | 3 |
+| `jfrogociartifact-v2` | `jfrog` | `OCIArtifact` | 3 |
+| `mavenrepository-v2` | `maven` | `MavenRepository` | 3 |
 
 ## ConnectorClass
 

@@ -234,7 +234,7 @@ The `harbor-connector-automatic-creation` Task is used in two ways:
 
 ### Harbor CLI image (`harborCliImage`)
 
-The `harborCliImage` parameter defaults to the pinned versioned image (currently `registry.alauda.cn:60070/devops/harbor-connector-automatic-creation:v0.0.18`), so you can omit it on every TaskRun unless your cluster pulls from a different registry. Set `harborCliImage` only when you mirror the image to a private registry; in that case, point it at your mirror, for example `<your-registry>/devops/harbor-connector-automatic-creation:v0.0.18`.
+The `harborCliImage` parameter defaults to the pinned versioned image (currently `${REGISTRY}/alauda-connectors/connectors-extensions/harbor-connector-automatic-creation:v1.12.0-beta.268.g0103c67`), so you can omit it on every TaskRun unless your cluster pulls from a different registry. Set `harborCliImage` only when you mirror the image to a private registry; in that case, point it at your mirror, for example `<your-registry>/alauda-connectors/connectors-extensions/harbor-connector-automatic-creation:v1.12.0-beta.268.g0103c67`.
 
 ### Project permissions (`permissions`)
 
@@ -252,11 +252,31 @@ Use the `robotAccountDuration` parameter to control how long the generated Harbo
 - Default is `"-1"`, which means the robot account never expires.
 - Set a positive integer to express the robot account validity period in days, for example `"30"` for 30 days.
 
-If the account is intended for long-term use, keep `robotAccountDuration` at `"-1"` and rerun the Task whenever you want to rotate the robot token and refresh the generated Secrets. If the account itself should expire after a fixed number of days, set `robotAccountDuration` to that number.
+If the account is intended for long-term use, keep `robotAccountDuration` at `"-1"`. Use `robotTokenPolicy` to choose whether a rerun rotates the token or preserves an existing token:
 
-Running the Task again rotates the robot token and updates the generated Secrets. If the robot account has a bounded validity period and you want to extend that validity window before it expires, update `robotAccountDuration` in the TaskRun and rerun the Task. Rotating credentials alone does not extend the robot account expiration.
+- `refresh` (the default) creates a new token on every run when the Harbor project set is unchanged, then refreshes the Connector Secret and generated `imagePullSecrets`.
+- `reuse` keeps the existing token by reading it from the Connector Secret. Permissions are still reconciled in Harbor, but existing token copies remain valid. If no valid stored token can be read, the Task falls back to `refresh`.
 
-When the requested Harbor project set changes between runs, the Task deletes and recreates the robot account; when only the duration changes, the Task updates the existing robot account in place and refreshes its token.
+A change to the Harbor project set always recreates the robot account and mints a new token, regardless of `robotTokenPolicy`.
+
+If the robot account has a bounded validity period and you want to extend that validity window before it expires, update `robotAccountDuration` in the TaskRun and rerun the Task. Rotating credentials alone does not extend the robot account expiration.
+
+When the requested Harbor project set changes between runs, the Task deletes and recreates the robot account; when only the duration changes, the Task updates the existing robot account in place and applies the selected token policy.
+
+The Task writes the `robot-token-rotated` result as `true` when it minted a new token and `false` when it reused the stored token. Pipelines that distribute credentials to multiple namespaces can use this result to skip unnecessary re-sync work.
+
+### Bind generated image pull Secrets to a ServiceAccount
+
+By default, `imagePullSecrets` only creates or updates Secrets. Set `bindImagePullSecretToSA` to `"true"` to also add each generated Secret to the ServiceAccount named by `serviceAccountName`:
+
+```yaml
+    - name: bindImagePullSecretToSA
+      value: "true"
+    - name: serviceAccountName
+      value: default
+```
+
+The ServiceAccount must already exist. The same `serviceAccountName` is resolved independently in every namespace named by `imagePullSecrets`; the Task does not create the ServiceAccount. Direct Task users must opt in explicitly because this mutates ServiceAccount image-pull configuration.
 
 This document focuses on the workflow. For the full parameter reference and the exact Task definition, see the [`harbor-connector-automatic-creation` Task reference](./harbor_connector_automatic_creation_task.mdx).
 
@@ -387,6 +407,8 @@ spec:
         - repository:pull
     - name: robotAccountDuration
       value: "-1"
+    - name: robotTokenPolicy
+      value: refresh
     - name: imagePullSecrets
       value:
         - <project-namespace-a>/harbor-pull-secret
@@ -401,6 +423,8 @@ spec:
 ```
 
 Keep the same Connector identity when you want to reconcile an existing Harbor access path instead of creating a separate one. Use `robotAccountDuration: "-1"` for a long-lived account and rerun the Task whenever you want to rotate the token. If the account should expire after a fixed number of days, set `robotAccountDuration` to that value and update it on a later run when you need to extend the account validity window.
+
+For a reconciliation that must preserve credentials already copied to other systems, set `robotTokenPolicy: reuse`. For a deliberate rotation, set `robotTokenPolicy: refresh` and propagate the new token only when the `robot-token-rotated` result is `true`.
 
 ## Verify the Result
 
@@ -421,6 +445,13 @@ Check the generated `imagePullSecret` in a target namespace:
 
 ```bash
 kubectl get secret harbor-pull-secret -n <project-namespace-a>
+```
+
+When `bindImagePullSecretToSA: "true"`, also verify that the ServiceAccount references the generated Secret:
+
+```bash
+kubectl get serviceaccount <service-account-name> -n <project-namespace-a> \\
+  -o jsonpath='{.imagePullSecrets[*].name}'
 ```
 
 To verify that the generated `imagePullSecret` can actually pull an image, create a temporary Pod in the target namespace:

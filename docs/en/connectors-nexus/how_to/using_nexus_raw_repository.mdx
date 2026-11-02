@@ -1,0 +1,342 @@
+---
+weight: 30
+title: Upload and Download Artifacts in a Nexus Raw Repository
+---
+
+# Upload and Download Artifacts in a Nexus Raw Repository
+
+Pipelines that exchange binaries, tarballs, documentation bundles, or test
+reports with Nexus often need to **upload** to or **download** from a hosted
+**raw** repository rather than use a Maven, npm, or PyPI package format.
+Without a Connector, this means a pipeline author has to:
+
+1. Find the exact Nexus raw repository name and, for downloads, the complete
+   file path in the Nexus console, then paste them into the `TaskRun`.
+2. Create and maintain a `kubernetes.io/basic-auth` Secret in the user
+   namespace, carrying the long-lived username and password.
+3. Re-create that Secret in every namespace that uses Nexus, and
+   rotate it everywhere whenever the Nexus credential changes.
+
+This guide shows the alternative path: reference a platform Nexus
+Connector through the `nexus-raw-repository` ResourceInterface, and let
+the connectors CSI driver inject the proxy URL and CA certificate at
+TaskRun time. The user namespace never stores a plaintext Nexus Secret,
+and credential rotation is transparent.
+
+A **ResourceInterface** (RI) is a reusable Connector-to-Task binding
+template. The platform ships `nexus-raw-repository` to map a Nexus Connector,
+a selected raw repository, and an optional file path onto the inputs that raw
+upload and download Tasks expect.
+
+## What Problem This Solves
+
+Use this approach when you need to:
+
+- **Upload artifacts to a hosted raw repository** from a Tekton
+  `TaskRun` (single file, directory tree, glob expansion, optional
+  packaging into a tarball, optional `sha256` checksum manifest — all
+  capabilities shipped by the `nexus-upload` Tekton Task that comes
+  with the platform).
+- **Download an existing raw artifact** by selecting its complete path instead
+  of copying the path from the Nexus console.
+- **Drop hand-managed Secrets** in user namespaces and let the platform
+  Connector own the credential lifecycle.
+- **Pick the repository from a list** filtered to `raw` format and `hosted`
+  type, then search its files when configuring a download.
+
+## Before You Begin
+
+### Prerequisites
+
+> Examples below assume the default install namespace `connectors-system`.
+> If your platform installs the Connectors component into a different
+> namespace, substitute that namespace where you see `connectors-system`.
+
+- Tekton Pipelines is installed.
+- The Connectors system and the **Nexus Connector** component are
+  installed (`ConnectorsCore` and `ConnectorsNexus` CRs reconciled
+  Ready).
+- The `nexus-upload` or `nexus-download` Tekton Task is installed in the
+  namespace where you will run the `TaskRun`. The Task must be on a version
+  that consumes the `nexus-raw-repository` ResourceInterface. Refer to the
+  platform release notes for the Task version that introduces Connector
+  support.
+- A Nexus Connector pointing at the target Nexus instance, with a
+  Secret that holds a Nexus user with **read** permission for downloads and
+  **read and write** permission for uploads on the selected hosted raw
+  repository.
+- The target raw repository already exists in Nexus. This guide does
+  not provision repositories — see [Nexus Connector Automatic
+  Creation](./using_nexus_connector_automatic_creation_task.mdx) for
+  that flow.
+
+### How the Connector Path Differs
+
+| Aspect | Hand-managed Secret | Connector via `nexus-raw-repository` RI |
+| --- | --- | --- |
+| Where credentials live | Plaintext Secret in the user namespace | Connector-owned Secret in a platform namespace |
+| Repository name input | Typed by the pipeline author | Selected from a dropdown filtered to `raw` + `hosted` |
+| Download file input | Complete path copied from Nexus | Complete path selected from the repository's file list |
+| Credential rotation | Manual edit + redeploy in every namespace | Rotate the Connector Secret once; new `TaskRun`s pick it up |
+| Pod environment | Caller mounts the Secret as the `auth` workspace | CSI driver injects `.env` (with the forward-proxy URL) and `ca.crt` |
+| Data path | `curl` connects directly to Nexus with `--user $u:$p` | The Task connects through `HTTPS_PROXY`; the forward proxy authenticates the upstream connection using the Connector's stored credentials |
+
+Uploads use HTTP `PUT` and downloads use HTTP `GET` on
+`<address>/repository/<repo>/<path>`. The Connector path changes how `curl`
+authenticates: instead of seeing the Nexus user, it sees the forward-proxy URL,
+and the proxy authenticates the upstream connection using the Connector's
+stored credentials.
+
+## Step 1 — Create the Nexus Connector
+
+If you already have a Nexus Connector for `mvn`, `npm`, or `pypi`
+workflows, the same Connector also serves raw uploads and downloads — skip to
+Step 2.
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: my-nexus-cred
+  namespace: connectors-system
+type: kubernetes.io/basic-auth
+stringData:
+  username: <nexus-user-with-write-on-target-raw-repo>
+  password: <password>
+---
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: my-nexus
+  namespace: connectors-system
+spec:
+  connectorClassName: nexus
+  address: https://nexus.example.com
+  auth:
+    name: basicAuth
+    secretRef:
+      name: my-nexus-cred
+```
+
+Wait until the Connector reports `Ready=True`:
+
+```bash
+kubectl -n connectors-system get connector my-nexus -w
+```
+
+## Step 2 — Upload with the ResourceInterface
+
+The `nexus-upload` Task declares an `auth` workspace and a `repository`
+parameter, both of which the `nexus-raw-repository` ResourceInterface maps in
+the Pipeline editor. The following hand-written `TaskRun` shows the equivalent
+runtime binding after that editor-time mapping. It references the Connector
+directly because a `TaskRun` does not reference a ResourceInterface object:
+
+```yaml
+apiVersion: tekton.dev/v1
+kind: TaskRun
+metadata:
+  generateName: upload-dist-
+spec:
+  taskRef:
+    name: nexus-upload
+  params:
+  # In a UI-driven TaskRun, both nexusServerURL and repository are
+  # auto-filled from the Connector via the RI's `address` and
+  # `repository` attributes. In a hand-written YAML you pass the
+  # values directly; they must agree with the chosen Connector
+  # (nexusServerURL = the Connector's spec.address).
+  - name: nexusServerURL
+    value: https://nexus.example.com
+  - name: repository
+    value: my-raw-hosted              # filled from the RI dropdown in the UI
+  - name: targetPath
+    value: releases/$(context.taskRun.name)
+  - name: sources
+    value: ["dist/*.tar.gz"]
+  workspaces:
+  - name: source
+    persistentVolumeClaim:
+      claimName: build-output
+  - name: auth
+    csi:
+      driver: connectors-csi
+      readOnly: true
+      volumeAttributes:
+        connectors: connectors-system/my-nexus
+        # Empty configuration.names tells the CSI driver to mount only the
+        # builtin configuration: .env (HTTPS_PROXY with the connector
+        # context token embedded) and ca.crt (the forward-proxy CA bundle).
+        configuration.names: ""
+        token.expiration: 30m
+```
+
+When the pod starts, the CSI driver writes two files into the `auth`
+workspace:
+
+- `.env` — exports `HTTPS_PROXY`, `HTTP_PROXY`, `https_proxy`,
+  `http_proxy`, `no_proxy`, all pointing at the platform forward
+  proxy. The proxy URL embeds short-lived credentials derived from
+  the Connector identity and the TaskRun ServiceAccount token.
+- `ca.crt` — the CA bundle that signs the forward proxy's TLS
+  certificate.
+
+The Task internally sources `.env` to pick up `HTTPS_PROXY`, then runs
+`curl -X PUT --cacert <auth_workspace>/ca.crt --upload-file <file>
+<address>/repository/<repository>/<path>`. The forward proxy validates
+the TaskRun-scoped credential, looks up the Nexus Connector, swaps the
+proxy auth for the Connector's real Nexus username and password, and
+forwards the `PUT` to Nexus.
+
+## Step 3 — Verify the Upload
+
+After the `TaskRun` succeeds:
+
+1. List `result`s on the `TaskRun` — `nexus-upload` exposes a result
+   per uploaded file containing the final absolute URL.
+2. Open one of the URLs from the previous step. Nexus should return
+   the artifact unchanged.
+3. Check the Nexus console under **Browse → Components** for the
+   target raw repository to confirm the upload appeared there.
+
+## Step 4 — Select and Download a Raw File
+
+In the Pipeline editor, add a Pipeline Integration based on the
+`nexus-raw-repository` ResourceInterface, then:
+
+1. Select the Nexus Connector.
+2. Select a repository. The list contains only repositories whose Nexus format
+   is `raw` and whose type is `hosted`.
+3. Select **File Path**. The form calls the Nexus asset search API for the
+   selected repository and displays each file's complete path.
+4. To narrow a large first page, enter text in the file selector's search box.
+   The form sends the text to Nexus as the `q` query parameter. Nexus applies
+   its own full-text search semantics; this is not guaranteed to be a simple
+   file-name `contains` match.
+
+Raw repositories do not assign Maven-style versions to files. The selected
+value is the complete repository-relative path, for example:
+
+```text
+releases/app/v1/package.tar.gz
+```
+
+Some Nexus versions return the same path with a leading `/`. The
+ResourceInterface removes that leading slash before passing the value to the
+Task because `nexus-download` expects a repository-relative `sourcePath`, not
+an absolute path or download URL.
+
+Map the Integration to the `nexus-download` Task as follows:
+
+| ResourceInterface output | `nexus-download` input |
+| --- | --- |
+| `address` attribute | `nexusServerURL` parameter |
+| `repository` attribute | `repository` parameter |
+| `path` attribute | `sourcePath` parameter |
+| `auth` workspace | `auth` workspace |
+
+The Pipeline editor can recommend these mappings when the Task declares its
+`RawRepository` Integration contract. You can also select each Integration
+attribute manually. The `path` parameter is optional with an empty default, so
+Pipeline Integrations saved before file selection was introduced remain
+loadable.
+
+The selector currently exposes the first page returned by Nexus and does not
+automatically load continuation pages. A valid repository with no matching
+files returns a successful response with an empty `items` array; it is not an
+authentication or system error.
+
+## Step 5 — Verify the Download
+
+After the `TaskRun` succeeds:
+
+1. Confirm that the Task received a repository-relative `sourcePath` without a
+   leading slash.
+2. Check the Task result or output workspace for the downloaded file.
+3. Compare its checksum or contents with the source asset in Nexus.
+
+## Credential Rotation
+
+To rotate the Nexus user password used by all `TaskRun`s of all
+namespaces that reference this Connector:
+
+```bash
+kubectl -n connectors-system patch secret my-nexus-cred \
+  --type=strategic \
+  -p '{"stringData":{"password":"<new-password>"}}'
+```
+
+Future `TaskRun`s pick up the new credential automatically. There is
+no need to redeploy pipelines or edit user-namespace Secrets — those
+Secrets do not exist on this path.
+
+## Troubleshooting
+
+### `401 Unauthorized` from Nexus
+
+The Connector's Secret contains missing or invalid Nexus credentials. Correct
+the username or password and wait for the Connector to return to `Ready=True`.
+
+### `403 Forbidden` on upload
+
+The Connector's Nexus user is valid but does not have write permission on the
+target raw repository. Adjust the Nexus user's role to include
+`nx-repository-view-raw-<repo>-add` and
+`nx-repository-view-raw-<repo>-edit`, then retry.
+
+### File selector returns no options
+
+An empty selector is a valid result when the repository is empty or the search
+text matches no asset. Clear the search text and retry. If files are still
+missing, verify that the Connector's Nexus user has browse and read permission
+for the repository.
+
+### `403 Forbidden` on a dropdown query
+
+First check the platform permission of the user currently configuring the
+Pipeline Integration. That user must have `get` on
+`connectors/apis/nexus/service/rest/v1/repositories` and
+`connectors/apis/nexus/service/rest/v1/search/assets`. Grant the user a
+platform role that aggregates `cpaas:connectors-nexus-apis:view` or higher in
+the namespace.
+
+If the platform permission is present, the upstream Nexus account may lack
+browse or read permission for the selected repository. Update that account's
+Nexus role and retry.
+
+### Download fails because the path was not found
+
+The selected asset may have been deleted or moved after the Pipeline
+Integration was saved. Open the file selector again and choose a current path.
+The list API can return an empty successful response for no matches, while the
+subsequent download of a specific missing path fails with Nexus HTTP `404`
+semantics.
+
+### `sourcePath must not be absolute`
+
+Do not add `/` before the selected path. Re-open and save the Pipeline
+Integration so the ResourceInterface can normalize the Nexus path, or enter a
+repository-relative value such as `releases/app/v1/package.tar.gz`.
+
+### Pod stuck in `ContainerCreating`
+
+The CSI driver is reporting a mount error. `kubectl describe pod` will
+show the underlying message — common causes are a wrong
+`volumeAttributes.connectors` namespace/name, a Connector that has
+never reached `Ready=True`, or an unbound `auth` workspace in the
+`TaskRun`.
+
+### `x509: certificate signed by unknown authority`
+
+`curl` is being invoked without `--cacert` pointing at the workspace
+`ca.crt`. The CA bundle is present in the `auth` workspace but `curl`
+is not being told to trust it. Recent versions of the upload and download
+Tasks wire this up automatically; older versions may need an explicit step.
+
+## Reference
+
+- The `nexus-upload` and `nexus-download` Tekton Tasks — Tasks that consume
+  this RI.
+- [Nexus ConnectorClass concept](../concepts/nexus_connectorclass.mdx)
+  — the underlying ConnectorClass, including the forward-proxy URL
+  derivation and the configurations exposed for other formats.

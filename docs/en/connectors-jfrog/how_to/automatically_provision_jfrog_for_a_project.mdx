@@ -1,0 +1,988 @@
+---
+weight: 50
+title: Automatically Provision JFrog Resources When a Project Is Created
+---
+
+# Automatically Provision JFrog Resources When a Project Is Created
+
+The [`jfrog-connector-automatic-creation` Task](./using_jfrog_connector_automatic_creation_task.mdx) reconciles everything one project needs in JFrog Artifactory and in Kubernetes, but something has to run it. Running it by hand for every new project puts the onboarding delay back where it was.
+
+This guide wires that Task behind a namespace event, so that creating a project namespace on the cluster provisions the project's Artifactory repositories, its scoped identity, and the Connector, auth Secret, and image pull Secret inside the project namespace — with no operator action at all.
+
+The event source is the `ns-event-source` adapter shipped with `connectors-autocreate`. The adapter is tool-agnostic: it watches namespaces and forwards CloudEvents. The Pipeline described here consumes those events and runs the JFrog Task.
+
+> If you already run the [`connector-auto-create` Pipeline](../../how_to/automatically_create_connectors_for_a_project.mdx) for Harbor, Nexus, GitLab, and SonarQube, you already have the adapter. Note that an adapter has exactly one `K_SINK`, so adding this guide's EventListener beside the existing one is not enough on its own: either run a second adapter with `K_SINK` pointing at `el-jfrog-autocreate-el`, or keep one adapter and add this guide's TriggerBinding and TriggerTemplate as another trigger on the EventListener you already have.
+
+## Architecture
+
+```text
+Management cluster
+┌─────────────────────────────────────────────────────────────────┐
+│ ns-event-source ──CloudEvent──▶ EventListener jfrog-autocreate-el│
+│ (watches namespaces)                     │                      │
+│                                          ▼                      │
+│                                     PipelineRun                 │
+│                               jfrog-project-provision           │
+│                                          │                      │
+│                                          ▼                      │
+│                     jfrog-connector-automatic-creation Task     │
+└─────────────────────────────────────────────────────────────────┘
+                                           │
+                                           ▼
+                        Artifactory: repositories, group,
+                        user, permission target, token
+                        Kubernetes: Connector + Secret +
+                        image pull Secret in <project-namespace>
+```
+
+Everything the Pipeline needs to know comes from the namespace itself: its name, and the `cpaas.io/project` label that carries the project it belongs to.
+
+## Prerequisites
+
+- Tekton Pipelines and Tekton Triggers are installed.
+- The Connectors system and the **JFrog Connector** component are installed.
+- An admin JFrog Connector (referred to below as `jfrog-admin`) exists in the management namespace, backed by an Artifactory administrator credential. See [Artifactory credentials for `jfrog-secret`](./using_jfrog_connector_automatic_creation_task.mdx#artifactory-credentials-for-jfrog-secret) for the exact permissions and for creating the Connector.
+- Artifactory is **Pro (or higher)**. The Task fails fast on OSS.
+- The [`jfrog-connector-automatic-creation` Task](./jfrog_connector_automatic_creation_task.mdx) is installed in the management namespace.
+- The `ns-event-source` adapter is installed and pointed at this cluster. See [Step 1 — Install the adapter](../../how_to/automatically_create_connectors_for_a_project.mdx#step-1--install-the-adapter). That page sets `K_SINK` to `http://el-autocreate-el:8080`, the EventListener of the Harbor/Nexus/GitLab flow; for this guide it has to be **`http://el-jfrog-autocreate-el:8080`**, the service [Step 3](#step-3--install-the-triggers) creates:
+
+  ```bash
+  kubectl -n "$TARGET_NS" set env deploy/ns-event-source K_SINK=http://el-jfrog-autocreate-el:8080
+  ```
+
+  Left at the other value, everything below installs cleanly and nothing ever runs: the adapter logs `failed to send cloudevent … lookup el-autocreate-el … no such host` and no PipelineRun appears.
+
+Export the variables used by the commands below:
+
+```bash
+export TARGET_NS=<management-namespace>
+export JFROG_ADMIN=<jfrog-admin-connector-name>
+export JFROG_URL=<artifactory-url>          # e.g. https://jfrog.example.com
+export REGISTRY=<your-registry>
+kubectl config set-context --current --namespace="$TARGET_NS"
+```
+
+## Step 1 — Install the Pipeline \{#step-1--install-the-pipeline}
+
+The Pipeline mirrors the shape of the shipped [`connector-auto-create` Pipeline](../../how_to/automatically_create_connectors_for_a_project.mdx): one context task works out *what* to reconcile and holds a per-project lock, and the provisioning Task consumes its results. Nothing about the target set is hardcoded in the Task invocation.
+
+```bash
+cat <<'EOF' | envsubst '$TARGET_NS $REGISTRY' | kubectl apply -f -
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: jfrog-project-provision
+  namespace: $TARGET_NS
+spec:
+  params:
+    - name: namespace
+      description: Namespace whose event triggered this run. Used to find the project's other namespaces, not as the only target.
+      type: string
+    - name: project
+      description: Project the namespace belongs to; names the repositories, the Connector and the pull Secrets.
+      type: string
+    - name: jfrogUrl
+      description: Artifactory origin, without a trailing /artifactory. Must match the address of the Connector bound to the jfrog-admin workspace.
+      type: string
+    - name: repositoryPackageTypes
+      description: One repository per package type, named <project>-<packageType>.
+      type: array
+      default: ["docker"]
+    - name: repositoryMode
+      description: provision (create the repositories when absent) or reference (they already exist; only grant access).
+      type: string
+      default: provision
+    - name: permissions
+      description: Artifactory actions granted on every repository in the run.
+      type: array
+      default: ["read", "write", "annotate", "delete"]
+    - name: tokenExpiry
+      description: Lifetime of the minted access token.
+      type: string
+      default: "30d"
+    - name: bindImagePullSecretToSA
+      description: Append each generated pull Secret to a ServiceAccount in its namespace.
+      type: string
+      default: "true"
+    - name: serviceAccountName
+      description: ServiceAccount that receives the pull Secrets.
+      type: string
+      default: default
+    - name: lockDurationSeconds
+      description: How long this run's project lock stays valid if the run dies without releasing it.
+      type: string
+      default: "300"
+    - name: lockWaitSeconds
+      description: How long to wait for another reconciliation of the same project to finish.
+      type: string
+      default: "600"
+    - name: kubectlImage
+      description: Image used by the context task; any image carrying kubectl works.
+      type: string
+      default: ${REGISTRY}/alauda-connectors/kubectl:v1.33
+    - name: jfrogCliImage
+      description: Runtime image for the Task itself; must be the jfrog-connector-automatic-creation image or a derivative.
+      type: string
+      default: ${REGISTRY}/alauda-connectors/connectors-extensions/jfrog-connector-automatic-creation:latest
+  workspaces:
+    - name: jfrog-admin
+      description: Admin JFrog Connector, mounted through the Connectors CSI driver.
+  # A PipelineRun only surfaces the results the Pipeline itself declares.
+  # Without this block `kubectl get pipelinerun -o jsonpath='{.status.results}'`
+  # prints nothing, however many results the Task emitted.
+  results:
+    - name: jfrog-repositories
+      value: $(tasks.provision.results.jfrog-repositories[*])
+    - name: connector-ref
+      value: $(tasks.provision.results.connector-ref)
+    - name: image-pull-secret-refs
+      value: $(tasks.provision.results.image-pull-secret-refs[*])
+    - name: token-rotated
+      value: $(tasks.provision.results.token-rotated)
+  tasks:
+    - name: prepare-project-context
+      params:
+        - { name: namespace, value: $(params.namespace) }
+        - { name: project, value: $(params.project) }
+        - { name: jfrogUrl, value: $(params.jfrogUrl) }
+        - { name: repositoryPackageTypes, value: ["$(params.repositoryPackageTypes[*])"] }
+        - { name: repositoryMode, value: $(params.repositoryMode) }
+        - { name: holder, value: $(context.pipelineRun.name) }
+        - { name: runNamespace, value: $(context.pipelineRun.namespace) }
+        - { name: lockDurationSeconds, value: $(params.lockDurationSeconds) }
+        - { name: lockWaitSeconds, value: $(params.lockWaitSeconds) }
+        - { name: kubectlImage, value: $(params.kubectlImage) }
+      taskSpec:
+        params:
+          - { name: namespace, type: string }
+          - { name: project, type: string }
+          - { name: jfrogUrl, type: string }
+          - { name: repositoryPackageTypes, type: array }
+          - { name: repositoryMode, type: string }
+          - { name: holder, type: string }
+          - { name: runNamespace, type: string }
+          - { name: lockDurationSeconds, type: string }
+          - { name: lockWaitSeconds, type: string }
+          - { name: kubectlImage, type: string }
+        results:
+          - name: connectorNs
+            description: Namespace that receives the Connector and its auth Secret.
+          - name: jfrogUrl
+            description: Artifactory origin used by the provisioning task.
+          - name: imagePullSecrets
+            type: array
+            description: One <namespace>/<secret> entry per namespace of this project.
+          - name: jfrogRepositories
+            description: The jfrogRepositories YAML the Task receives.
+        stepTemplate:
+          image: $(params.kubectlImage)
+          # Required on a namespace that enforces the `restricted` Pod Security
+          # Standard, which rejects the Pod otherwise — the podTemplate in the
+          # TriggerTemplate can only set the pod-level half of this.
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            runAsNonRoot: true
+            runAsUser: 65532
+            seccompProfile:
+              type: RuntimeDefault
+          env:
+            # Parameters reach the scripts through env, never interpolated into
+            # them: a value containing a quote would otherwise break out of the shell.
+            - { name: NAMESPACE, value: $(params.namespace) }
+            - { name: PROJECT, value: $(params.project) }
+            - { name: JFROG_URL, value: $(params.jfrogUrl) }
+            - { name: REPOSITORY_MODE, value: $(params.repositoryMode) }
+            - { name: HOLDER, value: $(params.holder) }
+            - { name: RUN_NS, value: $(params.runNamespace) }
+            - { name: LOCK_DURATION_SECONDS, value: $(params.lockDurationSeconds) }
+            - { name: LOCK_WAIT_SECONDS, value: $(params.lockWaitSeconds) }
+        steps:
+          # 1. Which namespace owns the Connector. On ACP a project has an inner
+          #    namespace; elsewhere fall back to the triggering namespace. Resolved
+          #    first because the lock lives here, so every namespace of the project
+          #    contends for the same Lease.
+          - name: resolve-connector-namespace
+            script: |
+              #!/usr/bin/env sh
+              set -eu
+              ns="$(kubectl get namespace "${NAMESPACE}" \
+                -o jsonpath='{.metadata.annotations.cpaas\.io/project-inner-namespace}' 2>/dev/null || true)"
+              [ -n "${ns}" ] || ns="${NAMESPACE}"
+              printf '%s' "${ns}" > "$(results.connectorNs.path)"
+              echo "connector namespace: ${ns}"
+
+          # 2. Serialize reconciliations of the same project. Two namespaces added at
+          #    once would otherwise race on the same Artifactory group generation and
+          #    permission target.
+          - name: acquire-project-lock
+            script: |
+              #!/usr/bin/env sh
+              set -eu
+              # The Lease is keyed by PROJECT and lives in the namespace this
+              # Pipeline runs in — not in the namespace resolved above. Putting it
+              # there would give two namespaces of one project two different Leases,
+              # so they would never contend, which is the whole point of the lock.
+              lock_ns="${RUN_NS}"
+              lock="jfrog-autocreate-${PROJECT}"
+              waited=0
+              while :; do
+                if cat <<LEASE | kubectl create -f - >/dev/null 2>/tmp/lock.err
+              apiVersion: coordination.k8s.io/v1
+              kind: Lease
+              metadata:
+                name: ${lock}
+                namespace: ${lock_ns}
+              spec:
+                holderIdentity: ${HOLDER}
+                leaseDurationSeconds: ${LOCK_DURATION_SECONDS}
+                acquireTime: "$(date -u +%Y-%m-%dT%H:%M:%S.000000Z)"
+                renewTime: "$(date -u +%Y-%m-%dT%H:%M:%S.000000Z)"
+              LEASE
+                then
+                  echo "acquired ${lock_ns}/${lock} after ${waited}s"; exit 0
+                fi
+                grep -q AlreadyExists /tmp/lock.err || { cat /tmp/lock.err >&2; exit 1; }
+
+                state="$(kubectl get lease "${lock}" -n "${lock_ns}" \
+                  -o jsonpath='{.spec.holderIdentity}|{.spec.renewTime}|{.spec.leaseDurationSeconds}|{.metadata.resourceVersion}')"
+                current="${state%%|*}"; rest="${state#*|}"
+                renew="${rest%%|*}"; rest="${rest#*|}"
+                duration="${rest%%|*}"; version="${rest##*|}"
+                [ "${current}" = "${HOLDER}" ] && { echo "already held by this run"; exit 0; }
+
+                # Reclaim only when the holder cannot still be working: either its
+                # PipelineRun reached a terminal condition, or it is gone from the
+                # cluster AND the Lease has outlived its duration. Reclaiming on
+                # elapsed time alone would let a slow-but-alive run be robbed.
+                reclaim=false
+                holder_state="$(kubectl get pipelinerun "${current}" -n "${lock_ns}" \
+                  -o jsonpath='{.status.conditions[-1].status}' 2>/dev/null || true)"
+                if [ "${holder_state}" = "True" ] || [ "${holder_state}" = "False" ]; then
+                  reclaim=true
+                elif ! kubectl get pipelinerun "${current}" -n "${lock_ns}" >/dev/null 2>&1; then
+                  # busybox `date` needs the input format spelled out, and the Lease
+                  # carries fractional seconds it cannot parse.
+                  normalized="$(printf '%s' "${renew}" | sed 's/\.[0-9][0-9]*Z$/Z/')"
+                  if renew_epoch="$(date -D '%Y-%m-%dT%H:%M:%SZ' -d "${normalized}" +%s 2>/dev/null)"; then
+                    [ $(( renew_epoch + ${duration:-300} )) -le "$(date +%s)" ] && reclaim=true
+                  else
+                    echo "cannot parse Lease renewTime: ${renew}" >&2; exit 1
+                  fi
+                fi
+                if [ "${reclaim}" = true ]; then
+                  now="$(date -u +%Y-%m-%dT%H:%M:%S.000000Z)"
+                  # The resourceVersion test makes the take-over atomic: if another
+                  # waiter got there first, this patch fails instead of double-granting.
+                  kubectl patch lease "${lock}" -n "${lock_ns}" --type=json -p "[
+                    {\"op\":\"test\",\"path\":\"/metadata/resourceVersion\",\"value\":\"${version}\"},
+                    {\"op\":\"add\",\"path\":\"/spec/holderIdentity\",\"value\":\"${HOLDER}\"},
+                    {\"op\":\"add\",\"path\":\"/spec/acquireTime\",\"value\":\"${now}\"},
+                    {\"op\":\"add\",\"path\":\"/spec/renewTime\",\"value\":\"${now}\"}
+                  ]" >/dev/null 2>&1 && { echo "took over lock from ${current}"; exit 0; }
+                fi
+
+                waited=$(( waited + 5 ))
+                [ "${waited}" -lt "${LOCK_WAIT_SECONDS}" ] || {
+                  echo "timed out after ${waited}s waiting for ${lock_ns}/${lock} held by ${current}" >&2; exit 1; }
+                echo "waiting for ${lock_ns}/${lock} held by ${current} (${waited}s)"
+                sleep 5
+              done
+
+          # 3. What to reconcile: the Artifactory URL, one pull Secret per namespace
+          #    that currently belongs to this project, and the repository list.
+          - name: inspect-project
+            # The array param arrives as argv, which is the only way a step can
+            # receive one; "$@" below iterates the package types.
+            args: ["$(params.repositoryPackageTypes[*])"]
+            script: |
+              #!/usr/bin/env sh
+              set -eu
+              [ -n "${JFROG_URL}" ] || { echo "jfrogUrl is required" >&2; exit 1; }
+              printf '%s' "${JFROG_URL}" > "$(results.jfrogUrl.path)"
+
+              kubectl get namespaces -l "cpaas.io/project=${PROJECT}" \
+                -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' \
+                | awk -v s="${PROJECT}-jfrog-pull" '
+                    BEGIN { printf "["; sep = "" }
+                    NF    { printf "%s\"%s/%s\"", sep, $0, s; sep = "," }
+                    END   { print "]" }' > "$(results.imagePullSecrets.path)"
+
+              # The jfrogRepositories YAML is built here rather than written into the
+              # Task invocation, so the package types and provision-vs-reference
+              # choice are Pipeline parameters instead of a Pipeline edit.
+              case "${REPOSITORY_MODE}" in
+                provision|reference) : ;;
+                *) echo "repositoryMode must be provision or reference, got: ${REPOSITORY_MODE}" >&2; exit 1 ;;
+              esac
+              {
+                printf '%s:\n' "${REPOSITORY_MODE}"
+                for t in "$@"; do
+                  printf '  - name: %s-%s\n' "${PROJECT}" "${t}"
+                  # A reference entry takes a name only: the repository already
+                  # exists and this Task must not try to redefine it.
+                  [ "${REPOSITORY_MODE}" = provision ] && printf '    packageType: %s\n' "${t}"
+                done
+              } > "$(results.jfrogRepositories.path)"
+
+              echo "url=${JFROG_URL} pullSecrets=$(cat "$(results.imagePullSecrets.path)")"
+              echo "repositories (${REPOSITORY_MODE}):"; cat "$(results.jfrogRepositories.path)"
+
+    - name: provision
+      runAfter: [prepare-project-context]
+      taskRef:
+        name: jfrog-connector-automatic-creation
+      params:
+        - name: jfrogUrl
+          value: $(tasks.prepare-project-context.results.jfrogUrl)
+        - name: connector
+          value: $(tasks.prepare-project-context.results.connectorNs)/$(params.project)-jfrog
+        - name: jfrogCliImage
+          value: $(params.jfrogCliImage)
+        - name: jfrogRepositories
+          value: $(tasks.prepare-project-context.results.jfrogRepositories)
+        - name: permissions
+          value: ["$(params.permissions[*])"]
+        - name: tokenExpiry
+          value: $(params.tokenExpiry)
+        - name: imagePullSecrets
+          value: ["$(tasks.prepare-project-context.results.imagePullSecrets[*])"]
+        - name: bindImagePullSecretToSA
+          value: $(params.bindImagePullSecretToSA)
+        - name: serviceAccountName
+          value: $(params.serviceAccountName)
+      workspaces:
+        - name: jfrog-secret
+          workspace: jfrog-admin
+  finally:
+    - name: release-project-lock
+      params:
+        - { name: project, value: $(params.project) }
+        - { name: runNamespace, value: $(context.pipelineRun.namespace) }
+        - { name: holder, value: $(context.pipelineRun.name) }
+        - { name: kubectlImage, value: $(params.kubectlImage) }
+      taskSpec:
+        params:
+          - { name: project, type: string }
+          - { name: runNamespace, type: string }
+          - { name: holder, type: string }
+          - { name: kubectlImage, type: string }
+        steps:
+          - name: release
+            image: $(params.kubectlImage)
+            securityContext:
+              allowPrivilegeEscalation: false
+              capabilities:
+                drop: ["ALL"]
+              runAsNonRoot: true
+              runAsUser: 65532
+              seccompProfile:
+                type: RuntimeDefault
+            env:
+              - { name: LOCK_NS, value: $(params.runNamespace) }
+              - { name: PROJECT, value: $(params.project) }
+              - { name: HOLDER, value: $(params.holder) }
+            script: |
+              #!/usr/bin/env sh
+              set -eu
+              lock="jfrog-autocreate-${PROJECT}"
+              current="$(kubectl get lease "${lock}" -n "${LOCK_NS}" \
+                -o jsonpath='{.spec.holderIdentity}' 2>/dev/null || true)"
+              # Only ever delete the Lease this run holds: a run that timed out waiting must not
+              # release the lock the run ahead of it is holding.
+              if [ "${current}" = "${HOLDER}" ]; then
+                kubectl delete lease "${lock}" -n "${LOCK_NS}" --ignore-not-found
+                echo "released ${LOCK_NS}/${lock}"
+              fi
+EOF
+```
+
+Nothing above is fixed per namespace — that is the point of the context task:
+
+- **The pull Secret's registry key is the `jfrogUrl` authority.** The Task writes the `auths` entry under the host:port of `jfrogUrl` — `jfrog.example.com` for `https://jfrog.example.com` — so a pod picks that credential up only for image references beginning with the same host:port. Where Artifactory serves its docker registry at the root in the repository-path style, `<jfrog-host>/<repository>/<image>:<tag>` then works with no `imagePullSecrets` in the pod at all. Check your own deployment before relying on it: when the docker endpoint is not the same host:port as the API — a separate port, a per-repository subdomain, or a reverse proxy elsewhere — the Secret does not match the registry in the image reference, the pull falls back to anonymous, and it fails as `unauthorized` with nothing pointing back here. Set `jfrogUrl` to the host:port that serves docker, or add a second pull Secret for that host.
+
+- **The pull Secrets are derived, not listed.** `inspect-project` queries every namespace carrying `cpaas.io/project=<project>` and emits one `<namespace>/<project>-jfrog-pull` entry each, which the Task receives as its `imagePullSecrets` array. Add a namespace to the project and the next run writes a pull Secret there too; no Pipeline edit.
+- **`jfrogUrl` is the address; the workspace is the credential.** The Pipeline takes the Artifactory origin as a parameter and never looks a Connector up for it. The credential is separate and never enters the Pipeline: the `jfrog-admin` workspace is bound to the admin Connector through the Connectors CSI driver in [Step 3](#step-3--install-the-triggers), and the Task authenticates through the proxy.
+
+  Keep `jfrogUrl` equal to that Connector's `spec.address`. Nothing validates it, and a mismatch is quiet in a confusing way: the credential is still correct, so the run authenticates fine while talking to the wrong Artifactory. The mount cannot remove this duplication — it carries the *proxy* address (`connector.status.proxyAddress`, and `HTTP(S)_PROXY` in `.env`), never the upstream URL — so the address has to be stated somewhere, and a parameter is the simplest place.
+- **Where the Connector lands is resolved, not assumed.** `resolve-connector-namespace` reads the ACP annotation `cpaas.io/project-inner-namespace`, so on ACP every namespace of a project converges on one Connector and one token in the project's inner namespace. Without that annotation it falls back to the triggering namespace, which gives one Connector per namespace — all sharing the project's repositories, each with its own token. If you want the converged shape on a cluster that has no inner namespace, set the annotation or replace that step with a fixed namespace.
+- **Runs of the same project are serialized.** Two namespaces joined at once would otherwise race on the same Artifactory group generation and permission target. `acquire-project-lock` takes a `coordination.k8s.io` Lease named `jfrog-autocreate-<project>` in the namespace this Pipeline runs in, waits up to `lockWaitSeconds` for a peer, reclaims a Lease whose holder died (`lockDurationSeconds` elapsed without a refresh), and the `finally` task releases it — but only while this run is still the holder. Keying the Lease by project rather than by namespace is what makes sibling namespaces contend; runs for *different* projects never do.
+
+- **The repository list is built, not written.** `inspect-project` renders the `jfrogRepositories` YAML from two parameters and hands it to the Task as a result. `repositoryPackageTypes` defaults to `["docker"]` — one repository, `<project>-docker` — and `repositoryMode` decides whether those repositories are created or merely granted. Changing either is a parameter change, not a Pipeline edit.
+
+Three things you are most likely to change:
+
+- **Which repositories a project gets.** Add package types to `repositoryPackageTypes`; each one becomes `<project>-<packageType>`. For a project that needs a Maven repository alongside its images:
+
+  ```yaml
+  - name: repositoryPackageTypes
+    value: ["docker", "maven"]
+  ```
+
+  A layout that does not fit `<project>-<packageType>` — a shared upstream, a virtual repository, per-environment names — is beyond what the context task renders. Replace the `jfrogRepositories` result with your own block there; see [The `jfrogRepositories` Schema](./using_jfrog_connector_automatic_creation_task.mdx#jfrogrepositories-schema) for what the Task accepts.
+- **Where the Task image comes from.** `jfrogCliImage` is passed through from the Pipeline because the Task's own default points at the registry the image was published to, which your cluster usually cannot reach. Leaving it unset there fails the `provision` task with `ErrImagePull` and nothing else to go on. Point it at your mirror.
+- **Granted actions.** The default includes `delete`, because Artifactory treats overwriting an existing artifact as a delete and CI that re-pushes a tag would otherwise fail. It is wider than the Task's own default of `["read"]`, so narrow it to `["read"]` for projects that only consume artifacts. See [Permissions](./using_jfrog_connector_automatic_creation_task.mdx#permissions).
+
+### Projects whose repositories already exist \{#existing-repositories}
+
+The default `repositoryMode: provision` creates a repository when it is absent and leaves an existing one untouched, so onboarding a project whose repositories were made by hand already works — the run finds them and only grants access.
+
+Set `repositoryMode: reference` when the repositories are administered elsewhere and this automation must never create one:
+
+```yaml
+- name: repositoryMode
+  value: reference
+```
+
+The difference is what happens to a typo. Under `provision` a misspelled name produces a new empty repository and a green run; under `reference` the run fails and names the repository it could not find, because the Task never creates a `reference:` entry. That makes `reference` the safer mode for an established Artifactory, at the cost of failing until someone creates the repository.
+
+Both modes expect the name to be `<project>-<packageType>`. If an existing repository is called something else, the rename has to happen on one side or the other — either in Artifactory, or by replacing the rendered `jfrogRepositories` result with your own block.
+
+To onboard a project that already exists, nothing else is different: label one of its namespaces (or create a new one) and the run reconciles the existing repositories, the identity, and the Secrets. Re-running is safe — see [Re-run to Change Scope or Renew Credentials](./using_jfrog_connector_automatic_creation_task.mdx#re-run-to-change-scope-or-renew-credentials).
+
+
+## Step 2 — Grant the Pipeline ServiceAccount access to project namespaces \{#step-2--grant-access}
+
+The Pipeline writes into namespaces it does not live in, so its ServiceAccount needs permissions there. Creating a ClusterRole once, and binding it cluster-wide, keeps new project namespaces working without further action.
+
+```bash
+cat <<'EOF' | envsubst '$TARGET_NS' | kubectl apply -f -
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: jfrog-project-provision
+  namespace: $TARGET_NS
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  # Cluster-scoped, so the name carries $TARGET_NS: a second install in
+  # another management namespace would otherwise rebind this one's subjects.
+  name: jfrog-project-provision-$TARGET_NS
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "create", "patch"]
+  - apiGroups: [""]
+    resources: ["serviceaccounts"]
+    verbs: ["get", "update"]
+  - apiGroups: ["connectors.alauda.io"]
+    resources: ["connectors"]
+    verbs: ["get", "create", "patch"]
+  # `get` because the Task checks each target namespace exists before writing
+  # anything; `list` because the context task finds the project's namespaces by
+  # label, and a label query cannot be narrowed with resourceNames.
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list"]
+  # The per-project lock.
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "create", "patch", "delete"]
+  # Before reclaiming a lock, the context task asks whether the holding
+  # PipelineRun is still alive.
+  - apiGroups: ["tekton.dev"]
+    resources: ["pipelineruns"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: jfrog-project-provision-$TARGET_NS
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: jfrog-project-provision-$TARGET_NS
+subjects:
+  - kind: ServiceAccount
+    name: jfrog-project-provision
+    namespace: $TARGET_NS
+EOF
+```
+
+`patch` is required in addition to `create`: the Task applies with `kubectl apply`, which reads the live object before patching it. The `serviceaccounts` rule is only needed while `bindImagePullSecretToSA` is `true`, and `namespaces: get` is needed because the Task refuses to write into a namespace it cannot confirm exists.
+
+> **Know what the cluster-wide form grants.** A ClusterRoleBinding on these rules lets anything that can run as this ServiceAccount read **every Secret in the cluster** by name — including the admin Connector's own Artifactory credential, registry credentials, and other connectors' Secrets — and overwrite Secrets and `default` ServiceAccounts in any namespace. The Task itself only ever touches the namespaces named in its parameters; the cluster-wide binding is convenience, not a requirement.
+>
+> Two ways to avoid it, in order of preference:
+>
+> 1. **Bind per namespace.** Keep the ClusterRole (so the rules live in one place) and create a RoleBinding to it in each project namespace, plus a ClusterRole for `namespaces: get` narrowed with `resourceNames`. Have whatever creates your project namespaces create the RoleBinding too, and the automation stays hands-off.
+> 2. **Target through `kube-config`.** Bind the `kube-config` workspace to a credential scoped to the project namespaces, and this ServiceAccount needs no cluster permissions at all — see [Multi-cluster](#multi-cluster), which works the same way within one cluster.
+>
+> Whichever you choose, restrict who may create PipelineRuns and TaskRuns in `$TARGET_NS` with this ServiceAccount: that permission is equivalent to everything the binding above grants.
+
+## Step 3 — Install the Triggers \{#step-3--install-the-triggers}
+
+```bash
+cat <<'EOF' | envsubst '$TARGET_NS $JFROG_ADMIN $JFROG_URL' | kubectl apply -f -
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: jfrog-autocreate-el-sa
+  namespace: $TARGET_NS
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: jfrog-autocreate-el-sa-binding
+  namespace: $TARGET_NS
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: tekton-triggers-eventlistener-roles
+subjects:
+  - kind: ServiceAccount
+    name: jfrog-autocreate-el-sa
+    namespace: $TARGET_NS
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: jfrog-autocreate-el-sa-clusterbinding-$TARGET_NS
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: tekton-triggers-eventlistener-clusterroles
+subjects:
+  - kind: ServiceAccount
+    name: jfrog-autocreate-el-sa
+    namespace: $TARGET_NS
+---
+apiVersion: triggers.tekton.dev/v1beta1
+kind: TriggerBinding
+metadata:
+  name: jfrog-autocreate-binding
+  namespace: $TARGET_NS
+spec:
+  params:
+    - name: namespace
+      value: $(body.metadata.name)
+    - name: project
+      value: $(extensions.project)
+---
+apiVersion: triggers.tekton.dev/v1beta1
+kind: TriggerTemplate
+metadata:
+  name: jfrog-autocreate-template
+  namespace: $TARGET_NS
+spec:
+  params:
+    - name: namespace
+    - name: project
+    - name: jfrogUrl
+      default: $JFROG_URL
+  resourcetemplates:
+    - apiVersion: tekton.dev/v1
+      kind: PipelineRun
+      metadata:
+        generateName: jfrog-autocreate-
+        labels:
+          autocreate.connectors.alauda.io/project: $(tt.params.project)
+      spec:
+        pipelineRef:
+          name: jfrog-project-provision
+        params:
+          - name: namespace
+            value: $(tt.params.namespace)
+          - name: project
+            value: $(tt.params.project)
+          - name: jfrogUrl
+            value: $(tt.params.jfrogUrl)
+        taskRunTemplate:
+          serviceAccountName: jfrog-project-provision
+          podTemplate:
+            securityContext:
+              fsGroup: 65532
+              runAsNonRoot: true
+              seccompProfile:
+                type: RuntimeDefault
+        workspaces:
+          - name: jfrog-admin
+            csi:
+              driver: connectors-csi
+              readOnly: true
+              volumeAttributes:
+                connectors: $TARGET_NS/$JFROG_ADMIN
+---
+apiVersion: triggers.tekton.dev/v1beta1
+kind: EventListener
+metadata:
+  name: jfrog-autocreate-el
+  namespace: $TARGET_NS
+spec:
+  serviceAccountName: jfrog-autocreate-el-sa
+  triggers:
+    - name: jfrog-autocreate-trigger
+      bindings:
+        - kind: TriggerBinding
+          ref: jfrog-autocreate-binding
+      interceptors:
+        - ref:
+            kind: ClusterInterceptor
+            name: cel
+          params:
+            - name: filter
+              value: (header.match('ce-type', 'dev.knative.apiserver.resource.add') || header.match('ce-type', 'dev.knative.apiserver.resource.update')) && body.metadata.labels['cpaas.io/project'] != '' && body.metadata.labels['cpaas.io/project'] != 'cpaas-system'
+            - name: overlays
+              value:
+                - key: project
+                  expression: body.metadata.labels['cpaas.io/project']
+      template:
+        ref: jfrog-autocreate-template
+EOF
+```
+
+The CEL filter is what keeps this from firing on every namespace on the cluster: only namespaces carrying a non-empty `cpaas.io/project` label reach the Pipeline, and the same label is overlaid as the `project` parameter.
+
+A filtered event is not a rejected one: the EventListener answers `202` either way and the filter decides afterwards whether to create anything. Confirm by looking for the PipelineRun, not at the HTTP status.
+
+It matches both `resource.add` and `resource.update`, and both are needed: a namespace is often created first and joined to a project afterwards, which reaches this EventListener as an update, not a creation. Dropping `resource.update` would silently skip every namespace added to a project later.
+
+The cost is that *any* update to a labelled namespace fires a run — an annotation change, a quota edit, a relabel. Those runs are idempotent: the repositories, group, user, and permission target already exist, and a run that finds nothing to change ends with `token-rotated: false` without rewriting the Secrets — their `resourceVersion` does not even change. Adding a namespace to the project behaves the same way: the existing token is read back from the auth Secret, and the only write is the new namespace's pull Secret and its `default` ServiceAccount binding.
+
+A token is minted only when the Connector namespace holds no auth Secret to read a stored token from: the first run of a project, and — on a cluster **without** the `cpaas.io/project-inner-namespace` annotation — every newly labelled namespace, because the Connector namespace then follows the triggering namespace and a fresh one has no Secret yet. Another reason to prefer the converged shape described under [Step 1](#step-1--install-the-pipeline).
+
+Also benign: a run whose project has no labelled namespace at all, which happens when a namespace is created and deleted quickly or a queued event is redelivered late. `imagePullSecrets` comes back empty, there is nothing to write, and the run succeeds; whatever the project's namespaces are afterwards, the next event or the scheduled job converges on them.
+
+The waste is therefore PipelineRun objects and Pod scheduling rather than churn in Artifactory. Two things keep that in hand:
+
+- Let Tekton prune completed runs — the pruner that ships with the platform, or a `PipelineRun` TTL — so the management namespace does not accumulate them.
+- Keep the `cpaas.io/project` label under the same control as the project itself: it selects which project a namespace is provisioned for, and each edit of a labelled namespace is another run.
+
+## Verify
+
+Create a namespace that carries a project label:
+
+```bash
+kubectl create -f - <<'EOF'
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: demo-project-dev
+  labels:
+    cpaas.io/project: demo-project
+EOF
+```
+
+Labelling an existing namespace works the same way — that is the "namespace joined to a project later" path, and it arrives as an update. Use a namespace that already exists; this example makes one first, since a project's second namespace is normally created before it is joined:
+
+```bash
+kubectl create namespace demo-project-staging
+kubectl label namespace demo-project-staging cpaas.io/project=demo-project
+```
+
+A PipelineRun should appear within seconds — in practice several of them, because the platform writes a namespace's labels, annotations and quota in quick succession and each write is another `resource.update` event. That is expected rather than a fault: the per-project Lease serializes them, the first run does the work, and the others end with `token-rotated: false`.
+
+```bash
+kubectl get pipelinerun -n "$TARGET_NS" \
+  -l autocreate.connectors.alauda.io/project=demo-project
+```
+
+When it completes, the project namespace holds the Connector, its auth Secret, and the pull Secret:
+
+```bash
+kubectl get connector,secret -n demo-project-dev
+kubectl wait --for=condition=Ready connector/jfrog -n demo-project-dev --timeout=120s
+kubectl get serviceaccount default -n demo-project-dev -o jsonpath='{.imagePullSecrets}'
+```
+
+And Artifactory holds the repositories, the group, the user, and the permission target — the Task results name each one:
+
+```bash
+RUN="$(kubectl get pipelinerun -n "$TARGET_NS" \
+  -l autocreate.connectors.alauda.io/project=demo-project \
+  --sort-by=.metadata.creationTimestamp -o jsonpath='{.items[-1:].metadata.name}')"
+
+kubectl get pipelinerun "$RUN" -n "$TARGET_NS" -o jsonpath='{.status.results}'
+```
+
+That prints the repositories, the Connector reference, every pull Secret written (`image-pull-secret-refs`, one entry per namespace of the project) and whether a token was minted.
+
+`--sort-by=.metadata.creationTimestamp` matters: the PipelineRuns are named with `generateName`, so without it you read whichever run happens to sort last by name. The Pipeline re-exports four of the Task's results; for the rest — the Artifactory user, group and permission target — read them off the provisioning TaskRun itself:
+
+```bash
+kubectl get taskrun -n "$TARGET_NS" \
+  -l tekton.dev/pipelineRun="$RUN",tekton.dev/pipelineTask=provision \
+  -o jsonpath='{.items[*].status.results}'
+```
+
+## Existing Projects, and Keeping Them Renewed \{#keep-the-credential-alive}
+
+Two gaps that one scheduled job closes:
+
+- **Projects that already exist.** The EventListener only ever sees a change. A project that was there before you installed this flow never fires an event, so it stays unprovisioned until somebody edits one of its namespaces.
+- **Tokens expire.** With the default `tokenExpiry` the minted token lasts 30 days, and nothing re-runs the Pipeline on its own.
+
+Both want the same thing: one PipelineRun per project, on demand now and on a schedule afterwards.
+
+**One run per project, not per namespace.** The repositories, the Artifactory identity and the permission target are keyed by project, and the context task derives the pull Secrets from *every* namespace carrying that project's label — so a single run reaches all of them. For a project with two namespaces, one run returns:
+
+```text
+image-pull-secret-refs = ["<ns-a>/<project>-jfrog-pull", "<ns-b>/<project>-jfrog-pull"]
+token-rotated          = false
+```
+
+`token-rotated: false` is the other half of the answer: a run with nothing to renew reuses the stored token and rewrites nothing, which is what makes the same loop safe to put on a timer.
+
+The one thing that does not converge per project is where the Connector lands, when the cluster has no `cpaas.io/project-inner-namespace` annotation — then it goes to the namespace you pass, so run once per namespace if each needs its own Connector. See the decision list under [Step 1](#step-1--install-the-pipeline).
+
+### Which projects to run for \{#which-projects}
+
+Hand-maintaining a list stops working as soon as there are more than a handful of projects. Read the label instead, and drop the platform's own project:
+
+```bash
+kubectl get ns -l cpaas.io/project \
+  -o jsonpath='{range .items[*]}{.metadata.labels.cpaas\.io/project}{"\n"}{end}' \
+  | sort -u | grep -vx cpaas-system
+```
+
+This covers every project with at least one labelled namespace, including namespaces you labelled by hand, and needs nothing beyond `namespaces: list`.
+
+### The scheduled job \{#the-scheduled-job}
+
+A `CronJob` in the management namespace covers both gaps with one object: it re-runs the Pipeline for every project on its period, and a Job created from the same definition is the backfill. Nothing lives on a laptop and nothing has to be re-applied as projects come and go.
+
+Its ServiceAccount needs less than the Pipeline's: list namespaces, create PipelineRuns in the management namespace.
+
+```bash
+cat <<'EOF' | envsubst '$TARGET_NS' | kubectl apply -f -
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: jfrog-project-backfill
+  namespace: $TARGET_NS
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: jfrog-project-backfill-$TARGET_NS
+rules:
+  # Which projects exist, and one namespace for each — both come from the
+  # cpaas.io/project label, so this is the only cluster-wide read needed.
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: jfrog-project-backfill-$TARGET_NS
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: jfrog-project-backfill-$TARGET_NS
+subjects:
+  - kind: ServiceAccount
+    name: jfrog-project-backfill
+    namespace: $TARGET_NS
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: jfrog-project-backfill
+  namespace: $TARGET_NS
+rules:
+  - apiGroups: ["tekton.dev"]
+    resources: ["pipelineruns"]
+    verbs: ["create", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: jfrog-project-backfill
+  namespace: $TARGET_NS
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: jfrog-project-backfill
+subjects:
+  - kind: ServiceAccount
+    name: jfrog-project-backfill
+    namespace: $TARGET_NS
+EOF
+```
+
+It creates PipelineRuns that run as `jfrog-project-provision`, so keep [who may create PipelineRuns in `$TARGET_NS`](#step-2--grant-access) restricted — this ServiceAccount is now one of them.
+
+```bash
+cat <<'EOF' | envsubst '$TARGET_NS $JFROG_ADMIN $JFROG_URL $REGISTRY' | kubectl apply -f -
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: jfrog-project-backfill
+  namespace: $TARGET_NS
+spec:
+  # Weekly, which is well inside the renewal window of the default 30-day
+  # token. Any period shorter than `tokenExpiry - tokenRenewBeforeDays`
+  # works; see the note below.
+  schedule: "0 3 * * 0"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          serviceAccountName: jfrog-project-backfill
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: backfill
+              image: $REGISTRY/alauda-connectors/kubectl:v1.33
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              env:
+                - { name: TARGET_NS, value: $TARGET_NS }
+                - { name: JFROG_URL, value: $JFROG_URL }
+                - { name: JFROG_ADMIN, value: $JFROG_ADMIN }
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -eu
+
+                  projects="$(kubectl get ns -l cpaas.io/project \
+                    -o jsonpath='{range .items[*]}{.metadata.labels.cpaas\.io/project}{"\n"}{end}' \
+                    | sort -u | grep -vx cpaas-system || true)"
+                  # grep exits 1 when nothing survives the filter, which `set -e`
+                  # would turn into a silent exit before the message below.
+                  [ -n "$projects" ] || { echo "no projects found" >&2; exit 1; }
+
+                  rc=0
+                  for project in $projects; do
+                    ns="$(kubectl get ns -l "cpaas.io/project=$project" \
+                          -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
+                    if [ -z "$ns" ]; then
+                      echo "skip $project: no namespace carries its label"
+                      continue
+                    fi
+
+                    # One run per project. Failing one project must not stop the rest.
+                    kubectl -n "$TARGET_NS" create -f - <<PR || rc=1
+                  apiVersion: tekton.dev/v1
+                  kind: PipelineRun
+                  metadata:
+                    generateName: jfrog-backfill-$project-
+                    labels:
+                      autocreate.connectors.alauda.io/project: $project
+                  spec:
+                    pipelineRef:
+                      name: jfrog-project-provision
+                    params:
+                      - { name: namespace, value: $ns }
+                      - { name: project, value: $project }
+                      - { name: jfrogUrl, value: $JFROG_URL }
+                    taskRunTemplate:
+                      serviceAccountName: jfrog-project-provision
+                    workspaces:
+                      - name: jfrog-admin
+                        csi:
+                          driver: connectors-csi
+                          readOnly: true
+                          volumeAttributes:
+                            connectors: $TARGET_NS/$JFROG_ADMIN
+                  PR
+                  done
+                  exit $rc
+EOF
+```
+
+**Backfill is the same job, run now** — no second manifest and no waiting for the schedule:
+
+```bash
+kubectl -n "$TARGET_NS" create job --from=cronjob/jfrog-project-backfill jfrog-backfill-now
+kubectl -n "$TARGET_NS" logs job/jfrog-backfill-now -f
+```
+
+**Pick the period from the token, not from habit.** It has to be shorter than `tokenExpiry - tokenRenewBeforeDays` — under 23 days with the defaults — so every token is renewed inside its window. Running more often costs idle PipelineRuns, not churn in Artifactory: a run with nothing to renew exits with `token-rotated: false`.
+
+**Concurrency needs no thought.** `concurrencyPolicy: Forbid` keeps two schedules from overlapping, and within one pass the per-project Lease means runs for one project queue behind each other while runs for different projects never contend. The loop creates runs without waiting for them, so a slow project does not hold up the rest; later runs for the same project wait up to `lockWaitSeconds`.
+
+The job only creates PipelineRuns — it does not wait for them. Check the results afterwards:
+
+```bash
+kubectl -n "$TARGET_NS" get pipelineruns \
+  -l autocreate.connectors.alauda.io/project \
+  --sort-by=.metadata.creationTimestamp
+```
+
+See [Re-run to Change Scope or Renew Credentials](./using_jfrog_connector_automatic_creation_task.mdx#re-run-to-change-scope-or-renew-credentials) for what a re-run does and does not change, and for `tokenPolicy: refresh` when a credential has to stop working immediately.
+
+## Multi-cluster \{#multi-cluster}
+
+When project namespaces live on business clusters and only the automation lives on the management cluster, the shape is the same as for the `connector-auto-create` Pipeline: one EventListener per business cluster on the management cluster, the adapter's `K_SINK` on each business cluster pointing at it, and a `kube-config` workspace on the TriggerTemplate carrying that cluster's credential.
+
+That takes three edits. First declare the workspace on the Pipeline (next to `jfrog-admin`):
+
+```yaml
+  workspaces:
+    - name: jfrog-admin
+      description: Admin JFrog Connector, mounted through the Connectors CSI driver.
+    - name: kube-config
+      description: Credential for the cluster that receives the Connector and Secrets.
+```
+
+Then pass it to the Task (next to the `jfrog-secret` mapping on the `provision` task):
+
+```yaml
+      workspaces:
+        - name: jfrog-secret
+          workspace: jfrog-admin
+        - name: kube-config
+          workspace: kube-config
+```
+
+Binding a workspace the Pipeline does not declare is rejected at PipelineRun admission, so make both edits before the TriggerTemplate one. Finally bind it in the TriggerTemplate:
+
+```yaml
+        workspaces:
+          - name: jfrog-admin
+            csi:
+              driver: connectors-csi
+              readOnly: true
+              volumeAttributes:
+                connectors: $TARGET_NS/$JFROG_ADMIN
+          - name: kube-config
+            secret:
+              secretName: target-kubeconfig-a
+```
+
+With `kube-config` bound, the Task applies the Connector, the Secret, and the pull Secret to the cluster that kubeconfig points at, and the Pipeline ServiceAccount no longer needs permissions on project namespaces of the local cluster — so delete the Step 2 ClusterRoleBinding rather than leaving a dormant cluster-wide Secret grant behind.
+
+The cluster-scoped objects in Steps 2 and 3 carry `$TARGET_NS` in their names for this reason: a second install in another management namespace gets its own ClusterRole and bindings instead of silently rebinding the first one's subjects. For the full multi-cluster walkthrough — adapter deployment, NodePort or Ingress exposure, and per-cluster credentials — see [Multi-cluster Installation](../../how_to/automatically_create_connectors_for_a_project.mdx#multi-cluster-installation).
+
+## Troubleshooting
+
+### No PipelineRun appears
+
+Check the adapter's `K_SINK` first — it is the most common cause, because the adapter's own install page points it at the other flow's EventListener:
+
+```bash
+kubectl -n "$TARGET_NS" get deploy ns-event-source \
+  -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="K_SINK")].value}'
+kubectl -n "$TARGET_NS" logs deploy/ns-event-source --tail=20
+```
+
+It has to read `http://el-jfrog-autocreate-el:8080`. When it does not, the adapter logs `failed to send cloudevent … no such host` for every namespace change and nothing else in this guide is at fault.
+
+Otherwise: check that the namespace carries a non-empty `cpaas.io/project` label — that is the only thing the filter accepts, whether it arrived at creation or by a later relabel — and that the EventListener Pod is ready.
+
+### The PipelineRun fails in `prepare-project-context`
+
+Either `jfrogUrl` was empty, or the lock could not be taken. The step logs which: `jfrogUrl is required`, or a line naming the Lease and the run holding it. A lock timeout means a peer run for the same project ran longer than `lockWaitSeconds`.
+
+### The PipelineRun fails in `provision`
+
+The failure is from the Task itself — see [Troubleshooting](./using_jfrog_connector_automatic_creation_task.mdx#troubleshooting) in the Task guide. The two most common causes in this flow are an Artifactory that is not Pro, and a Pipeline ServiceAccount that cannot write into the project namespace.
+
+### Every namespace of a project triggers a run
+
+That is intended: every namespace of the project needs its own pull Secret. The repositories, group, user, and permission target are keyed by project, so the second and later runs find them already present; each run writes the pull Secret for every namespace of the project and leaves the rest untouched. Where the Connector lands depends on the `cpaas.io/project-inner-namespace` annotation — one Connector for the whole project when it is set, one per namespace when it is not — as described under [Step 1](#step-1--install-the-pipeline).

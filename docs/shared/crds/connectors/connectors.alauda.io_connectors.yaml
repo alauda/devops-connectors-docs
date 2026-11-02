@@ -155,6 +155,146 @@ spec:
                 connectorClassName:
                   description: ConnectorClassName of current connector
                   type: string
+                generators:
+                  description: |-
+                    Generators declares child connectors to materialize from this connector.
+                    Each entry describes the parameters needed to construct one child Connector.
+                    The generator controller reconciles entries into real Connector CRs in the
+                    same namespace, with ownerReference and identity labels set automatically.
+                  items:
+                    description: |-
+                      ConnectorGenerator declares the parameters needed to materialize one child Connector.
+                      Entry fields are flat (no spec: nesting) — BaseConnectorSpec is embedded inline,
+                      matching the shape of the parent ConnectorSpec fields directly in YAML.
+                    properties:
+                      address:
+                        description: Address is connector address
+                        type: string
+                      addressExtensions:
+                        description: AddressExtensions contains additional addresses that can reuse connector credentials.
+                        items:
+                          description: Param declares an ParamValues to use for the parameter called name.
+                          properties:
+                            name:
+                              type: string
+                            value:
+                              x-kubernetes-preserve-unknown-fields: true
+                          required:
+                            - name
+                            - value
+                          type: object
+                        type: array
+                        x-kubernetes-list-type: atomic
+                      auth:
+                        description: Auth represents authenticate data of current connector
+                        properties:
+                          name:
+                            description: Name represent auth name that configured in ConnectorClass.spec.auth.types[].name
+                            type: string
+                          params:
+                            description: Params information required for authentication
+                            items:
+                              description: Param declares an ParamValues to use for the parameter called name.
+                              properties:
+                                name:
+                                  type: string
+                                value:
+                                  x-kubernetes-preserve-unknown-fields: true
+                              required:
+                                - name
+                                - value
+                              type: object
+                            type: array
+                            x-kubernetes-list-type: atomic
+                          secretRef:
+                            description: SecretRef secret reference when doing authentication
+                            properties:
+                              apiVersion:
+                                description: API version of the referent.
+                                type: string
+                              fieldPath:
+                                description: |-
+                                  If referring to a piece of an object instead of an entire object, this string
+                                  should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
+                                  For example, if the object reference is to a container within a pod, this would take on a value like:
+                                  "spec.containers{name}" (where "name" refers to the name of the container that triggered
+                                  the event) or if no container name is specified "spec.containers[2]" (container with
+                                  index 2 in this pod). This syntax is chosen only to have some well-defined way of
+                                  referencing a part of an object.
+                                type: string
+                              kind:
+                                description: |-
+                                  Kind of the referent.
+                                  More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+                                type: string
+                              name:
+                                description: |-
+                                  Name of the referent.
+                                  More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                type: string
+                              namespace:
+                                description: |-
+                                  Namespace of the referent.
+                                  More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/
+                                type: string
+                              resourceVersion:
+                                description: |-
+                                  Specific resourceVersion to which this reference is made, if any.
+                                  More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#concurrency-control-and-consistency
+                                type: string
+                              uid:
+                                description: |-
+                                  UID of the referent.
+                                  More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#uids
+                                type: string
+                            type: object
+                            x-kubernetes-map-type: atomic
+                        type: object
+                      caCertSecretRef:
+                        description: |-
+                          CACertSecretRef references a Secret containing PEM-encoded CA certificates
+                          for verifying this connector's upstream TLS endpoint.
+                          The Secret is resolved from the same namespace as the Connector.
+                        properties:
+                          name:
+                            description: Name of the Secret in the same namespace as the Connector.
+                            type: string
+                        type: object
+                      connectorClassName:
+                        description: ConnectorClassName of current connector
+                        type: string
+                      name:
+                        description: |-
+                          Name is the entry identity. Used verbatim as the child connector's
+                          metadata.name AND stamped on the child's connectors.cpaas.io/generator-entry
+                          label value. Must be a valid DNS-1123 LABEL (≤ 63 characters — the K8s
+                          label-value bound, tighter than the subdomain limit) and unique within
+                          the parent's namespace.
+                        maxLength: 63
+                        pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                        type: string
+                      params:
+                        description: Params information required for spec
+                        items:
+                          description: Param declares an ParamValues to use for the parameter called name.
+                          properties:
+                            name:
+                              type: string
+                            value:
+                              x-kubernetes-preserve-unknown-fields: true
+                          required:
+                            - name
+                            - value
+                          type: object
+                        type: array
+                        x-kubernetes-list-type: atomic
+                    required:
+                      - name
+                    type: object
+                  type: array
+                  x-kubernetes-list-map-keys:
+                    - name
+                  x-kubernetes-list-type: map
                 params:
                   description: Params information required for spec
                   items:

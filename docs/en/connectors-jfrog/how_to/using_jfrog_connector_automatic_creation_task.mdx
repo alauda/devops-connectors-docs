@@ -1,0 +1,554 @@
+---
+weight: 40
+title: Automatically Create and Reconcile JFrog Connector Resources with Tekton
+---
+
+# Automatically Create and Reconcile JFrog Connector Resources with Tekton
+
+When a new tenant, project, or namespace is created in Alauda Container Platform, administrators often repeat the same JFrog Artifactory onboarding steps:
+
+- Create one or more Artifactory repositories, or attach access to existing shared ones.
+- Create a scoped Artifactory identity that may read from — and publish to — exactly those repositories.
+- Create the Connector authentication Secret and the JFrog Connector in Kubernetes.
+- Copy the credential into the project namespaces as an image pull Secret, so Pods can pull images from the Docker repositories.
+
+The repository set and the granted actions evolve over time: projects pick up new repositories, drop old ones, or widen and narrow what the scoped identity may do. Re-running the same automation handles those scope changes. **Credential rotation is a separate, security-driven cycle**: the access token has a finite lifetime and should be replaced before it expires, or immediately after an incident, even when nothing about the repository set has changed.
+
+This guide focuses on that operational problem. The mechanism is the `jfrog-connector-automatic-creation` Tekton Task. Run it once to provision, run it again to reconcile the repository set and the granted actions, and run it again to renew or rotate the token.
+
+## What Problem This Solves
+
+Use this approach when you need to automate Artifactory onboarding and credential lifecycle for Alauda Container Platform tenants and namespaces.
+
+Common scenarios include:
+
+- **Project-level Artifactory repositories**: create the repositories an Alauda Container Platform project needs, plus one scoped identity, then materialise the Connector and Secret in the project namespace.
+- **Mixed provision and reference**: provision project-private repositories and, in the same run, attach the same identity to shared repositories that already exist in Artifactory.
+- **Reference-only**: skip provisioning entirely and only attach the scoped identity to existing repositories, when repositories are administered through another channel.
+- **Pull images from Artifactory**: generate `kubernetes.io/dockerconfigjson` Secrets in the workload namespaces and append them to a ServiceAccount, so Pods pull from the Docker repositories without any per-workload credential handling.
+- **Token renewal and rotation**: re-run the same automation to renew a token that is nearing expiry, or to rotate one that must stop working immediately.
+
+## Before You Begin
+
+### Prerequisites
+
+- Tekton Pipelines is installed.
+- The Connectors system and the **JFrog Connector** component are installed. The **Kubernetes Connector** component is additionally required when you provide the `kube-config` workspace through a Kubernetes Connector — see [Use a Kubernetes Connector for `kube-config`](#use-a-kubernetes-connector-for-kube-config).
+- The [`jfrog-connector-automatic-creation` Task](./jfrog_connector_automatic_creation_task.mdx) is installed in the namespace where you will run the TaskRun.
+- The Task runtime image is reachable from the cluster. The `jfrogCliImage` parameter defaults to the image published for this Task; when you mirror it into your own registry, override that parameter per TaskRun (and consider `imagePullPolicy: IfNotPresent` for an air-gapped cluster that pins tool images to digests). The image must be the `jfrog-connector-automatic-creation` image or a derivative that carries the Task's helper scripts — a generic `kubectl` image will not work.
+- The TaskRun ServiceAccount can reach the target Kubernetes apiserver to apply the generated Connector and Secrets. This is required whenever the `kube-config` workspace is **unbound** — which is the default, and what every example below uses. Bind `kube-config` instead if the resources belong on another cluster.
+- Artifactory is **Pro or higher**. The repository, group, user, and permission-target APIs this Task drives are Pro features; on OSS they answer `400 This REST API is available only in Artifactory Pro`, with no trial grace period.
+
+### Security considerations
+
+- Keep the privileged Artifactory credential, the Kubernetes credential, and the TaskRun itself in a private management namespace.
+- Restrict who can trigger the TaskRun: that action can replace an access token and overwrite Connector Secrets in project namespaces.
+- Prefer binding `jfrog-secret` to a JFrog Connector rather than to a plain Secret, so the admin credential stays in the Connectors proxy and never enters the Pod.
+
+### Scenario index
+
+| Scenario | Real-world example | Start from |
+| -------- | ------------------ | ---------- |
+| Provision-only — one project, its own repositories | "Project A needs a private Docker repository and a private Maven repository, plus one identity its CI can publish with." | [Example: Provision Project-private Repositories](#example-provision-project-private-repositories) |
+| Reference-only — repositories already exist | "Team B resolves dependencies from shared repositories the platform team maintains; we don't own those repositories." | [Example: Attach Access to Existing Shared Repositories](#example-attach-access-to-existing-shared-repositories) |
+| Mixed — private repositories plus shared upstreams | "Project A publishes into its own repositories and also reads from the shared Maven virtual repository." | [Example: Mixed Provision and Reference](#example-mixed-provision-and-reference) |
+| Pull images from Artifactory in several namespaces | "Three namespaces run workloads whose images live in the project's Docker repository." | [Example: Mixed Provision and Reference](#example-mixed-provision-and-reference) (its `imagePullSecrets` already covers two namespaces) |
+
+## Prepare Credentials and Workspaces
+
+The Task uses two workspaces:
+
+| Workspace | Required | Purpose | Expected content |
+| --------- | -------- | ------- | ---------------- |
+| `jfrog-secret` | Yes | Artifactory credential used for all Artifactory-side operations. | Basic-auth Secret (`username` + `password` files), or a JFrog Connector mounted through the Connectors CSI driver. |
+| `kube-config` | No | kubeconfig used for all Kubernetes-side operations. When unbound, the in-cluster ServiceAccount is used. | `kubeconfig` |
+
+### Artifactory credentials for `jfrog-secret` \{#artifactory-credentials-for-jfrog-secret}
+
+This workspace provides the Artifactory credential that the automation uses to reconcile repositories, the group, the user, and the permission target, and to mint the access token.
+
+The credential must be able to:
+
+- Create and read repositories (`/artifactory/api/repositories`).
+- Create and delete groups (`/artifactory/api/security/groups`) — the group is deleted on rotation, when its generation is superseded.
+- Create and update the scoped user (`/artifactory/api/security/users`). The Task never deletes a user.
+- Read, create, and update permission targets (`/artifactory/api/v2/security/permissions`).
+- Mint access tokens scoped to a group (`/artifactory/api/security/token`).
+
+An Artifactory administrator satisfies all of the above. Artifactory Pro offers no narrower built-in role that can create users and mint a token scoped to another group, so a dedicated automation account is the practical least-privilege choice.
+
+Note what that credential can do beyond this Task: an Artifactory administrator can read and rewrite every repository, user, group, and permission in the instance, and mint a token for any group. Use a dedicated automation account with an admin *access token* rather than a human administrator's password, keep it in a management namespace no project team can read, and audit its use.
+
+You can provide this workspace in either of two ways.
+
+#### Use a JFrog Connector for `jfrog-secret` (recommended)
+
+The Pod never sees the admin credential — it talks to Artifactory through the Connectors proxy, which injects the real authentication header on the outgoing request. Prefer this in production, and wherever the credential should not be readable by anything that can read the TaskRun's Pod.
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: jfrog-provisioner-auth
+  namespace: <management-namespace>
+type: kubernetes.io/basic-auth
+stringData:
+  username: <artifactory-admin-username>
+  password: <artifactory-admin-password-or-token>
+---
+apiVersion: connectors.alauda.io/v1alpha1
+kind: Connector
+metadata:
+  name: jfrog-provisioner
+  namespace: <management-namespace>
+spec:
+  connectorClassName: jfrog
+  address: <your-artifactory-address>  # e.g. https://jfrog.example.com
+  auth:
+    name: basicAuth
+    secretRef:
+      name: jfrog-provisioner-auth
+```
+
+Bind the workspace through the Connectors CSI driver:
+
+```yaml
+workspaces:
+  - name: jfrog-secret
+    csi:
+      driver: connectors-csi
+      readOnly: true
+      volumeAttributes:
+        connectors: <management-namespace>/jfrog-provisioner
+```
+
+The Task detects this binding shape, sources the mounted `.env` (which carries the proxy settings) and trusts the mounted `ca.crt`, then issues every Artifactory call through the proxy. For the exact file layout the driver mounts, see the [Connectors CSI driver documentation](../../connectors/concepts/connectors_csi.mdx). For a walkthrough of creating a JFrog Connector, see the [JFrog Connector quick start](../quick_start.mdx).
+
+Make sure the TaskRun ServiceAccount is allowed to use this Connector.
+
+#### Use a basic-auth Secret for `jfrog-secret` (alternative)
+
+Straightforward when you already hold Artifactory credentials and have no Connector for them yet. The trade-off is that the credential is mounted into the TaskRun Pod rather than staying behind the proxy.
+
+```bash
+read -rs -p 'Artifactory admin password or token: ' JFROG_PASSWORD
+
+printf '%s' "$JFROG_PASSWORD" | kubectl create secret generic jfrog-provisioner-auth \
+  -n <management-namespace> \
+  --type=kubernetes.io/basic-auth \
+  --from-literal=username=<artifactory-admin-username> \
+  --from-file=password=/dev/stdin \
+  --dry-run=client -o yaml | kubectl apply -f -
+
+unset JFROG_PASSWORD
+```
+
+`--from-file=password=/dev/stdin` keeps the credential out of your shell history and out of `ps` output on the machine you run this from. `--from-literal=password=…` would put it in both.
+
+Bind it like this:
+
+```yaml
+workspaces:
+  - name: jfrog-secret
+    secret:
+      secretName: jfrog-provisioner-auth
+```
+
+In this mode the Task reads `username` and `password` from the mounted files and connects directly to the URL given by the `jfrogUrl` parameter. The credential is never passed on a command line: it is written into a mode-600 curl configuration file on an in-memory volume and removed as soon as the request returns.
+
+### Kubernetes credentials for `kube-config`
+
+This workspace provides the Kubernetes credential used to write the Connector auth Secret, the JFrog Connector, and the image pull Secrets.
+
+When `kube-config` is unbound, the Task uses the in-cluster ServiceAccount of the TaskRun Pod. Bind it when the resources must be applied to a different cluster, or with a different identity.
+
+#### Grant the apply credential Kubernetes RBAC \{#grant-the-apply-credential-kubernetes-rbac}
+
+Whichever credential applies the resources, it must be allowed to:
+
+- `get` the connector namespace and every namespace listed in `imagePullSecrets`. The Task checks each one exists before writing anything, and fails the whole run when a check fails.
+- `get`, `create`, and `patch` Secrets in the connector namespace and in every namespace listed in `imagePullSecrets`.
+- `get`, `create`, and `patch` JFrog Connector resources (`connectors`, API group `connectors.alauda.io`) in the connector namespace.
+- `get` and `update` ServiceAccounts in every `imagePullSecrets` namespace — only when `bindImagePullSecretToSA` is `true`.
+
+The Task applies with `kubectl apply`, which reads the live object before patching it, so `get` and `patch` are both required — `create` alone is not enough.
+
+A minimal Role in the connector namespace:
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: jfrog-connector-automatic-creation
+  namespace: <project-namespace>
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "patch", "create"]
+  - apiGroups: ["connectors.alauda.io"]
+    resources: ["connectors"]
+    verbs: ["get", "patch", "create"]
+```
+
+And, in each namespace that receives an image pull Secret:
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: jfrog-connector-automatic-creation-pull
+  namespace: <workload-namespace>
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "patch", "create"]
+  # Only needed when bindImagePullSecretToSA is "true"
+  - apiGroups: [""]
+    resources: ["serviceaccounts"]
+    verbs: ["get", "update"]
+```
+
+Namespaces are cluster-scoped, so the existence check needs a ClusterRole. Keep it narrow with `resourceNames`, which is honoured for `get`:
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: jfrog-connector-automatic-creation-namespaces
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get"]
+    resourceNames: ["<project-namespace>", "<workload-namespace>"]
+```
+
+Without this, the run fails on the first target with `namespace '<name>' does not exist; this Task does not create namespaces` — the namespace is there, the credential just cannot read it.
+
+Bind each Role to the TaskRun ServiceAccount from the management namespace with a RoleBinding.
+
+#### Use a Kubernetes Secret for `kube-config`
+
+```bash
+kubectl create secret generic target-kubeconfig \
+  -n <management-namespace> \
+  --from-file=kubeconfig=/path/to/kubeconfig \
+  --dry-run=client -o yaml | kubectl apply -f -
+```
+
+```yaml
+workspaces:
+  - name: kube-config
+    secret:
+      secretName: target-kubeconfig
+```
+
+#### Use a Kubernetes Connector for `kube-config` \{#use-a-kubernetes-connector-for-kube-config}
+
+```yaml
+workspaces:
+  - name: kube-config
+    csi:
+      driver: connectors-csi
+      readOnly: true
+      volumeAttributes:
+        connectors: <management-namespace>/<k8s-connector-name>
+        configuration.names: kubeconfig
+```
+
+For a walkthrough of creating that Connector, see the [Kubernetes Connector quick start](../../connectors-k8s/quick_start.mdx).
+
+## How the Task Solves the Problem
+
+Artifactory has no robot-account concept. A scoped credential is instead a four-part chain, and the Task reconciles all of it:
+
+```text
+repository ──┐
+             ├── permission target ── grants actions to ── group ── contains ── user
+             │                                               │
+             └── access token   scope=member-of-groups:<group> ┘
+```
+
+Two properties of that chain shape how the Task behaves:
+
+- **Order is mandatory.** A permission target cannot name a repository or a group that does not exist yet — Artifactory rejects the write and stores nothing. The Task therefore reconciles repositories and the group first, and validates every target before writing anything.
+- **Rights are evaluated per request, not frozen into the token.** Adding a repository or widening the actions takes effect for tokens already handed out. Scope changes therefore do **not** require a new token, and credentials already distributed to other namespaces keep working.
+
+### Repository lifecycle: `provision` versus `reference`
+
+- `provision:` entries are created when absent. An entry that **already exists is left untouched** — an existing repository is usually customer-configured, and rewriting its settings from Task parameters would be worse than leaving it alone. Only a `packageType` mismatch raises a warning.
+- `reference:` entries must already exist. A missing one **fails the run**, and is never created: a typo in a shared repository name would otherwise produce an empty stand-in, a green run, and builds that resolve nothing.
+
+Either list may be omitted, but at least one entry is required overall.
+
+### What the Task writes into Kubernetes
+
+Two different kinds of Secret are involved, and only the first is always written:
+
+| | Written | Purpose |
+| --- | --- | --- |
+| Connector auth Secret (`secret` parameter, default `<connector-name>-secret`) | Always | What the **Connector** authenticates with. A `kubernetes.io/basic-auth` Secret holding the scoped user name and the access token. |
+| Image pull Secrets (`imagePullSecrets` parameter) | Only when listed | `kubernetes.io/dockerconfigjson` copies for the kubelet, so Pods can pull from the Docker repositories. Each entry carries `username`, `password`, and `auth`. |
+
+Nothing else is written. In particular the Task does **not** hand out plain username/password copies for build tooling to read: a project that has adopted the Connector should keep consuming the credential through it — mounted by the Connectors CSI driver, with the proxy injecting authentication — rather than having the credential read directly out of Secrets all over the cluster.
+
+Be deliberate about `imagePullSecrets`, though, because it is the one exception. A `dockerconfigjson` Secret is a copy of the access token in cleartext, in a namespace project members can usually read, and it carries whatever actions you granted — with `delete` in the list, that token can remove artifacts from every repository in the run. It also cannot be revoked by value: only a `tokenPolicy: refresh` run stops a leaked copy (see [Re-run to Change Scope or Renew Credentials](#re-run-to-change-scope-or-renew-credentials)). List only the namespaces that actually run workloads pulling those images. The entry carries `username` and `password` in addition to `auth` because the ACP console renders those fields; the kubelet itself only reads `auth`.
+
+When `bindImagePullSecretToSA` is `true` (the default), each generated pull Secret is appended to the `serviceAccountName` ServiceAccount (default `default`) in its namespace. Existing entries are preserved, and concurrent runs against the same ServiceAccount are retried rather than allowed to overwrite each other.
+
+## The `jfrogRepositories` Schema \{#jfrogrepositories-schema}
+
+`jfrogRepositories` is a single YAML string with two top-level lists:
+
+```yaml
+provision:                        # created when absent, left untouched when present
+  - name: project-a-docker
+    packageType: docker           # docker | maven | npm | pypi | generic | ...
+    rclass: local                 # default: local
+  - name: project-a-maven
+    packageType: maven
+reference:                        # must already exist; only linked into the permission target
+  - name: shared-maven-virtual
+```
+
+| Field | Applies to | Required | Notes |
+| ----- | ---------- | -------- | ----- |
+| `name` | both | Yes | Artifactory repository key. |
+| `packageType` | `provision` | Yes | Forwarded to Artifactory verbatim; any package type Artifactory accepts works. |
+| `rclass` | `provision` | No | Defaults to `local`. |
+
+## Permissions \{#permissions}
+
+The `permissions` parameter is an array of Artifactory actions granted on every repository in the run. It defaults to `["read"]`.
+
+| Action | Grants |
+| ------ | ------ |
+| `read` | Pull / resolve. |
+| `write` | Deploy a **new** artifact. |
+| `annotate` | Set properties and metadata. |
+| `delete` | Remove an artifact — **and overwrite one that already exists**. |
+| `manage` | Edit the repository's own permissions — a token holding `manage` can grant itself anything else on that repository, so treat it as an escalation path and grant it only when a project genuinely administers its own repositories. |
+
+The `delete` row is the one that surprises people: Artifactory treats deploying over an existing path as a delete, so `["read", "write"]` can create artifacts but cannot replace them. A CI job that re-pushes the same image tag needs `delete` as well.
+
+Values are forwarded verbatim; an action Artifactory does not recognise is rejected by Artifactory, not by the Task.
+
+## Example: Provision Project-private Repositories \{#example-provision-project-private-repositories}
+
+Project A needs a private Docker repository and a private Maven repository, an identity that can publish to both, and an image pull Secret in its workload namespace.
+
+```yaml
+apiVersion: tekton.dev/v1
+kind: TaskRun
+metadata:
+  name: project-a-jfrog-setup
+  namespace: <management-namespace>
+spec:
+  taskRef:
+    name: jfrog-connector-automatic-creation
+  params:
+    - name: jfrogUrl
+      value: https://jfrog.example.com
+    - name: connector
+      value: project-a/project-a-jfrog
+    - name: jfrogRepositories
+      value: |
+        provision:
+          - name: project-a-docker
+            packageType: docker
+          - name: project-a-maven
+            packageType: maven
+    - name: permissions
+      value:
+        - read
+        - write
+        - annotate
+        - delete
+    - name: imagePullSecrets
+      value:
+        - project-a/jfrog-pull
+    - name: bindImagePullSecretToSA
+      value: "true"
+  workspaces:
+    - name: jfrog-secret
+      csi:
+        driver: connectors-csi
+        readOnly: true
+        volumeAttributes:
+          connectors: <management-namespace>/jfrog-provisioner
+```
+
+The TaskRun uses the built-in `jfrogCliImage` default; override it only when you mirror the Task image into your own registry.
+
+After the TaskRun succeeds:
+
+- `project-a-docker` and `project-a-maven` exist in Artifactory.
+- A group, a user, and a permission target grant `read`, `write`, `annotate`, and `delete` on both repositories.
+- `project-a/project-a-jfrog` (a JFrog Connector) and `project-a/project-a-jfrog-secret` exist in Kubernetes.
+- `project-a/jfrog-pull` is a `dockerconfigjson` Secret, listed in the `imagePullSecrets` of the `default` ServiceAccount in `project-a`.
+
+`jfrogUrl` is the Artifactory origin — do **not** append `/artifactory`. The same value becomes the Connector `spec.address` and the registry authority of the generated pull Secrets.
+
+## Example: Attach Access to Existing Shared Repositories \{#example-attach-access-to-existing-shared-repositories}
+
+Team B only consumes repositories the platform team maintains.
+
+```yaml
+  params:
+    - name: jfrogUrl
+      value: https://jfrog.example.com
+    - name: connector
+      value: team-b/team-b-jfrog
+    - name: jfrogRepositories
+      value: |
+        reference:
+          - name: shared-maven-virtual
+          - name: shared-npm-virtual
+    - name: permissions
+      value:
+        - read
+```
+
+The Task creates no repositories. It only links the two existing ones into the permission target and grants read access. If either repository is absent, the run fails and names it rather than creating an empty stand-in.
+
+## Example: Mixed Provision and Reference \{#example-mixed-provision-and-reference}
+
+```yaml
+  params:
+    - name: jfrogUrl
+      value: https://jfrog.example.com
+    - name: connector
+      value: project-a/project-a-jfrog
+    - name: jfrogRepositories
+      value: |
+        provision:
+          - name: project-a-docker
+            packageType: docker
+          - name: project-a-generic
+            packageType: generic
+        reference:
+          - name: shared-maven-virtual
+    - name: permissions
+      value:
+        - read
+        - write
+        - annotate
+        - delete
+    - name: imagePullSecrets
+      value:
+        - project-a/jfrog-pull
+        - project-a-staging/jfrog-pull
+```
+
+One permission target and one token cover every repository in the run, whatever their package types, and the pull Secret is written into both workload namespaces.
+
+## Re-run to Change Scope or Renew Credentials \{#re-run-to-change-scope-or-renew-credentials}
+
+The Task is idempotent. Re-run it for either of two independent intents.
+
+**Scope changes** — add or remove repositories, or change the granted actions:
+
+1. Edit the same TaskRun: append, remove, or modify entries under `provision:` / `reference:`, or change `permissions`.
+2. Re-apply it. Because Artifactory evaluates rights per request, the change takes effect for the token already in circulation — **no token is minted, and no Secret is rewritten** (`token-rotated: "false"`). Removing a repository from the lists revokes access to it; the repository itself is kept, so no artifact is ever lost.
+
+**Token renewal** (`tokenPolicy: reuse`, the default):
+
+The Task reads the stored token back from the Connector Secret, decodes its expiry locally, and keeps it while more than `tokenRenewBeforeDays` (default `7`) remain. Inside that window it mints a new token and rewrites every derived Secret, reporting `token-rotated: "true"`.
+
+`tokenExpiry` accepts a duration — `30d` (the default), `12h`, `1h30m`; units are `s`, `m`, `h`, `d`. A bare number is seconds.
+
+`0` asks Artifactory for a token with no expiry, and that is what it returns: the minted JWT carries no `exp` claim at all. (On Artifactory 6.20.4, `expires_in=0` answers with `expires_in: 0` and a token carrying no `exp`, while any positive value produces one.) Two consequences are worth weighing before choosing it:
+
+- Renewal has nothing to act on. The Task treats a well-formed token with no `exp` as never being inside the renewal window, so under `tokenPolicy: reuse` that token is kept indefinitely and no re-run will replace it.
+- Artifactory cannot revoke a token by value (see rotation below), so the only thing that stops a non-expiring token is a `tokenPolicy: refresh` run, which moves the grant out from under it.
+
+Prefer a finite lifetime. For the same reason note that `tokenRenewBeforeDays` is a whole number of days: with a lifetime shorter than one day the renewal window never opens either, and the token is reused until a `refresh` run replaces it.
+
+> **Nothing re-runs this Task on a schedule.** With the 30-day default, the credential lapses if the Task is never re-run within its lifetime. Drive it from a cron-style Trigger, or from your existing project-reconcile automation.
+
+**Token rotation** (`tokenPolicy: refresh`) — when the previous credential must stop working immediately:
+
+Artifactory cannot revoke an issued token; revocation by token value or by token ID returns success while the token keeps working, and deleting the user does not help either, because live group membership is not re-checked. What does work is removing the grant the token's scope points at. The group therefore carries a generation suffix (`<prefix>-<n>`): a rotation advances to the next generation, repoints the permission target at it, mints the token scoped to it, and deletes the superseded generations. The old token's scope then maps to no grant, which is what actually stops it.
+
+Older generations do not accumulate — each rotation sweeps them, which also collects groups orphaned by an interrupted run.
+
+## Verify the Result
+
+Check that the TaskRun succeeded:
+
+```bash
+kubectl get taskrun project-a-jfrog-setup -n <management-namespace>
+```
+
+Check the generated Connector and Secret:
+
+```bash
+kubectl get connector project-a-jfrog -n project-a
+kubectl get secret project-a-jfrog-secret -n project-a
+```
+
+Wait for the Connector to become ready:
+
+```bash
+kubectl wait --for=condition=Ready connector/project-a-jfrog \
+  -n project-a --timeout=120s
+```
+
+Read the Task results to see exactly what was reconciled — the repository list, the Artifactory user and group, the permission target, the pull Secrets written, and whether a token was minted:
+
+```bash
+kubectl get taskrun project-a-jfrog-setup -n <management-namespace> \
+  -o jsonpath='{.status.results}'
+```
+
+Confirm the pull Secret reached the ServiceAccount:
+
+```bash
+kubectl get serviceaccount default -n project-a \
+  -o jsonpath='{.imagePullSecrets}'
+```
+
+## Identity Names
+
+The Artifactory user, the group prefix, and the permission target are all derived from the connector reference: `connector-<connector-namespace>-<connector-name>`.
+
+Artifactory rejects a username longer than 58 characters. A derived name that does not fit is folded to `<truncated>-<8 hex digits of its sha256>`; the fold is deterministic, so every step re-derives the same identity. The group prefix folds at 48 characters so that its generation suffix still fits.
+
+A name you supply explicitly through `jfrogUser` or `jfrogGroup` is never rewritten — it is rejected with a clear error when it is too long, because silently renaming what you asked for would be worse than failing.
+
+## Troubleshooting \{#troubleshooting}
+
+> **Tip**: set `verbose: "true"` on the failing TaskRun. The Task then logs the resolved plan and one line per Artifactory request — method, path, status, and which credential was used. Successful response bodies are never logged, and shell tracing is never enabled on a step that holds the token. A *failing* call does report its response body in the error it dies with; that body is an Artifactory JSON error rather than a credential, but treat a failed run's log as you would any diagnostic output.
+
+### `This REST API is available only in Artifactory Pro`
+
+The target Artifactory is OSS, or is a Pro image with no licence installed. There is no configuration that makes these endpoints available otherwise — the APIs this Task drives are Pro features.
+
+### A `reference:` entry does not exist
+
+The Task fails and names the repository. Create it in Artifactory first, or move the entry under `provision:` with a `packageType` so the Task creates it.
+
+### A `provision:` entry exists with a different package type
+
+The Task warns and continues, leaving the existing repository untouched. Either rename the entry, or reconcile the repository in Artifactory by hand — the Task deliberately does not rewrite a repository that already exists.
+
+### The run fails before writing anything into Kubernetes
+
+Namespaces and resource names are validated as DNS-1123 labels or subdomains, and every Kubernetes target is checked before the first write. A rejected name fails the whole run rather than leaving half the namespaces updated.
+
+That guarantee covers the Kubernetes side only. On the Artifactory side the Task reconciles in order, so a failure part-way leaves what it had already created — a run that dies on a missing `reference:` entry, for example, keeps the `provision:` repositories it created a moment earlier. Re-running after fixing the input is safe: existing repositories are recognised and left untouched.
+
+### The image pull Secret works for the kubelet but shows empty credentials in the console
+
+Only relevant for Secrets created before this Task: the `auths` entry must carry `username` and `password` as well as `auth`. Re-run the Task to rewrite the Secret with all three fields.
+
+### A Pod still cannot pull after a successful run
+
+Confirm that `bindImagePullSecretToSA` is `true` and that `serviceAccountName` matches the ServiceAccount the workload actually uses — Pods that set their own `serviceAccountName` do not inherit `default`. Alternatively reference the pull Secret directly in the Pod spec.
+
+### Artifactory returns 401 or 403
+
+The credential on `jfrog-secret` is wrong or not an administrator. Verify it against Artifactory directly, remembering that this Task needs the user, group, permission-target, and token APIs — not just repository read access.
+
+### Every run re-mints the token
+
+`tokenRenewBeforeDays` is at least as long as `tokenExpiry`, so the stored token is always inside the renewal window. The Task warns about this explicitly; raise `tokenExpiry` or lower `tokenRenewBeforeDays`.

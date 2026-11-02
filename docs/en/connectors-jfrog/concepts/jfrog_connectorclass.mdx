@@ -103,7 +103,62 @@ For example:
 
 For security best practices, we recommend creating credentials with minimal required permissions. When additional privileges are needed, create separate Connectors with more privileged secrets and use namespace isolation to control which users can access each Connector.
 
-### JFrog Connector Proxy and Configuration Files
+### Local Generic Repository Pipeline Integrations \{#local-generic-repository-pipeline-integrations}
+
+The platform provides the `jfrog-raw-repository` ResourceInterface for
+Pipeline Integrations that exchange files with a JFrog Artifactory **Local
+Generic** repository. The repository selector does not offer Remote or Virtual
+repositories.
+
+When configuring the Integration in the Pipeline editor:
+
+1. Select a JFrog Connector.
+2. Select a repository. The list contains only repositories whose
+   package type is `Generic` and whose repository type is `LOCAL`.
+3. For a download, open **File Path**. The platform recursively loads the
+   repository's complete file list. Enter text to filter the loaded
+   repository-relative paths locally, then select a result. You do not need to
+   enter wildcard characters.
+
+The selected value is the complete repository-relative path without the
+repository key, base URL, or a leading slash, for example:
+
+```text
+releases/2026/report.json
+```
+
+The Integration exposes the Connector `address`, repository key, relative
+`path`, and an `auth` workspace to compatible Tasks. The path is optional, so
+an upload Task can select a repository and provide its destination path
+separately.
+
+The Connector credential requires JFrog **Read** permission to list
+repositories, list files, and download from the selected repository. Upload
+Tasks also require JFrog **Deploy/Cache** (`w`) permission. The user who
+configures the Integration needs `get` permission on these Connector API
+resources:
+
+- `connectors/apis/jfrog/artifactory/api/repositories`
+- `connectors/apis/jfrog/artifactory/api/storage/{repository}`
+
+The aggregated `cpaas:connectors-jfrog-apis:view` role normally supplies these
+permissions.
+
+A successful File List request returns HTTP `200`. An empty repository, or a
+local **File Path** filter with no match, appears as an empty option list.
+Requests without valid platform authentication return HTTP `401`; invalid
+Artifactory credentials typically return an upstream HTTP `401`. Missing
+platform API `get` permission or JFrog **Read** permission typically returns
+HTTP `403`. A nonexistent repository may return HTTP `404`, but this behavior
+can vary by Artifactory version, so clients must not rely on HTTP `404` alone.
+
+### Subconnector Generation \{#subconnector-generation}
+
+A single JFrog Artifactory instance usually fronts several package ecosystems — npm, Maven and PyPI — under different API paths. Rather than creating one Connector per ecosystem (or mounting the per-format configuration files described below), you can declare a JFrog **aggregator** Connector that generates one child Connector per ecosystem: set `spec.generation.supportedClasses: [npm, maven, pypi]` on the JFrog ConnectorClass and list the ecosystems in the JFrog Connector's `spec.generators`. The controller materializes per-class `npm` / `maven` / `pypi` child Connectors that share the aggregator's host and credentials, and pipelines consume packages through those children.
+
+This is the recommended way to serve multiple ecosystems from one JFrog Artifactory instance. For the full model — address templating, auth inheritance, the `GenerationReady` condition, recovery and lifecycle — see [Connector Generation](../../connectors/concepts/connector_generation.mdx).
+
+### JFrog Connector Proxy and Configuration Files \{#jfrog-connector-proxy-and-configuration-files}
 
 To provide clients with the ability to access JFrog Artifactory without credentials, the JFrog connector provides a proxy server to automatically inject authentication information.
 
@@ -135,6 +190,12 @@ The JFrog ConnectorClass provides the following configuration files that can be 
 | `yarnrc` | `.yarnrc.yml` | Yarn package operations |
 | `pipconf` | `pip.conf` | PyPI package download |
 | `pypirc` | `.pypirc` | PyPI package publish |
+
+:::warning Deprecated in favor of subconnector generation
+
+Mounting these per-format configuration files directly (`settings` / `npmrc` / `yarnrc` / `pipconf` / `pypirc`) is **deprecated**. Prefer [Subconnector Generation](#subconnector-generation), which materializes per-class `npm` / `maven` / `pypi` child Connectors that pipelines consume instead of these raw configuration mounts.
+
+:::
 
 ### Maven Configuration: settings.xml \{#maven-settings-xml}
 

@@ -6,23 +6,25 @@ weight: 10
 
 ## What is JFrog Connector
 
-JFrog Connector is a specialized connector component that enables secure and convenient integration with JFrog Artifactory, allowing users to interact with JFrog Artifactory repositories without handling credentials in clients like `mvn`, `npm`, or `pip`.
+JFrog Connector is a specialized connector component that enables secure and convenient integration with JFrog Artifactory, allowing users to interact with JFrog Artifactory repositories without handling credentials in clients like `mvn`, `npm`, `pip`, or container image tools such as `buildah` and `skopeo`.
 
 Once JFrog Connector Component is deployed, users can:
 
 - Create JFrog connectors to integrate with JFrog Artifactory instances
 - Perform Maven, NPM, and PyPI operations in CI/CD pipelines or Kubernetes workloads without directly handling credentials
+- Pull and push Docker images to JFrog Artifactory Docker Local repositories without embedding credentials in Pod specifications
 
 ## Application Scenarios
 
-The JFrog Connector allows you to perform package operations securely by:
+The JFrog Connector allows you to perform artifact and image operations securely by:
 
 - Managing credentials centrally rather than hardcoding them in clients
-- Automatically injecting authentication during package operations through the proxy
+- Automatically injecting authentication during package and image operations through the proxy
 
 This approach is particularly useful for:
 
-- `CI/CD pipelines` or `kubernetes jobs` requiring access to JFrog Artifactory repositories
+- `CI/CD pipelines` or `Kubernetes Jobs` requiring access to JFrog Artifactory repositories
+- Container image build pipelines pulling base images from or pushing built images to JFrog Artifactory Docker Local repositories
 - Teams sharing JFrog Artifactory access without sharing credentials
 - Environments requiring centralized management of JFrog Artifactory credentials without distributing credentials to each client
-- Multi-format repository access: Maven, NPM, and PyPI registries through a single connector
+- Multi-format repository access: Maven, NPM, PyPI, and Docker registries through a single connector

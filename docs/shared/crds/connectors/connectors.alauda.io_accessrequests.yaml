@@ -229,6 +229,14 @@ spec:
                         items:
                           description: MatchedCheck records one matched Check Duck Type resource instance.
                           properties:
+                            approvedBy:
+                              description: |-
+                                ApprovedBy records the distinct identities whose response satisfied
+                                the check at evaluation time (group members recorded individually).
+                                Populated only when the check rule's rego reports it.
+                              items:
+                                type: string
+                              type: array
                             condition:
                               description: Condition records the computed approval condition of this check.
                               properties:
@@ -389,6 +397,26 @@ spec:
                                         name:
                                           description: Name is the identifier of this check rule, referenced in AccessRequest status.
                                           type: string
+                                        params:
+                                          description: |-
+                                            Params are passed to the check rule's rego evaluation and are readable
+                                            as input.check.params. Params are data only: they do not change which
+                                            evaluator runs. Reuses kmetav1alpha1.Params (the Tekton-style param type
+                                            already used by ConnectorClass.Spec.Params) — values are
+                                            string/array/object (a number is carried as the string "1").
+                                          items:
+                                            description: Param declares an ParamValues to use for the parameter called name.
+                                            properties:
+                                              name:
+                                                type: string
+                                              value:
+                                                x-kubernetes-preserve-unknown-fields: true
+                                            required:
+                                              - name
+                                              - value
+                                            type: object
+                                          type: array
+                                          x-kubernetes-list-type: atomic
                                         ref:
                                           description: Ref is a reference to a CheckRuleSpec stored in a ConfigMap.
                                           properties:
@@ -510,9 +538,13 @@ spec:
                                               properties:
                                                 rego:
                                                   description: |-
-                                                    Rego is an OPA Rego script (package "approval") that receives the full
-                                                    check resource as input and must output status = {"state": "approved|rejected|pending|passed"}.
-                                                    If empty, the default duck-type field status.state is used.
+                                                    Rego is an OPA Rego script (package "check") that computes the check
+                                                    condition. The input is {"object": <resource>, "check": <the check rule>};
+                                                    the script reads the resource via input.object and the check rule params
+                                                    via input.check.params. The script must define `result` as a condition
+                                                    object, e.g. {"status": "True|False|Unknown", "reason": "...",
+                                                    "message": "...", "approvedBy": [...]} (approvedBy is optional).
+                                                    If empty, the default duck-type Ready/Succeeded condition is used.
                                                   type: string
                                               type: object
                                           required:

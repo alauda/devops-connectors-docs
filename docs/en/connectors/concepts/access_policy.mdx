@@ -193,6 +193,10 @@ spec:
             name: connectors-use-connectors-proxy-in-pod
 ```
 
+To additionally require that specific people or groups approve, add `params`
+(such as `approvers` and `numberOfApprovalsRequired`) to the check rule. See
+[Restricting Who Can Approve](./connectors_approval.mdx#restricting-who-can-approve).
+
 ## Common Configuration Patterns \{#common-configuration-patterns}
 
 ### Selecting the Connectors to Protect

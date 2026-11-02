@@ -151,9 +151,12 @@ When this flag is enabled, the Connectors CSI Driver can mount configuration ren
 
 This is useful for workflows such as a Tekton task that needs one Connector for reading dependencies and another Connector for publishing artifacts.
 
+The flag also gates extra Connectors in Pipeline Integrations. When a ResourceInterface enables `multipleMergeConnectors`, users can add extra Connectors to an Integration. With `allowCrossTypeConnectors` those Connectors can be of other types, for example a Maven Connector in an OCI artifact Integration.
+
 Related reading:
 
 - [Multiple Connectors in Connectors CSI](../connectors/concepts/connectors_csi.mdx#multiple-connectors)
+- [Multiple Connectors in ResourceInterface](../connectors/concepts/resource_interface.mdx#multiple-connectors)
 - [Using Maven Connector in Tekton Task](../connectors-maven/how_to/using-in-tekton-task.mdx)
 
 ### `enable-custom-ca-certs` \{#enable-custom-ca-certs}

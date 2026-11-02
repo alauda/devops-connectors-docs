@@ -639,6 +639,22 @@ spec:
                         x-kubernetes-list-type: atomic
                     type: object
                   type: array
+                generation:
+                  description: |-
+                    Generation declares the child connector generation capabilities for this ConnectorClass.
+                    When present, connectors of this class may use spec.generators to materialize child connectors.
+                  properties:
+                    supportedClasses:
+                      description: |-
+                        SupportedClasses is the allowlist of ConnectorClass names that may be used
+                        as the connectorClassName of a generator entry.  Declaring a class here is
+                        an assertion by the class author that the child proxy correctly handles
+                        path-scoped addresses produced by this aggregator.
+                      items:
+                        type: string
+                      type: array
+                      x-kubernetes-list-type: set
+                  type: object
                 livenessProbe:
                   description: LivenessProbe defines liveness probe for this ConnectorClass of connectors
                   properties:

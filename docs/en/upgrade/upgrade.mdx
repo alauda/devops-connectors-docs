@@ -1,21 +1,21 @@
 ---
-title: Upgrading `Alauda DevOps Connectors` Operator
+title: Upgrading `Alauda Container Platform Connectors` Operator
 weight: 35
 ---
 
 
-# Upgrading `Alauda DevOps Connectors` Operator
+# Upgrading `Alauda Container Platform Connectors` Operator
 
 
-This document provides instructions for upgrading the `Alauda DevOps Connectors` Operator to a newer version using the `Marketplace`/`OperatorHub` interface in your cluster. The upgrade process is designed to be straightforward while ensuring minimal disruption to existing resources.
+This document provides instructions for upgrading the `Alauda Container Platform Connectors` Operator to a newer version using the `Marketplace`/`OperatorHub` interface in your cluster. The upgrade process is designed to be straightforward while ensuring minimal disruption to existing resources.
 
 ## Upgrade Overview
 
-Upgrading the `Alauda DevOps Connectors` Operator allows you to access new features, bug fixes, and improvements to its components. The `Alauda DevOps Connectors` Operator handles the upgrade of all components according to your configuration.
+Upgrading the `Alauda Container Platform Connectors` Operator allows you to access new features, bug fixes, and improvements to its components. The `Alauda Container Platform Connectors` Operator handles the upgrade of all components according to your configuration.
 
 ## Before You Begin
 
-Before upgrading the `Alauda DevOps Connectors` Operator, ensure you:
+Before upgrading the `Alauda Container Platform Connectors` Operator, ensure you:
 
 - Have administrative access to your cluster
 - Review the release notes for the new version to understand any breaking changes
@@ -102,12 +102,12 @@ configuration syntax.
    - Log in to your cluster's management console
    - Navigate to the `Marketplace` or `OperatorHub` section
 
-2. **Locate the `Alauda DevOps Connectors` Operator**
-   - Search for `Alauda DevOps Connectors` in the search bar
-   - Click on the `Alauda DevOps Connectors` card
+2. **Locate the `Alauda Container Platform Connectors` Operator**
+   - Search for `Alauda Container Platform Connectors` in the search bar
+   - Click on the `Alauda Container Platform Connectors` card
 
 3. **View Available Versions**
-   - On the `Alauda DevOps Connectors` Operator details page, you'll see information about the currently installed version
+   - On the `Alauda Container Platform Connectors` Operator details page, you'll see information about the currently installed version
    - The interface will indicate if a newer version is available
    - You can click different `Channels` to view all available versions
 
@@ -124,7 +124,7 @@ configuration syntax.
 6. **Confirm and Start the Upgrade**
    - Click `Confirm` to begin the process
    - Review the upgrade details and confirm your selection
-   - The system will update the `Alauda DevOps Connectors` Operator while maintaining your custom resources
+   - The system will update the `Alauda Container Platform Connectors` Operator while maintaining your custom resources
 
 7. **Monitor the Upgrade**
    - The upgrade progress will be displayed in the `OperatorHub` interface
@@ -142,12 +142,12 @@ configuration syntax.
      When `status.conditions[Ready]=True` is reported on the `ConnectorsConfig`, every managed component has finished re-converging.
 
 8. **Verify the Upgrade**
-   - Check that the `Alauda DevOps Connectors` Operator version has been updated:
+   - Check that the `Alauda Container Platform Connectors` Operator version has been updated:
      ```bash
      $ kubectl get csv -n connectors-operator
 
-     NAME                         DISPLAY                    VERSION   REPLACES                     PHASE
-     connectors-operator.v1.y.z   Alauda DevOps Connectors   1.y.z     connectors-operator.v1.y.z   Succeeded
+     NAME                         DISPLAY                                VERSION   REPLACES                     PHASE
+     connectors-operator.v1.y.z   Alauda Container Platform Connectors   1.y.z     connectors-operator.v1.y.z   Succeeded
      ```
      When the `VERSION` matches the new version, the upgrade is complete.
    - Verify that all Connector components are functioning correctly
@@ -186,7 +186,7 @@ before the older operator can re-adopt them.
 If you encounter issues with the new version, you can roll back to the previous version:
 
 1. Return to the `Marketplace`/`OperatorHub` interface
-2. Select the `Alauda DevOps Connectors` Operator
+2. Select the `Alauda Container Platform Connectors` Operator
 3. `Uninstall` the current version
 4. Choose the previous version from the version list
 5. Follow the installation process for that version
@@ -204,7 +204,7 @@ If you encounter issues during or after the upgrade:
 
 - **Pipeline Integration resources fail to render after upgrade** — your Tekton release may be older than the schema-version the operator ships. Cap the installed schema-version on the [`pipeline-integration`](../install/install.mdx#install-flags) install flag.
 
-- Check the `Alauda DevOps Connectors` Operator pod logs:
+- Check the `Alauda Container Platform Connectors` Operator pod logs:
   ```bash
   $ kubectl logs -l control-plane=connectors-operator -n connectors-operator
   ```
@@ -218,7 +218,7 @@ If you encounter issues during or after the upgrade:
 
 ## Next Steps
 
-After successfully upgrading the `Alauda DevOps Connectors` Operator:
+After successfully upgrading the `Alauda Container Platform Connectors` Operator:
 
 - Explore new features introduced in the latest version
 - Consider enabling additional components that may be available in the new version
